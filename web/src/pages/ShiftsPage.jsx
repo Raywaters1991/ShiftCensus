@@ -83,13 +83,15 @@ export default function ShiftsPage() {
     }
 
     const payload = {
-      staffId: Number(staffId),
-      role,
-      start,
-      end,
-      unit,
-      assignment_number: assignment ? Number(assignment) : null,
-    };
+  staffId: Number(staffId),
+  role,
+  start,
+  end,
+  unit,
+  assignment_number: assignment ? Number(assignment) : null,
+  org_code: localStorage.getItem("org_code")
+};
+
 
     const res = await api.post("/shifts", payload);
     setShifts([...shifts, res.data]);

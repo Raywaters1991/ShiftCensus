@@ -46,11 +46,13 @@ export default function StaffPage() {
     }
 
     const payload = {
-      name: `${firstName.trim()} ${lastName.trim()}`,
-      role,
-      email,
-      phone,
-    };
+  name: `${firstName.trim()} ${lastName.trim()}`,
+  role,
+  email,
+  phone,
+  org_code: localStorage.getItem("org_code")
+};
+
 
     const res = await api.post("/staff", payload);
 

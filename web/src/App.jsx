@@ -1,66 +1,87 @@
-import { BrowserRouter as Router, Routes, Route, NavLink } from "react-router-dom";
-import CensusPage from "./pages/CensusPage";
+import { useState } from "react";
+import { BrowserRouter, Routes, Route, Link, useLocation } from "react-router-dom";
+
+import OrgPage from "./pages/OrgPage";
+import LoginPage from "./pages/LoginPage";
+import DashboardPage from "./pages/DashboardPage";
 import StaffPage from "./pages/StaffPage";
 import ShiftsPage from "./pages/ShiftsPage";
-import DashboardPage from "./pages/DashboardPage";
+import CensusPage from "./pages/CensusPage";
 
 function NavLinkItem({ to, label }) {
+  const location = useLocation();
+  const active = location.pathname === to;
+
   return (
-    <NavLink
+    <Link
       to={to}
-      end
-      style={({ isActive }) => ({
-        padding: "10px 25px",
-        borderRadius: "8px",
-        background: isActive ? "#3b82f6" : "transparent",
-        color: isActive ? "#fff" : "#ccc",
-        fontWeight: isActive ? "bold" : "500",
+      style={{
+        padding: "10px 20px",
+        color: active ? "#00aaff" : "white",
         textDecoration: "none",
         fontSize: "18px",
-        transition: "0.2s",
-      })}
+        borderBottom: active ? "3px solid #00aaff" : "3px solid transparent",
+        fontWeight: active ? "bold" : "normal",
+      }}
     >
       {label}
-    </NavLink>
+    </Link>
   );
 }
 
 export default function App() {
+  const [orgCode, setOrgCode] = useState(null);
+  const [user, setUser] = useState(null);
+
+  // Step 1: Org Code Required
+  if (!orgCode) {
+    return <OrgPage onOrgSelect={(code) => setOrgCode(code)} />;
+  }
+
+  // Step 2: User Login Required
+  if (!user) {
+    return <LoginPage onLogin={() => setUser(true)} />;
+  }
+
   return (
-    <Router>
+    <BrowserRouter>
       {/* NAV BAR */}
-      <nav
+      <div
         style={{
-          width: "100%",
-          backgroundColor: "#1c1c1c",
-          padding: "18px 0",
           display: "flex",
           justifyContent: "center",
-          alignItems: "center",
-          borderBottom: "2px solid #333",
-          position: "sticky",
-          top: 0,
-          left: 0,
-          zIndex: 1000,
+          gap: "20px",
+          background: "#1e1e1e",
+          padding: "15px 0",
         }}
       >
-        <div style={{ display: "flex", gap: "45px" }}>
-          <NavLinkItem to="/" label="Census" />
-          <NavLinkItem to="/staff" label="Staff" />
-          <NavLinkItem to="/shifts" label="Shifts" />
-          <NavLinkItem to="/dashboard" label="Dashboard" />
-        </div>
-      </nav>
+        <NavLinkItem to="/" label={`Dashboard (${orgCode})`} />
+        <NavLinkItem to="/staff" label="Staff" />
+        <NavLinkItem to="/shifts" label="Shifts" />
+        <NavLinkItem to="/census" label="Census" />
 
-      {/* MAIN ROUTES */}
-      <div style={{ width: "100%", marginTop: "20px" }}>
-        <Routes>
-          <Route path="/" element={<CensusPage />} />
-          <Route path="/staff" element={<StaffPage />} />
-          <Route path="/shifts" element={<ShiftsPage />} />
-          <Route path="/dashboard" element={<DashboardPage />} />
-        </Routes>
+        <button
+          onClick={() => setUser(null)}
+          style={{
+            marginLeft: "20px",
+            background: "#b33",
+            color: "white",
+            border: "none",
+            padding: "10px 20px",
+            borderRadius: "6px",
+            cursor: "pointer",
+          }}
+        >
+          Logout
+        </button>
       </div>
-    </Router>
+
+      <Routes>
+        <Route path="/" element={<DashboardPage org={orgCode} />} />
+        <Route path="/staff" element={<StaffPage org={orgCode} />} />
+        <Route path="/shifts" element={<ShiftsPage org={orgCode} />} />
+        <Route path="/census" element={<CensusPage org={orgCode} />} />
+      </Routes>
+    </BrowserRouter>
   );
 }

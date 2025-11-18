@@ -2,20 +2,39 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../supabase');
 
-// GET all shifts
+
+// =========================
+// GET all shifts by org_code
+// /api/shifts?org_code=ABC123
+// =========================
 router.get('/', async (req, res) => {
+  const org_code = req.query.org_code;
+
+  if (!org_code) {
+    return res.status(400).json({ error: "Missing org_code" });
+  }
+
   const { data, error } = await supabase
     .from('shifts')
     .select('*')
+    .eq('org_code', org_code)
     .order('id');
 
   if (error) return res.status(400).json(error);
   res.json(data);
 });
 
-// CREATE shift
+
+
+// ============================
+// CREATE NEW SHIFT
+// ============================
 router.post('/', async (req, res) => {
-  const { staffId, role, start, end, unit, assignment_number } = req.body;
+  const { staffId, role, start, end, unit, assignment_number, org_code } = req.body;
+
+  if (!org_code) {
+    return res.status(400).json({ error: "org_code required" });
+  }
 
   const { data, error } = await supabase
     .from('shifts')
@@ -26,7 +45,8 @@ router.post('/', async (req, res) => {
         start_time: start,
         end_time: end,
         unit,
-        assignment_number
+        assignment_number,
+        org_code
       }
     ])
     .select();
@@ -35,14 +55,17 @@ router.post('/', async (req, res) => {
   res.json(data[0]);
 });
 
-// UPDATE shift
+
+
+// ============================
+// UPDATE SHIFT
+// ============================
 router.put('/:id', async (req, res) => {
-  const { staffId, role, start, end, unit, assignment_number } = req.body;
+  const { role, start, end, unit, assignment_number } = req.body;
 
   const { data, error } = await supabase
     .from('shifts')
     .update({
-      staff_id: staffId,
       role,
       start_time: start,
       end_time: end,
@@ -56,7 +79,11 @@ router.put('/:id', async (req, res) => {
   res.json(data[0]);
 });
 
-// DELETE shift
+
+
+// ============================
+// DELETE SHIFT
+// ============================
 router.delete('/:id', async (req, res) => {
   const { error } = await supabase
     .from('shifts')
@@ -64,7 +91,10 @@ router.delete('/:id', async (req, res) => {
     .eq('id', req.params.id);
 
   if (error) return res.status(400).json(error);
+
   res.json({ message: "Shift deleted" });
 });
+
+
 
 module.exports = router;
