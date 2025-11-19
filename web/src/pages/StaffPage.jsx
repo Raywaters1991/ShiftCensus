@@ -11,7 +11,7 @@ export default function StaffPage() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
 
-  // Edit mode states
+  // Edit mode
   const [editId, setEditId] = useState(null);
   const [editFirst, setEditFirst] = useState("");
   const [editLast, setEditLast] = useState("");
@@ -19,51 +19,62 @@ export default function StaffPage() {
   const [editEmail, setEditEmail] = useState("");
   const [editPhone, setEditPhone] = useState("");
 
-  // Delete modal state
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState(null);
+  // Delete modal
+  const [deleteId, setDeleteId] = useState(null);
+  const [showModal, setShowModal] = useState(false);
 
-  // Search / filter / sort / pagination
+  // Search + Sorting
   const [searchTerm, setSearchTerm] = useState("");
-  const [filterRole, setFilterRole] = useState("All");
   const [sortOption, setSortOption] = useState("name-asc");
-  const [currentPage, setCurrentPage] = useState(1);
-  const pageSize = 10;
 
   useEffect(() => {
     loadStaff();
   }, []);
 
   const loadStaff = async () => {
-    const res = await api.get("/staff");
+    const res = await api.get("/staff", {
+      headers: {
+        "x-org-code": localStorage.getItem("orgCode")
+      }
+    });
     setStaff(res.data);
   };
 
   const addStaff = async () => {
     if (!firstName || !lastName || !role) {
-      alert("Please fill in first name, last name, and role.");
+      alert("Please fill in all fields");
       return;
     }
 
     const payload = {
-  name: `${firstName.trim()} ${lastName.trim()}`,
-  role,
-  email,
-  phone,
-  org_code: localStorage.getItem("org_code")
-};
+      name: `${firstName.trim()} ${lastName.trim()}`,
+      role,
+      email,
+      phone
+    };
 
+    try {
+      const res = await api.post(
+        "/staff",
+        payload,
+        {
+          headers: {
+            "x-org-code": localStorage.getItem("orgCode")
+          }
+        }
+      );
 
-    const res = await api.post("/staff", payload);
+      setStaff([...staff, res.data]);
 
-    setStaff([...staff, res.data]);
-
-    // Clear form
-    setFirstName("");
-    setLastName("");
-    setRole("");
-    setEmail("");
-    setPhone("");
+      setFirstName("");
+      setLastName("");
+      setRole("");
+      setEmail("");
+      setPhone("");
+    } catch (err) {
+      console.error("Failed to add staff:", err);
+      alert("Error adding staff. Check console.");
+    }
   };
 
   const startEdit = (person) => {
@@ -81,147 +92,115 @@ export default function StaffPage() {
   const saveEdit = async () => {
     const fullName = `${editFirst.trim()} ${editLast.trim()}`;
 
-    await api.put(`/staff/${editId}`, {
+    const payload = {
       name: fullName,
       role: editRole,
       email: editEmail,
-      phone: editPhone,
+      phone: editPhone
+    };
+
+    const res = await api.put(`/staff/${editId}`, payload, {
+      headers: {
+        "x-org-code": localStorage.getItem("orgCode")
+      }
     });
 
     setStaff(
       staff.map((s) =>
         s.id === editId
-          ? {
-              ...s,
-              name: fullName,
-              role: editRole,
-              email: editEmail,
-              phone: editPhone,
-            }
+          ? { ...s, name: fullName, role: editRole, email: editEmail, phone: editPhone }
           : s
       )
     );
 
     setEditId(null);
-    setEditFirst("");
-    setEditLast("");
-    setEditRole("");
-    setEditEmail("");
-    setEditPhone("");
   };
 
-  // Delete system
-  const openDeleteModal = (person) => {
-    setDeleteTarget(person);
-    setShowDeleteModal(true);
+  const confirmDelete = (id) => {
+    setDeleteId(id);
+    setShowModal(true);
   };
 
-  const closeDeleteModal = () => {
-    setShowDeleteModal(false);
-    setDeleteTarget(null);
+  const deleteStaff = async () => {
+    await api.delete(`/staff/${deleteId}`, {
+      headers: {
+        "x-org-code": localStorage.getItem("orgCode")
+      }
+    });
+
+    setStaff(staff.filter((s) => s.id !== deleteId));
+    setShowModal(false);
+    setDeleteId(null);
   };
 
-  const confirmDelete = async () => {
-    try {
-      await api.delete(`/staff/${deleteTarget.id}`);
-      setStaff(staff.filter((s) => s.id !== deleteTarget.id));
-      closeDeleteModal();
-
-      setTimeout(() => {
-        alert(`Deleted ${deleteTarget.name}`);
-      }, 150);
-    } catch (err) {
-      alert("Failed to delete staff. Check backend logs.");
-    }
-  };
-
-  // --- FILTER + SEARCH + SORT LOGIC ---
-
-  // reset to page 1 when search/filter/sort changes
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchTerm, filterRole, sortOption]);
-
+  // Search + Sort
   const normalizedSearch = searchTerm.toLowerCase();
 
-  const filtered = staff.filter((s) => {
-    const matchesRole =
-      filterRole === "All" ? true : s.role === filterRole;
-
-    const matchesSearch =
-      !normalizedSearch ||
-      s.name.toLowerCase().includes(normalizedSearch) ||
-      (s.email || "").toLowerCase().includes(normalizedSearch) ||
-      (s.phone || "").toLowerCase().includes(normalizedSearch);
-
-    return matchesRole && matchesSearch;
-  });
+  const filtered = staff.filter((s) =>
+    s.name.toLowerCase().includes(normalizedSearch)
+  );
 
   const sorted = [...filtered].sort((a, b) => {
-    if (sortOption === "name-asc") {
-      return a.name.localeCompare(b.name);
-    }
-    if (sortOption === "name-desc") {
-      return b.name.localeCompare(a.name);
-    }
-    if (sortOption === "role-asc") {
-      return a.role.localeCompare(b.role) || a.name.localeCompare(b.name);
-    }
-    if (sortOption === "role-desc") {
-      return b.role.localeCompare(a.role) || a.name.localeCompare(b.name);
-    }
+    if (sortOption === "name-asc") return a.name.localeCompare(b.name);
+    if (sortOption === "name-desc") return b.name.localeCompare(a.name);
+    if (sortOption === "role-asc") return a.role.localeCompare(b.role);
+    if (sortOption === "role-desc") return b.role.localeCompare(a.role);
     return 0;
   });
 
-  const totalItems = sorted.length;
-  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-  const startIndex = (currentPage - 1) * pageSize;
-  const currentPageItems = sorted.slice(startIndex, startIndex + pageSize);
-
-  const goToPage = (page) => {
-    if (page < 1 || page > totalPages) return;
-    setCurrentPage(page);
-  };
-
   return (
     <div style={{ padding: "20px", fontFamily: "Arial", color: "white" }}>
-      {/* Animations */}
-      <style>
-        {`
-          @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-          }
-          @keyframes scaleIn {
-            from { transform: scale(0.9); opacity: 0; }
-            to { transform: scale(1); opacity: 1; }
-          }
-        `}
-      </style>
-
       <h1>Staff Management</h1>
 
-      {/* ADD STAFF FORM */}
-      <div
-        style={{
-          display: "flex",
-          gap: "10px",
-          marginBottom: "20px",
-          flexWrap: "wrap",
-        }}
-      >
+      {/* Search + Sort Controls */}
+      <div style={{ display: "flex", gap: "20px", marginBottom: "20px" }}>
+        <input
+          placeholder="Search staff..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          style={{ padding: "8px", width: "200px" }}
+        />
+
+        <select
+          value={sortOption}
+          onChange={(e) => setSortOption(e.target.value)}
+          style={{ padding: "8px" }}
+        >
+          <option value="name-asc">Sort: Name A → Z</option>
+          <option value="name-desc">Sort: Name Z → A</option>
+          <option value="role-asc">Sort: Role A → Z</option>
+          <option value="role-desc">Sort: Role Z → A</option>
+        </select>
+      </div>
+
+      {/* Add Staff Form */}
+      <div style={{ display: "flex", gap: "10px", marginBottom: "20px" }}>
         <input
           placeholder="First Name"
           value={firstName}
           onChange={(e) => setFirstName(e.target.value)}
-          style={{ padding: "8px", width: "150px" }}
+          style={{ padding: "8px", width: "130px" }}
         />
 
         <input
           placeholder="Last Name"
           value={lastName}
           onChange={(e) => setLastName(e.target.value)}
-          style={{ padding: "8px", width: "150px" }}
+          style={{ padding: "8px", width: "130px" }}
+        />
+
+        <input
+          placeholder="Email (optional)"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          style={{ padding: "8px", width: "160px" }}
+        />
+
+        <input
+          placeholder="Phone (optional)"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          style={{ padding: "8px", width: "140px" }}
         />
 
         <select
@@ -234,20 +213,6 @@ export default function StaffPage() {
           <option value="LPN">LPN</option>
           <option value="CNA">CNA</option>
         </select>
-
-        <input
-          placeholder="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          style={{ padding: "8px", width: "180px" }}
-        />
-
-        <input
-          placeholder="Phone"
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          style={{ padding: "8px", width: "140px" }}
-        />
 
         <button
           onClick={addStaff}
@@ -263,88 +228,39 @@ export default function StaffPage() {
         </button>
       </div>
 
-      {/* SEARCH / FILTER / SORT BAR */}
-      <div
-        style={{
-          display: "flex",
-          gap: "10px",
-          marginBottom: "15px",
-          alignItems: "center",
-          flexWrap: "wrap",
-        }}
-      >
-        <input
-          placeholder="Search by name, email, or phone"
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          style={{ padding: "8px", minWidth: "260px" }}
-        />
-
-        <select
-          value={filterRole}
-          onChange={(e) => setFilterRole(e.target.value)}
-          style={{ padding: "8px" }}
-        >
-          <option value="All">All Roles</option>
-          <option value="RN">RN</option>
-          <option value="LPN">LPN</option>
-          <option value="CNA">CNA</option>
-        </select>
-
-        <select
-          value={sortOption}
-          onChange={(e) => setSortOption(e.target.value)}
-          style={{ padding: "8px" }}
-        >
-          <option value="name-asc">Name A → Z</option>
-          <option value="name-desc">Name Z → A</option>
-          <option value="role-asc">Role A → Z</option>
-          <option value="role-desc">Role Z → A</option>
-        </select>
-
-        <div style={{ marginLeft: "auto", fontSize: "14px", opacity: 0.8 }}>
-          Showing {currentPageItems.length} of {totalItems} staff
-        </div>
-      </div>
-
-      {/* STAFF TABLE */}
-      <table
-        border="1"
-        cellPadding="12"
-        style={{ width: "100%", textAlign: "left" }}
-      >
+      {/* Staff Table */}
+      <table border="1" cellPadding="12" style={{ width: "100%", textAlign: "left" }}>
         <thead>
           <tr>
-            <th style={{ width: "50px" }}>ID</th>
+            <th>ID</th>
             <th>Name</th>
-            <th style={{ width: "90px" }}>Role</th>
+            <th>Role</th>
             <th>Email</th>
-            <th style={{ width: "130px" }}>Phone</th>
-            <th style={{ width: "160px" }}>Actions</th>
+            <th>Phone</th>
+            <th>Actions</th>
           </tr>
         </thead>
 
         <tbody>
-          {currentPageItems.map((s) => {
+          {sorted.map((s) => {
             const isEditing = editId === s.id;
 
             return (
               <tr key={s.id}>
                 <td>{s.id}</td>
 
-                {/* NAME */}
                 <td>
                   {isEditing ? (
-                    <div style={{ display: "flex", gap: "6px" }}>
+                    <div style={{ display: "flex", gap: "5px" }}>
                       <input
                         value={editFirst}
                         onChange={(e) => setEditFirst(e.target.value)}
-                        style={{ width: "110px", padding: "5px" }}
+                        style={{ width: "90px" }}
                       />
                       <input
                         value={editLast}
                         onChange={(e) => setEditLast(e.target.value)}
-                        style={{ width: "110px", padding: "5px" }}
+                        style={{ width: "90px" }}
                       />
                     </div>
                   ) : (
@@ -352,7 +268,6 @@ export default function StaffPage() {
                   )}
                 </td>
 
-                {/* ROLE */}
                 <td>
                   {isEditing ? (
                     <select
@@ -369,33 +284,28 @@ export default function StaffPage() {
                   )}
                 </td>
 
-                {/* EMAIL */}
                 <td>
                   {isEditing ? (
                     <input
                       value={editEmail}
                       onChange={(e) => setEditEmail(e.target.value)}
-                      style={{ padding: "6px", width: "180px" }}
                     />
                   ) : (
                     s.email || "-"
                   )}
                 </td>
 
-                {/* PHONE */}
                 <td>
                   {isEditing ? (
                     <input
                       value={editPhone}
                       onChange={(e) => setEditPhone(e.target.value)}
-                      style={{ padding: "6px", width: "130px" }}
                     />
                   ) : (
                     s.phone || "-"
                   )}
                 </td>
 
-                {/* ACTION BUTTONS */}
                 <td>
                   {isEditing ? (
                     <>
@@ -403,7 +313,7 @@ export default function StaffPage() {
                         onClick={saveEdit}
                         style={{
                           padding: "6px 12px",
-                          background: "#337",
+                          background: "#0066ff",
                           color: "white",
                           border: "none",
                           cursor: "pointer",
@@ -419,7 +329,6 @@ export default function StaffPage() {
                           padding: "6px 12px",
                           background: "#555",
                           color: "white",
-                          cursor: "pointer",
                         }}
                       >
                         Cancel
@@ -433,8 +342,6 @@ export default function StaffPage() {
                           padding: "6px 12px",
                           background: "#444",
                           color: "white",
-                          border: "none",
-                          cursor: "pointer",
                           marginRight: "8px",
                         }}
                       >
@@ -442,12 +349,11 @@ export default function StaffPage() {
                       </button>
 
                       <button
-                        onClick={() => openDeleteModal(s)}
+                        onClick={() => confirmDelete(s.id)}
                         style={{
                           padding: "6px 12px",
-                          background: "#b33",
+                          background: "#c62828",
                           color: "white",
-                          border: "none",
                           cursor: "pointer",
                         }}
                       >
@@ -459,121 +365,63 @@ export default function StaffPage() {
               </tr>
             );
           })}
-
-          {currentPageItems.length === 0 && (
-            <tr>
-              <td colSpan={6} style={{ textAlign: "center", padding: "20px" }}>
-                No staff found.
-              </td>
-            </tr>
-          )}
         </tbody>
       </table>
 
-      {/* PAGINATION CONTROLS */}
-      <div
-        style={{
-          marginTop: "15px",
-          display: "flex",
-          justifyContent: "center",
-          gap: "10px",
-          alignItems: "center",
-        }}
-      >
-        <button
-          onClick={() => goToPage(currentPage - 1)}
-          disabled={currentPage === 1}
-          style={{
-            padding: "6px 12px",
-            cursor: currentPage === 1 ? "not-allowed" : "pointer",
-          }}
-        >
-          ◀ Prev
-        </button>
-
-        <span>
-          Page {currentPage} of {totalPages}
-        </span>
-
-        <button
-          onClick={() => goToPage(currentPage + 1)}
-          disabled={currentPage === totalPages}
-          style={{
-            padding: "6px 12px",
-            cursor: currentPage === totalPages ? "not-allowed" : "pointer",
-          }}
-        >
-          Next ▶
-        </button>
-      </div>
-
-      {/* DELETE CONFIRMATION MODAL */}
-      {showDeleteModal && (
+      {/* Delete Modal */}
+      {showModal && (
         <div
           style={{
             position: "fixed",
             top: 0,
             left: 0,
-            width: "100%",
-            height: "100%",
+            width: "100vw",
+            height: "100vh",
             background: "rgba(0,0,0,0.6)",
             display: "flex",
             justifyContent: "center",
-            alignItems: "center",
-            zIndex: 1000,
-            animation: "fadeIn 0.2s ease-in-out",
+            alignItems: "center"
           }}
         >
           <div
             style={{
-              background: "#1e1e1e",
-              padding: "25px",
-              borderRadius: "12px",
-              width: "350px",
-              color: "white",
+              background: "white",
+              padding: "30px",
+              borderRadius: "10px",
+              width: "300px",
               textAlign: "center",
-              boxShadow: "0 0 20px rgba(0,0,0,0.8)",
-              animation: "scaleIn 0.18s ease-in-out",
+              color: "black"
             }}
           >
-            <h2 style={{ marginBottom: "15px" }}>Confirm Delete</h2>
+            <h3>Are you sure?</h3>
+            <p>This will permanently delete this staff member.</p>
 
-            <p style={{ marginBottom: "25px", fontSize: "17px" }}>
-              Are you sure you want to delete <b>{deleteTarget?.name}</b>?<br />
-              This action cannot be undone.
-            </p>
+            <button
+              onClick={deleteStaff}
+              style={{
+                background: "#c62828",
+                color: "white",
+                padding: "10px 20px",
+                marginRight: "10px",
+                border: "none",
+                cursor: "pointer"
+              }}
+            >
+              Delete
+            </button>
 
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <button
-                onClick={closeDeleteModal}
-                style={{
-                  padding: "10px 20px",
-                  background: "#444",
-                  border: "none",
-                  borderRadius: "6px",
-                  color: "white",
-                  cursor: "pointer",
-                  width: "45%",
-                }}
-              >
-                Cancel
-              </button>
-
-              <button
-                onClick={confirmDelete}
-                style={{
-                  padding: "10px 20px",
-                  background: "#b33",
-                  border: "none",
-                  borderRadius: "6px",
-                  color: "white",
-                  cursor: "pointer",
-                  width: "45%",
-                }}
-              >
-                Delete
-              </button>
-            </div>
+            <button
+              onClick={() => setShowModal(false)}
+              style={{
+                background: "#444",
+                color: "white",
+                padding: "10px 20px",
+                border: "none",
+                cursor: "pointer"
+              }}
+            >
+              Cancel
+            </button>
           </div>
         </div>
       )}

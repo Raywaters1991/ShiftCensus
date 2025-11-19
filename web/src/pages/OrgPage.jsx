@@ -10,8 +10,13 @@ export default function OrgPage({ onOrgSelect }) {
       return;
     }
 
-    // Later: Validate against Supabase (org table)
-    onOrgSelect(orgCode.trim());
+    const cleaned = orgCode.trim().toUpperCase();
+
+    // Save org to localStorage (critical for backend requests)
+    localStorage.setItem("orgCode", cleaned);
+
+    // Tell parent App.jsx if needed
+    if (onOrgSelect) onOrgSelect(cleaned);
   };
 
   return (
@@ -22,6 +27,7 @@ export default function OrgPage({ onOrgSelect }) {
         display: "flex",
         justifyContent: "center",
         alignItems: "center",
+        padding: "20px",
       }}
     >
       <div
@@ -39,19 +45,23 @@ export default function OrgPage({ onOrgSelect }) {
         <img
           src="/logo.png"
           alt="ShiftCensus Logo"
-          style={{ width: "160px", marginBottom: "20px" }}
+          style={{ width: "170px", marginBottom: "25px" }}
         />
 
-        <h2>Enter Organization Code</h2>
+        <h2 style={{ marginBottom: "10px" }}>Enter Organization Code</h2>
+        <p style={{ fontSize: "14px", opacity: 0.8 }}>
+          Your organization code is provided by your facility administrator.
+        </p>
 
         {error && (
           <div
             style={{
               background: "#330000",
-              color: "red",
+              color: "#ff4444",
               padding: "10px",
               borderRadius: "8px",
-              marginBottom: "15px",
+              marginTop: "15px",
+              marginBottom: "10px",
             }}
           >
             {error}
@@ -60,7 +70,10 @@ export default function OrgPage({ onOrgSelect }) {
 
         <input
           value={orgCode}
-          onChange={(e) => setOrgCode(e.target.value)}
+          onChange={(e) => {
+            setOrgCode(e.target.value);
+            if (error) setError("");
+          }}
           placeholder="Example: NSPA01"
           style={{
             width: "100%",
@@ -70,6 +83,9 @@ export default function OrgPage({ onOrgSelect }) {
             border: "1px solid #333",
             background: "#222",
             color: "white",
+            fontSize: "16px",
+            letterSpacing: "1px",
+            textTransform: "uppercase",
           }}
         />
 
@@ -86,7 +102,10 @@ export default function OrgPage({ onOrgSelect }) {
             cursor: "pointer",
             fontSize: "16px",
             fontWeight: "bold",
+            transition: "0.2s",
           }}
+          onMouseOver={(e) => (e.target.style.background = "#0aa1ff")}
+          onMouseOut={(e) => (e.target.style.background = "#008cff")}
         >
           Continue
         </button>

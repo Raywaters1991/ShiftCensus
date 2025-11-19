@@ -6,14 +6,15 @@ const api = axios.create({
 
 // 🔹 Attach org_code to every request automatically
 api.interceptors.request.use((config) => {
-  const orgCode = localStorage.getItem("org_code"); // stored from landing page
+  // MUST match the key set in OrgPage.jsx: localStorage.setItem("orgCode", code)
+  const orgCode = localStorage.getItem("orgCode");
 
   if (orgCode) {
-    if (!config.params) config.params = {};
-    config.params.org_code = orgCode;
+    config.headers["x-org-code"] = orgCode;  // ← Backend looks for this
   }
 
   return config;
 });
 
 export default api;
+

@@ -3,12 +3,17 @@ const router = express.Router();
 const supabase = require('../supabase');
 
 
+// Helper: Retrieve org code from headers
+function getOrgCode(req) {
+  return req.headers["x-org-code"] || null;
+}
+
+
 // =====================================================
 // GET census by organization
-// /api/census?org_code=ABC123
 // =====================================================
 router.get('/', async (req, res) => {
-  const org_code = req.query.org_code;
+  const org_code = getOrgCode(req);
 
   if (!org_code) {
     return res.status(400).json({ error: "Missing org_code" });
@@ -26,15 +31,19 @@ router.get('/', async (req, res) => {
 });
 
 
-
 // =====================================================
-// CREATE a census row
+// CREATE census row
 // =====================================================
 router.post('/', async (req, res) => {
-  const { room, status, admitDate, expectedDischarge, org_code } = req.body;
+  const org_code = getOrgCode(req);
+  const { room, status, admitDate, expectedDischarge } = req.body;
 
   if (!org_code) {
-    return res.status(400).json({ error: "org_code is required" });
+    return res.status(400).json({ error: "Missing org_code" });
+  }
+
+  if (!room || !status) {
+    return res.status(400).json({ error: "Missing required fields" });
   }
 
   const { data, error } = await supabase
@@ -56,12 +65,16 @@ router.post('/', async (req, res) => {
 });
 
 
-
 // =====================================================
-// UPDATE a census row
+// UPDATE census row
 // =====================================================
 router.put('/:id', async (req, res) => {
+  const org_code = getOrgCode(req);
   const { room, status, admitDate, expectedDischarge } = req.body;
+
+  if (!org_code) {
+    return res.status(400).json({ error: "Missing org_code" });
+  }
 
   const { data, error } = await supabase
     .from('census')
@@ -72,6 +85,7 @@ router.put('/:id', async (req, res) => {
       expected_discharge: expectedDischarge
     })
     .eq('id', req.params.id)
+    .eq('org_code', org_code) // Prevent editing another org’s data
     .select();
 
   if (error) return res.status(400).json(error);
@@ -80,21 +94,26 @@ router.put('/:id', async (req, res) => {
 });
 
 
-
 // =====================================================
-// DELETE a census row
+// DELETE census row
 // =====================================================
 router.delete('/:id', async (req, res) => {
+  const org_code = getOrgCode(req);
+
+  if (!org_code) {
+    return res.status(400).json({ error: "Missing org_code" });
+  }
+
   const { error } = await supabase
     .from('census')
     .delete()
-    .eq('id', req.params.id);
+    .eq('id', req.params.id)
+    .eq('org_code', org_code);
 
   if (error) return res.status(400).json(error);
 
   res.json({ message: "Census row deleted" });
 });
-
 
 
 module.exports = router;

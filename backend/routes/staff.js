@@ -2,13 +2,16 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../supabase');
 
+// Pull org from header
+function getOrgCode(req) {
+  return req.headers["x-org-code"] || null;
+}
 
 // =====================================================
-// GET ALL STAFF FOR AN ORGANIZATION
-// /api/staff?org_code=ABC123
+// GET STAFF (for a single organization)
 // =====================================================
 router.get('/', async (req, res) => {
-  const org_code = req.query.org_code;
+  const org_code = getOrgCode(req);
 
   if (!org_code) {
     return res.status(400).json({ error: "Missing org_code" });
@@ -26,15 +29,15 @@ router.get('/', async (req, res) => {
 });
 
 
-
 // =====================================================
 // ADD STAFF
 // =====================================================
 router.post('/', async (req, res) => {
-  const { name, role, email, phone, org_code } = req.body;
+  const org_code = getOrgCode(req);
+  const { name, role, email, phone } = req.body;
 
   if (!org_code) {
-    return res.status(400).json({ error: "org_code is required" });
+    return res.status(400).json({ error: "Missing org_code" });
   }
 
   if (!name || !role) {
@@ -52,9 +55,8 @@ router.post('/', async (req, res) => {
 });
 
 
-
 // =====================================================
-// UPDATE STAFF MEMBER
+// UPDATE STAFF
 // =====================================================
 router.put('/:id', async (req, res) => {
   const { name, role, email, phone } = req.body;
@@ -71,22 +73,26 @@ router.put('/:id', async (req, res) => {
 });
 
 
-
 // =====================================================
 // DELETE STAFF
-// (CASCADE deletes their shifts automatically)
 // =====================================================
 router.delete('/:id', async (req, res) => {
+  const org_code = getOrgCode(req);
+
+  if (!org_code) {
+    return res.status(400).json({ error: "Missing org_code" });
+  }
+
   const { error } = await supabase
     .from('staff')
     .delete()
-    .eq('id', req.params.id);
+    .eq('id', req.params.id)
+    .eq('org_code', org_code); // prevent deleting other org's users
 
   if (error) return res.status(400).json(error);
 
   res.json({ message: "Staff member deleted" });
 });
-
 
 
 module.exports = router;
