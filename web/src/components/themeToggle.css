@@ -1,0 +1,37 @@
+.theme-switch {
+  position: relative;
+  width: 60px;
+  height: 30px;
+  display: inline-block;
+}
+
+.theme-switch input {
+  display: none;
+}
+
+.slider {
+  position: absolute;
+  background: var(--surface2);
+  border: 2px solid var(--border-light);
+  border-radius: 50px;
+  cursor: pointer;
+  inset: 0;
+  transition: 0.3s;
+}
+
+.slider .icon {
+  position: absolute;
+  top: 50%;
+  left: 5px;
+  transform: translateY(-50%);
+  font-size: 16px;
+  transition: 0.3s;
+}
+
+input:checked + .slider {
+  background: var(--button-bg);
+}
+
+input:checked + .slider .icon {
+  left: 32px;
+}

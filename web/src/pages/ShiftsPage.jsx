@@ -5,7 +5,7 @@ export default function ShiftsPage() {
   const [shifts, setShifts] = useState([]);
   const [staff, setStaff] = useState([]);
 
-  // Add shift form
+  // ADD SHIFT FORM
   const [staffId, setStaffId] = useState("");
   const [role, setRole] = useState("");
   const [start, setStart] = useState("");
@@ -13,53 +13,36 @@ export default function ShiftsPage() {
   const [unit, setUnit] = useState("");
   const [assignment, setAssignment] = useState("");
 
-  // Filters
+  // FILTERS
   const [searchTerm, setSearchTerm] = useState("");
   const [filterRole, setFilterRole] = useState("All");
   const [filterUnit, setFilterUnit] = useState("All");
   const [filterShift, setFilterShift] = useState("All");
   const [filterDate, setFilterDate] = useState("");
 
-  // Sorting
+  // SORTING
   const [sortOption, setSortOption] = useState("start-asc");
 
-  // Pagination
-  const [currentPage, setCurrentPage] = useState(1);
-  const pageSize = 10;
-
-  // Templates
+  // TEMPLATE STATE
   const [templates, setTemplates] = useState([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [templateBuilderOpen, setTemplateBuilderOpen] = useState(false);
-
-  // Template builder fields
   const [templateName, setTemplateName] = useState("");
-  const [templateStaffId, setTemplateStaffId] = useState("");
-  const [templateRole, setTemplateRole] = useState("");
-  const [templateUnit, setTemplateUnit] = useState("");
-  const [templateAssignment, setTemplateAssignment] = useState("");
-  const [templateShiftType, setTemplateShiftType] = useState("");
-  const [templateDays, setTemplateDays] = useState([
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-    false,
-  ]);
   const [templateWeekStart, setTemplateWeekStart] = useState("");
   const [templateWeeksCount, setTemplateWeeksCount] = useState(1);
+  const [templateRows, setTemplateRows] = useState({});
+  const [templateFilterName, setTemplateFilterName] = useState("");
+  const [templateFilterRole, setTemplateFilterRole] = useState("All");
 
-  // RN/LPN: only Day/Night. CNA: Day/Evening/Night.
-  const availableTemplateShiftTypes =
-    templateRole === "RN" || templateRole === "LPN"
-      ? ["Day", "Night"]
-      : ["Day", "Evening", "Night"];
-
-  // Edit + delete state
+  // EDIT/DELETE
   const [editingShift, setEditingShift] = useState(null);
   const [deleteId, setDeleteId] = useState(null);
+
+  // CALENDAR
+  const [currentMonth, setCurrentMonth] = useState(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1);
+  });
 
   useEffect(() => {
     loadPage();
@@ -80,17 +63,19 @@ export default function ShiftsPage() {
     setTemplates(stored);
   };
 
-  const formatDate = (dt) => {
-    if (!dt) return "-";
-    const date = new Date(dt);
-    return date.toLocaleString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
+  const formatTimeShort = (date) => {
+    const d = new Date(date);
+    let h = d.getHours();
+    const m = d.getMinutes();
+    const suffix = h >= 12 ? "p" : "a";
+    h = h % 12;
+    if (h === 0) h = 12;
+    const min = m ? `:${String(m).padStart(2, "0")}` : "";
+    return `${h}${min}${suffix}`;
   };
+
+  const formatShiftRange = (start, end) =>
+    `${formatTimeShort(start)}–${formatTimeShort(end)}`;
 
   const getShiftType = (start) => {
     const hour = new Date(start).getHours();
@@ -99,14 +84,34 @@ export default function ShiftsPage() {
     return "Night";
   };
 
+  const getWeekStartKey = (dLike) => {
+    const d = new Date(dLike);
+    const day = d.getDay();
+    const sunday = new Date(d);
+    sunday.setDate(d.getDate() - day);
+    return sunday.toLocaleDateString("en-CA");
+  };
+
+  const calcHours = (s, e) =>
+    Math.max(0, (new Date(e) - new Date(s)) / 3600000);
+
+  const weeklyBuckets = {};
+  shifts.forEach((shift) => {
+    const key = `${shift.staff_id}|${getWeekStartKey(shift.start_time)}`;
+    if (!weeklyBuckets[key]) weeklyBuckets[key] = [];
+    weeklyBuckets[key].push(shift);
+  });
+
+  Object.values(weeklyBuckets).forEach((bucket) =>
+    bucket.sort((a, b) => new Date(a.start_time) - new Date(b.start_time))
+  );
+
   const addShift = async () => {
     if (!staffId || !role || !start || !end || !unit) {
-      alert("Fill all required fields");
+      alert("Fill all fields");
       return;
     }
-
     const org_code = localStorage.getItem("org_code");
-
     const payload = {
       staffId: Number(staffId),
       role,
@@ -116,9 +121,8 @@ export default function ShiftsPage() {
       assignment_number: assignment ? Number(assignment) : null,
       org_code,
     };
-
     const res = await api.post("/shifts", payload);
-    setShifts([...shifts, res.data]);
+    setShifts((p) => [...p, res.data]);
 
     setStaffId("");
     setRole("");
@@ -128,132 +132,130 @@ export default function ShiftsPage() {
     setAssignment("");
   };
 
-  // ======= TEMPLATE HELPERS =======
+  const getDefaultRow = () => ({
+    include: false,
+    unit: "",
+    assignment: "",
+    shiftType: "",
+    days: Array(7).fill(false),
+  });
 
-  const toggleTemplateDay = (idx) => {
-    const updated = [...templateDays];
-    updated[idx] = !updated[idx];
-    setTemplateDays(updated);
-  };
+  const updateTemplateRow = (id, patch) =>
+    setTemplateRows((p) => {
+      const row = p[id] || getDefaultRow();
+      return { ...p, [id]: { ...row, ...patch } };
+    });
+
+  const toggleTemplateDay = (id, idx) =>
+    setTemplateRows((p) => {
+      const row = p[id] || getDefaultRow();
+      const days = [...row.days];
+      days[idx] = !days[idx];
+      return { ...p, [id]: { ...row, days } };
+    });
 
   const saveTemplate = () => {
-    if (!templateName || !templateStaffId || !templateShiftType) {
-      alert("Fill all template fields.");
-      return;
-    }
+    if (!templateName.trim()) return alert("Enter template name.");
+
+    const employees = staff
+      .map((p) => {
+        const row = templateRows[p.id] || getDefaultRow();
+        const hasDays = row.days.some((d) => d);
+        if (!row.include || !row.shiftType || !hasDays) return null;
+        return {
+          staffId: p.id,
+          role: p.role,
+          unit: row.unit,
+          assignment: p.role === "CNA" ? Number(row.assignment) || null : null,
+          shiftType: row.shiftType,
+          days: row.days,
+        };
+      })
+      .filter(Boolean);
 
     const newTemplate = {
       id: Date.now(),
-      name: templateName,
-      staffId: Number(templateStaffId),
-      role: templateRole,
-      unit: templateUnit,
-      assignment: templateAssignment ? Number(templateAssignment) : null,
-      shiftType: templateShiftType,
-      days: templateDays,
+      name: templateName.trim(),
+      employees,
     };
 
     const updated = [...templates, newTemplate];
     localStorage.setItem("shift_templates", JSON.stringify(updated));
     setTemplates(updated);
 
-    alert("Template saved.");
-
     setTemplateName("");
-    setTemplateStaffId("");
-    setTemplateRole("");
-    setTemplateUnit("");
-    setTemplateAssignment("");
-    setTemplateShiftType("");
-    setTemplateDays([false, false, false, false, false, false, false]);
-  };
-
-  const deleteTemplate = (id) => {
-    const updated = templates.filter((t) => t.id !== id);
-    localStorage.setItem("shift_templates", JSON.stringify(updated));
-    setTemplates(updated);
-    if (String(id) === String(selectedTemplateId)) {
-      setSelectedTemplateId("");
-    }
+    setTemplateRows({});
+    alert("Template saved.");
   };
 
   const applyTemplate = async (tpl) => {
-    if (!templateWeekStart) {
-      alert("Select a week start date.");
-      return;
-    }
-    if (!templateWeeksCount) {
-      alert("Enter how many weeks to apply.");
-      return;
-    }
-
-    const org_code = localStorage.getItem("org_code");
+    if (!templateWeekStart) return alert("Choose week start.");
     const base = new Date(templateWeekStart);
+    const org_code = localStorage.getItem("org_code");
 
-    const toCreate = [];
-
+    const items = [];
     for (let w = 0; w < templateWeeksCount; w++) {
-      for (let dayIdx = 0; dayIdx < 7; dayIdx++) {
-        if (!tpl.days[dayIdx]) continue;
+      for (const emp of tpl.employees) {
+        const p = staff.find((x) => x.id === emp.staffId);
+        for (let i = 0; i < 7; i++) {
+          if (!emp.days[i]) continue;
 
-        const d = new Date(base);
-        d.setDate(base.getDate() + dayIdx + w * 7);
+          let d = new Date(base);
+          d.setDate(base.getDate() + i + w * 7);
 
-        let startTime;
-        let endTime;
+          let startTime, endTime;
+          if (p.role === "RN" || p.role === "LPN") {
+            if (emp.shiftType === "Day") {
+              startTime = new Date(d).setHours(6, 0, 0, 0);
+              endTime = new Date(d).setHours(18, 0, 0, 0);
+            } else {
+              startTime = new Date(d).setHours(18, 0, 0, 0);
+              const e = new Date(d);
+              e.setDate(e.getDate() + 1);
+              endTime = e.setHours(6, 0, 0, 0);
+            }
+          } else {
+            if (emp.shiftType === "Day") {
+              startTime = new Date(d).setHours(6, 0, 0, 0);
+              endTime = new Date(d).setHours(14, 0, 0, 0);
+            } else if (emp.shiftType === "Evening") {
+              startTime = new Date(d).setHours(14, 0, 0, 0);
+              endTime = new Date(d).setHours(22, 0, 0, 0);
+            } else {
+              startTime = new Date(d).setHours(22, 0, 0, 0);
+              const e = new Date(d);
+              e.setDate(e.getDate() + 1);
+              endTime = e.setHours(6, 0, 0, 0);
+            }
+          }
 
-        if (tpl.shiftType === "Day") {
-          startTime = new Date(d);
-          startTime.setHours(6, 0, 0, 0);
-          endTime = new Date(d);
-          endTime.setHours(18, 0, 0, 0);
-        } else if (tpl.shiftType === "Evening") {
-          startTime = new Date(d);
-          startTime.setHours(14, 0, 0, 0);
-          endTime = new Date(d);
-          endTime.setHours(22, 0, 0, 0);
-        } else {
-          // Night: 18:00 to 06:00 next day
-          startTime = new Date(d);
-          startTime.setHours(18, 0, 0, 0);
-          endTime = new Date(d);
-          endTime.setDate(endTime.getDate() + 1);
-          endTime.setHours(6, 0, 0, 0);
+          items.push({
+            staffId: emp.staffId,
+            role: p.role,
+            start: new Date(startTime).toISOString(),
+            end: new Date(endTime).toISOString(),
+            unit: emp.unit,
+            assignment_number: emp.assignment,
+            org_code,
+          });
         }
-
-        toCreate.push({
-          staffId: tpl.staffId,
-          role: tpl.role,
-          start: startTime.toISOString(),
-          end: endTime.toISOString(),
-          unit: tpl.unit,
-          assignment_number: tpl.assignment,
-          org_code,
-        });
       }
     }
 
-    for (const payload of toCreate) {
-      await api.post("/shifts", payload);
-    }
+    for (const it of items) await api.post("/shifts", it);
 
     alert("Template applied.");
     loadPage();
   };
 
-  // ======= EDIT / DELETE =======
-
-  const startEdit = (shift) => {
+  const startEdit = (s) =>
     setEditingShift({
-      ...shift,
-      start_time: shift.start_time.slice(0, 16),
-      end_time: shift.end_time.slice(0, 16),
+      ...s,
+      start_time: s.start_time.slice(0, 16),
+      end_time: s.end_time.slice(0, 16),
     });
-  };
 
   const saveEdit = async () => {
-    if (!editingShift) return;
-
     const payload = {
       role: editingShift.role,
       start: editingShift.start_time,
@@ -263,123 +265,94 @@ export default function ShiftsPage() {
     };
 
     const res = await api.put(`/shifts/${editingShift.id}`, payload);
-
-    setShifts((prev) =>
-      prev.map((s) => (s.id === editingShift.id ? res.data : s))
-    );
+    setShifts((p) => p.map((x) => (x.id === editingShift.id ? res.data : x)));
     setEditingShift(null);
   };
 
-  const confirmDelete = async () => {
-    if (!deleteId) return;
-    await api.delete(`/shifts/${deleteId}`);
-    setShifts((prev) => prev.filter((s) => s.id !== deleteId));
-    setDeleteId(null);
-  };
+  const filtered = shifts.filter((s) => {
+    const w = staff.find((p) => p.id === s.staff_id);
+    if (!w) return false;
 
-  // ======= FILTERING / SORT / PAGINATION =======
+    const matchName = !searchTerm || w.name.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchRole = filterRole === "All" || w.role === filterRole;
+    const matchUnit = filterUnit === "All" || s.unit === filterUnit;
+    const matchShift = filterShift === "All" || getShiftType(s.start_time) === filterShift;
 
-  const normalizedSearch = searchTerm.toLowerCase();
-
-  const filtered = shifts.filter((shift) => {
-    const worker = staff.find((s) => s.id === shift.staff_id);
-    if (!worker) return false;
-
-    const matchesSearch =
-      !normalizedSearch ||
-      worker.name.toLowerCase().includes(normalizedSearch);
-
-    const matchesRole =
-      filterRole === "All" || worker.role === filterRole;
-
-    const matchesUnit =
-      filterUnit === "All" || shift.unit === filterUnit;
-
-    const shiftType = getShiftType(shift.start_time);
-    const matchesShift =
-      filterShift === "All" || filterShift === shiftType;
-
-    let matchesDate = true;
+    let matchDate = true;
     if (filterDate) {
-      // use local date to avoid off-by-one from UTC
-      const shiftDay = new Date(shift.start_time)
-        .toLocaleDateString("en-CA"); // YYYY-MM-DD
-      matchesDate = shiftDay === filterDate;
+      const d = new Date(s.start_time).toLocaleDateString("en-CA");
+      matchDate = d === filterDate;
     }
 
-    return (
-      matchesSearch &&
-      matchesRole &&
-      matchesUnit &&
-      matchesShift &&
-      matchesDate
-    );
+    return matchName && matchRole && matchUnit && matchShift && matchDate;
   });
 
   const sorted = [...filtered].sort((a, b) => {
-    const aStaff = staff.find((s) => s.id === a.staff_id) || {};
-    const bStaff = staff.find((s) => s.id === b.staff_id) || {};
-
-    if (sortOption === "name-asc")
-      return (aStaff.name || "").localeCompare(bStaff.name || "");
-    if (sortOption === "name-desc")
-      return (bStaff.name || "").localeCompare(aStaff.name || "");
-
-    if (sortOption === "role-asc")
-      return (aStaff.role || "").localeCompare(bStaff.role || "");
-    if (sortOption === "role-desc")
-      return (bStaff.role || "").localeCompare(aStaff.role || "");
-
-    if (sortOption === "start-asc")
-      return new Date(a.start_time) - new Date(b.start_time);
-    if (sortOption === "start-desc")
-      return new Date(b.start_time) - new Date(a.start_time);
-
+    if (sortOption === "start-asc") return new Date(a.start_time) - new Date(b.start_time);
+    if (sortOption === "start-desc") return new Date(b.start_time) - new Date(a.start_time);
     return 0;
   });
 
-  const totalItems = sorted.length;
-  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-  const startIndex = (currentPage - 1) * pageSize;
-  const pageItems = sorted.slice(startIndex, startIndex + pageSize);
+  const shiftsByDay = {};
+  sorted.forEach((s) => {
+    const key = new Date(s.start_time).toLocaleDateString("en-CA");
+    if (!shiftsByDay[key]) shiftsByDay[key] = [];
+    shiftsByDay[key].push(s);
+  });
+
+  const buildCalendar = (m) => {
+    const y = m.getFullYear();
+    const mo = m.getMonth();
+    const first = new Date(y, mo, 1);
+    const dow = first.getDay();
+    const start = new Date(first);
+    start.setDate(first.getDate() - dow);
+
+    const matrix = [];
+    let cur = new Date(start);
+
+    for (let w = 0; w < 6; w++) {
+      const row = [];
+      for (let d = 0; d < 7; d++) {
+        row.push(new Date(cur));
+        cur.setDate(cur.getDate() + 1);
+      }
+      matrix.push(row);
+    }
+    return matrix;
+  };
+
+  const calendar = buildCalendar(currentMonth);
+  const today = new Date();
+
+  const isSameDay = (a, b) =>
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate();
 
   return (
-    <div style={{ color: "white", padding: "20px" }}>
+    <div style={{ padding: "20px" }}>
       <h1>Shift Management</h1>
 
       {/* ADD SHIFT FORM */}
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: "10px",
-          marginBottom: "20px",
-          alignItems: "center",
-        }}
-      >
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
         <select
           value={staffId}
           onChange={(e) => {
-            const id = e.target.value;
-            setStaffId(id);
-            const person = staff.find((s) => String(s.id) === id);
-            if (person) setRole(person.role);
+            setStaffId(e.target.value);
+            const p = staff.find((x) => x.id === Number(e.target.value));
+            if (p) setRole(p.role);
           }}
         >
           <option value="">Select Staff</option>
-          {staff.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name} ({s.role})
+          {staff.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name} ({p.role})
             </option>
           ))}
         </select>
 
-        <input
-          placeholder="Role"
-          value={role}
-          readOnly
-          style={{ width: "90px", background: "#222", color: "#ccc" }}
-        />
+        <input value={role} placeholder="Role" readOnly style={{ width: "80px" }} />
 
         <select value={unit} onChange={(e) => setUnit(e.target.value)}>
           <option value="">Unit</option>
@@ -388,10 +361,7 @@ export default function ShiftsPage() {
           <option value="B Wing">B Wing</option>
         </select>
 
-        <select
-          value={assignment}
-          onChange={(e) => setAssignment(e.target.value)}
-        >
+        <select value={assignment} onChange={(e) => setAssignment(e.target.value)}>
           <option value="">Assignment #</option>
           {[1, 2, 3, 4, 5].map((n) => (
             <option key={n} value={n}>
@@ -400,71 +370,35 @@ export default function ShiftsPage() {
           ))}
         </select>
 
-        <input
-          type="datetime-local"
-          value={start}
-          onChange={(e) => setStart(e.target.value)}
-        />
+        <input type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} />
+        <input type="datetime-local" value={end} onChange={(e) => setEnd(e.target.value)} />
 
-        <input
-          type="datetime-local"
-          value={end}
-          onChange={(e) => setEnd(e.target.value)}
-        />
-
-        <button
-          onClick={addShift}
-          style={{
-            padding: "8px 14px",
-            background: "#3c7",
-            borderRadius: "6px",
-            border: "none",
-            cursor: "pointer",
-          }}
-        >
-          Add Shift
-        </button>
+        <button onClick={addShift}>Add Shift</button>
       </div>
 
       {/* FILTERS */}
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: "10px",
-          marginBottom: "20px",
-        }}
-      >
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "10px", marginTop: "15px" }}>
         <input
           placeholder="Search by name..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
         />
 
-        <select
-          value={filterRole}
-          onChange={(e) => setFilterRole(e.target.value)}
-        >
+        <select value={filterRole} onChange={(e) => setFilterRole(e.target.value)}>
           <option>All</option>
           <option>RN</option>
           <option>LPN</option>
           <option>CNA</option>
         </select>
 
-        <select
-          value={filterUnit}
-          onChange={(e) => setFilterUnit(e.target.value)}
-        >
+        <select value={filterUnit} onChange={(e) => setFilterUnit(e.target.value)}>
           <option>All</option>
           <option>A Wing</option>
           <option>Middle</option>
           <option>B Wing</option>
         </select>
 
-        <select
-          value={filterShift}
-          onChange={(e) => setFilterShift(e.target.value)}
-        >
+        <select value={filterShift} onChange={(e) => setFilterShift(e.target.value)}>
           <option>All</option>
           <option>Day</option>
           <option>Evening</option>
@@ -474,394 +408,445 @@ export default function ShiftsPage() {
         <input
           type="date"
           value={filterDate}
-          onChange={(e) => setFilterDate(e.target.value)}
+          onChange={(e) => {
+            const val = e.target.value;
+            setFilterDate(val);
+            if (val) {
+              const d = new Date(val);
+              setCurrentMonth(new Date(d.getFullYear(), d.getMonth(), 1));
+            }
+          }}
         />
 
-        <select
-          value={sortOption}
-          onChange={(e) => setSortOption(e.target.value)}
-        >
+        <select value={sortOption} onChange={(e) => setSortOption(e.target.value)}>
           <option value="start-asc">Start ↑</option>
           <option value="start-desc">Start ↓</option>
-          <option value="name-asc">Name A–Z</option>
-          <option value="name-desc">Name Z–A</option>
-          <option value="role-asc">Role A–Z</option>
-          <option value="role-desc">Role Z–A</option>
         </select>
       </div>
 
-      {/* TEMPLATE SECTION (button that opens builder) */}
-      <div
-        style={{
-          marginBottom: "20px",
-          padding: "14px",
-          borderRadius: "10px",
-          background: "#151515",
-        }}
+      {/* TEMPLATE BUILDER TOGGLE */}
+      <button
+        onClick={() => setTemplateBuilderOpen((p) => !p)}
+        style={{ marginTop: "20px" }}
       >
-        <button
-          onClick={() => setTemplateBuilderOpen((prev) => !prev)}
-          style={{
-            padding: "10px 14px",
-            background: "#4a90e2",
-            border: "none",
-            borderRadius: "8px",
-            fontWeight: "bold",
-            cursor: "pointer",
-            color: "white",
-            marginBottom: "10px",
-          }}
-        >
-          {templateBuilderOpen ? "Close Template Builder" : "Create Template"}
-        </button>
+        {templateBuilderOpen ? "Close Template Builder" : "Create Template"}
+      </button>
 
-        {templateBuilderOpen && (
-          <div style={{ paddingTop: "10px", borderTop: "1px solid #333" }}>
-            <h3 style={{ marginTop: 0 }}>New Weekly Template</h3>
+      {/* TEMPLATE BUILDER BLOCK */}
+      {templateBuilderOpen && (
+  <div className="panel" style={{ marginTop: "10px" }}>
+    <h3>Create Weekly Template</h3>
 
-            <div
-              style={{
-                display: "flex",
-                flexWrap: "wrap",
-                gap: "10px",
-                marginBottom: "10px",
-              }}
-            >
-              <input
-                placeholder="Template name"
-                value={templateName}
-                onChange={(e) => setTemplateName(e.target.value)}
-                style={{ padding: "6px", minWidth: "160px" }}
-              />
+    {/* Template Options */}
+    <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+      <input
+        placeholder="Template name..."
+        value={templateName}
+        onChange={(e) => setTemplateName(e.target.value)}
+      />
 
-              <select
-                value={templateStaffId}
-                onChange={(e) => {
-                  const id = e.target.value;
-                  setTemplateStaffId(id);
-                  const person = staff.find((s) => String(s.id) === id);
-                  if (person) setTemplateRole(person.role);
-                }}
-                style={{ padding: "6px" }}
-              >
-                <option value="">Employee</option>
-                {staff.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} ({s.role})
-                  </option>
-                ))}
-              </select>
+      <input
+        placeholder="Filter employee name..."
+        value={templateFilterName}
+        onChange={(e) => setTemplateFilterName(e.target.value)}
+      />
 
-              <input
-                readOnly
-                value={templateRole}
-                placeholder="Role"
-                style={{
-                  padding: "6px",
-                  width: "90px",
-                  background: "#222",
-                  border: "1px solid #333",
-                  color: "#ccc",
-                }}
-              />
-
-              <select
-                value={templateUnit}
-                onChange={(e) => setTemplateUnit(e.target.value)}
-                style={{ padding: "6px" }}
-              >
-                <option value="">Unit</option>
-                <option value="A Wing">A Wing</option>
-                <option value="Middle">Middle</option>
-                <option value="B Wing">B Wing</option>
-              </select>
-
-              <select
-                value={templateAssignment}
-                onChange={(e) => setTemplateAssignment(e.target.value)}
-                style={{ padding: "6px" }}
-              >
-                <option value="">Assignment #</option>
-                {[1, 2, 3, 4, 5].map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </select>
-
-              <select
-                value={templateShiftType}
-                onChange={(e) => setTemplateShiftType(e.target.value)}
-                style={{ padding: "6px" }}
-              >
-                <option value="">Shift Type</option>
-                {availableTemplateShiftTypes.map((st) => (
-                  <option key={st} value={st}>
-                    {st}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div
-              style={{
-                display: "flex",
-                flexWrap: "wrap",
-                gap: "20px",
-                alignItems: "flex-start",
-              }}
-            >
-              <div>
-                <div
-                  style={{ marginBottom: "4px", fontWeight: "bold" }}
-                >
-                  Days of Week
-                </div>
-                {[
-                  [0, "Sun"],
-                  [1, "Mon"],
-                  [2, "Tue"],
-                  [3, "Wed"],
-                  [4, "Thu"],
-                  [5, "Fri"],
-                  [6, "Sat"],
-                ].map(([idx, label]) => (
-                  <label key={idx} style={{ marginRight: "8px" }}>
-                    <input
-                      type="checkbox"
-                      checked={templateDays[idx]}
-                      onChange={() => toggleTemplateDay(idx)}
-                    />{" "}
-                    {label}
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <button
-              onClick={saveTemplate}
-              style={{
-                marginTop: "12px",
-                padding: "8px 14px",
-                background: "#3c7",
-                borderRadius: "6px",
-                color: "white",
-                border: "none",
-                cursor: "pointer",
-                fontWeight: "bold",
-              }}
-            >
-              Save Template
-            </button>
-          </div>
-        )}
-
-        {/* APPLY TEMPLATE AREA */}
-        <div
-          style={{
-            marginTop: "20px",
-            paddingTop: "10px",
-            borderTop: "1px solid #333",
-          }}
-        >
-          <h4 style={{ margin: "0 0 8px 0" }}>Apply Template</h4>
-
-          <select
-            value={selectedTemplateId}
-            onChange={(e) => setSelectedTemplateId(e.target.value)}
-            style={{ padding: "8px", minWidth: "280px", marginRight: "10px" }}
-          >
-            <option value="">Select a Template...</option>
-            {templates.map((t) => {
-              const tStaff = staff.find((s) => s.id === t.staffId);
-              return (
-                <option key={t.id} value={t.id}>
-                  {t.name} — {tStaff ? tStaff.name : "Unknown"} (
-                  {t.shiftType})
-                </option>
-              );
-            })}
-          </select>
-
-          {selectedTemplateId && (
-            <button
-              onClick={() => deleteTemplate(Number(selectedTemplateId))}
-              style={{
-                marginRight: "10px",
-                padding: "6px 10px",
-                background: "#b33",
-                border: "none",
-                borderRadius: "4px",
-                color: "white",
-                cursor: "pointer",
-              }}
-            >
-              Delete
-            </button>
-          )}
-
-          <div style={{ marginTop: "12px", display: "flex", gap: "15px" }}>
-            <div>
-              <div style={{ fontSize: "13px" }}>Week Start (Sunday)</div>
-              <input
-                type="date"
-                value={templateWeekStart}
-                onChange={(e) => setTemplateWeekStart(e.target.value)}
-                style={{ padding: "6px" }}
-              />
-            </div>
-
-            <div>
-              <div style={{ fontSize: "13px" }}>Weeks</div>
-              <input
-                type="number"
-                min="1"
-                value={templateWeeksCount}
-                onChange={(e) => setTemplateWeeksCount(e.target.value)}
-                style={{ padding: "6px", width: "80px" }}
-              />
-            </div>
-          </div>
-
-          <button
-            onClick={() => {
-              const tpl = templates.find(
-                (temp) => String(temp.id) === String(selectedTemplateId)
-              );
-              if (!tpl) return alert("Select a template first.");
-              applyTemplate(tpl);
-            }}
-            style={{
-              marginTop: "12px",
-              padding: "10px 18px",
-              background: "#4a90e2",
-              border: "none",
-              borderRadius: "6px",
-              color: "white",
-              fontWeight: "bold",
-              cursor: "pointer",
-            }}
-          >
-            Apply Template
-          </button>
-        </div>
-      </div>
-
-      {/* SHIFT TABLE – BLUE THEME + EDIT/DELETE */}
-      <table
-        style={{
-          width: "100%",
-          borderCollapse: "collapse",
-          marginTop: "20px",
-          borderRadius: "10px",
-          overflow: "hidden",
-        }}
+      <select
+        value={templateFilterRole}
+        onChange={(e) => setTemplateFilterRole(e.target.value)}
       >
+        <option value="All">All Roles</option>
+        <option value="RN">RN</option>
+        <option value="LPN">LPN</option>
+        <option value="CNA">CNA</option>
+      </select>
+    </div>
+
+    {/* TEMPLATE BUILDER TABLE */}
+    <div style={{ marginTop: "15px", overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
-          <tr style={{ background: "#003366", color: "white" }}>
-            <th style={{ padding: "10px", textAlign: "left" }}>Name</th>
-            <th style={{ padding: "10px", textAlign: "left" }}>Role</th>
-            <th style={{ padding: "10px", textAlign: "left" }}>Unit</th>
-            <th style={{ padding: "10px", textAlign: "left" }}>Assignment</th>
-            <th style={{ padding: "10px", textAlign: "left" }}>Start</th>
-            <th style={{ padding: "10px", textAlign: "left" }}>End</th>
-            <th style={{ padding: "10px", textAlign: "left" }}>Shift</th>
-            <th style={{ padding: "10px", textAlign: "left" }}>Actions</th>
+          <tr>
+            <th>Include</th>
+            <th>Name</th>
+            <th>Role</th>
+            <th>Unit</th>
+            <th>Assignment</th>
+            <th>Shift</th>
+            <th style={{ textAlign: "center" }}>Sun</th>
+            <th style={{ textAlign: "center" }}>Mon</th>
+            <th style={{ textAlign: "center" }}>Tue</th>
+            <th style={{ textAlign: "center" }}>Wed</th>
+            <th style={{ textAlign: "center" }}>Thu</th>
+            <th style={{ textAlign: "center" }}>Fri</th>
+            <th style={{ textAlign: "center" }}>Sat</th>
           </tr>
         </thead>
+
         <tbody>
-          {pageItems.map((s, idx) => {
-            const worker = staff.find((x) => x.id === s.staff_id) || {};
-            const shiftType = getShiftType(s.start_time);
+          {staff
+            .filter((p) =>
+              templateFilterName
+                ? p.name.toLowerCase().includes(templateFilterName.toLowerCase())
+                : true
+            )
+            .filter((p) =>
+              templateFilterRole === "All" ? true : p.role === templateFilterRole
+            )
+            .map((p) => {
+              const row = templateRows[p.id] || {
+                include: false,
+                unit: "",
+                assignment: "",
+                shiftType: "",
+                days: Array(7).fill(false),
+              };
 
-            const baseColor = idx % 2 === 0 ? "#0a1a33" : "#11284d";
+              return (
+                <tr key={p.id}>
+                  {/* Include checkbox */}
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={row.include}
+                      onChange={(e) =>
+                        updateTemplateRow(p.id, { include: e.target.checked })
+                      }
+                    />
+                  </td>
 
-            return (
-              <tr
-                key={s.id}
-                style={{
-                  background: baseColor,
-                  transition: "background 0.2s",
-                }}
-              >
-                <td style={{ padding: "10px" }}>{worker.name}</td>
-                <td style={{ padding: "10px" }}>{worker.role}</td>
-                <td style={{ padding: "10px" }}>{s.unit}</td>
-                <td style={{ padding: "10px" }}>
-                  {s.assignment_number || "-"}
-                </td>
-                <td style={{ padding: "10px" }}>
-                  {formatDate(s.start_time)}
-                </td>
-                <td style={{ padding: "10px" }}>
-                  {formatDate(s.end_time)}
-                </td>
-                <td style={{ padding: "10px" }}>{shiftType}</td>
-                <td
-                  style={{
-                    padding: "10px",
-                    display: "flex",
-                    gap: "6px",
-                    flexWrap: "wrap",
-                  }}
-                >
-                  <button
-                    onClick={() => startEdit(s)}
-                    style={{
-                      padding: "4px 8px",
-                      background: "#4a90e2",
-                      borderRadius: "4px",
-                      border: "none",
-                      color: "white",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    onClick={() => setDeleteId(s.id)}
-                    style={{
-                      padding: "4px 8px",
-                      background: "#b33",
-                      borderRadius: "4px",
-                      border: "none",
-                      color: "white",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            );
-          })}
+                  {/* Name */}
+                  <td>{p.name}</td>
+
+                  {/* Role */}
+                  <td>{p.role}</td>
+
+                  {/* Unit */}
+                  <td>
+                    <select
+                      value={row.unit}
+                      onChange={(e) =>
+                        updateTemplateRow(p.id, { unit: e.target.value })
+                      }
+                    >
+                      <option value="">--</option>
+                      <option value="A Wing">A Wing</option>
+                      <option value="Middle">Middle</option>
+                      <option value="B Wing">B Wing</option>
+                    </select>
+                  </td>
+
+                  {/* Assignment (CNA only) */}
+                  <td>
+                    {p.role === "CNA" ? (
+                      <select
+                        value={row.assignment}
+                        onChange={(e) =>
+                          updateTemplateRow(p.id, {
+                            assignment: e.target.value,
+                          })
+                        }
+                      >
+                        <option value="">--</option>
+                        {[1, 2, 3, 4, 5].map((n) => (
+                          <option key={n} value={n}>
+                            {n}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span style={{ opacity: 0.5 }}>N/A</span>
+                    )}
+                  </td>
+
+                  {/* Shift type */}
+                  <td>
+                    <select
+                      value={row.shiftType}
+                      onChange={(e) =>
+                        updateTemplateRow(p.id, { shiftType: e.target.value })
+                      }
+                    >
+                      <option value="">--</option>
+
+                      {/* Nurses: Day/Night only */}
+                      {p.role === "RN" || p.role === "LPN" ? (
+                        <>
+                          <option value="Day">Day (6a–6p)</option>
+                          <option value="Night">Night (6p–6a)</option>
+                        </>
+                      ) : (
+                        <>
+                          <option value="Day">Day (6a–2p)</option>
+                          <option value="Evening">Evening (2p–10p)</option>
+                          <option value="Night">Night (10p–6a)</option>
+                        </>
+                      )}
+                    </select>
+                  </td>
+
+                  {/* Days of week */}
+                  {row.days.map((val, idx) => (
+                    <td key={idx} style={{ textAlign: "center" }}>
+                      <input
+                        type="checkbox"
+                        checked={val}
+                        onChange={() => toggleTemplateDay(p.id, idx)}
+                      />
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
         </tbody>
       </table>
+    </div>
 
-      {/* Pagination */}
+    <button
+      style={{ marginTop: "15px", width: "200px" }}
+      onClick={saveTemplate}
+    >
+      Save Template
+    </button>
+  </div>
+)}
+
+      {/* APPLY TEMPLATE */}
+      <div className="panel" style={{ marginTop: "20px" }}>
+        <h4>Apply Template</h4>
+
+        <select
+          value={selectedTemplateId}
+          onChange={(e) => setSelectedTemplateId(e.target.value)}
+          style={{ minWidth: "250px" }}
+        >
+          <option value="">Select Template...</option>
+          {templates.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
+        </select>
+
+        <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
+          <div>
+            <div style={{ fontSize: "12px" }}>Week Start (Sunday)</div>
+            <input
+              type="date"
+              value={templateWeekStart}
+              onChange={(e) => setTemplateWeekStart(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <div style={{ fontSize: "12px" }}>Weeks</div>
+            <input
+              type="number"
+              min="1"
+              value={templateWeeksCount}
+              onChange={(e) => setTemplateWeeksCount(e.target.value)}
+              style={{ width: "70px" }}
+            />
+          </div>
+        </div>
+
+        <button
+          style={{ marginTop: "10px" }}
+          onClick={() => {
+            const tpl = templates.find((x) => x.id === Number(selectedTemplateId));
+            if (!tpl) return alert("Choose a template.");
+            applyTemplate(tpl);
+          }}
+        >
+          Apply Template
+        </button>
+      </div>
+
+      {/* CALENDAR HEADER */}
       <div
         style={{
-          marginTop: "20px",
+          marginTop: "30px",
           display: "flex",
-          gap: "10px",
+          justifyContent: "center",
           alignItems: "center",
+          gap: "20px",
         }}
       >
         <button
-          disabled={currentPage === 1}
-          onClick={() => setCurrentPage((c) => c - 1)}
+          onClick={() =>
+            setCurrentMonth(
+              new Date(
+                currentMonth.getFullYear(),
+                currentMonth.getMonth() - 1,
+                1
+              )
+            )
+          }
         >
-          Prev
+          ◀
         </button>
-        <div>
-          Page {currentPage} / {totalPages} (Total {totalItems} shifts)
-        </div>
+
+        <h2>
+          {currentMonth.toLocaleString("en-US", {
+            month: "long",
+            year: "numeric",
+          })}
+        </h2>
+
         <button
-          disabled={currentPage === totalPages}
-          onClick={() => setCurrentPage((c) => c + 1)}
+          onClick={() =>
+            setCurrentMonth(
+              new Date(
+                currentMonth.getFullYear(),
+                currentMonth.getMonth() + 1,
+                1
+              )
+            )
+          }
         >
-          Next
+          ▶
         </button>
+      </div>
+
+      {/* ROLE COLOR LEGEND */}
+      <div
+        style={{
+          textAlign: "center",
+          marginBottom: "15px",
+          fontSize: "14px",
+          color: "var(--text-muted)",
+        }}
+      >
+        Green = CNA · Blue = RN · Purple = LPN · Yellow ≥32h · Red = OT &gt; 40h
+      </div>
+
+      {/* CALENDAR GRID */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(7, 1fr)",
+          gap: "6px",
+        }}
+      >
+        {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
+          <div
+            key={d}
+            style={{
+              textAlign: "center",
+              padding: "6px",
+              fontWeight: "bold",
+              color: "var(--text)",
+            }}
+          >
+            {d}
+          </div>
+        ))}
+
+        {calendar.map((week, wi) =>
+          week.map((date, di) => {
+            const key = date.toLocaleDateString("en-CA");
+            const dayShifts = shiftsByDay[key] || [];
+            const isToday = isSameDay(date, today);
+            const inMonth =
+              date.getMonth() === currentMonth.getMonth() &&
+              date.getFullYear() === currentMonth.getFullYear();
+
+            return (
+              <div
+                key={`${wi}-${di}`}
+                className="calendar-cell"
+                style={{
+                  padding: "6px",
+                  minHeight: "110px",
+                  background: "var(--surface)",
+                  border:
+                    isToday
+                      ? "2px solid var(--button-bg)"
+                      : "1px solid var(--border)",
+                  opacity: inMonth ? 1 : 0.35,
+                  borderRadius: "8px",
+                  display: "flex",
+                  flexDirection: "column",
+                }}
+              >
+                <div
+                  style={{
+                    textAlign: "right",
+                    fontSize: "13px",
+                    opacity: 0.7,
+                  }}
+                >
+                  {date.getDate()}
+                </div>
+
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "4px",
+                    flex: 1,
+                    overflow: "hidden",
+                  }}
+                >
+                  {dayShifts.map((s) => {
+                    const w = staff.find((x) => x.id === s.staff_id) || {};
+
+                    const weekKey = `${s.staff_id}|${getWeekStartKey(
+                      s.start_time
+                    )}`;
+                    const bucket = weeklyBuckets[weekKey] || [];
+
+                    let cumulative = 0;
+                    for (const sh of bucket) {
+                      cumulative += calcHours(sh.start_time, sh.end_time);
+                      if (sh.id === s.id) break;
+                    }
+
+                    let borderColor = "transparent";
+                    let showOT = false;
+                    if (cumulative > 40) {
+                      borderColor = "red";
+                      showOT = true;
+                    } else if (cumulative >= 32) {
+                      borderColor = "yellow";
+                    }
+
+                    let bg = "#555";
+                    if (w.role === "CNA") bg = "#00c853";
+                    if (w.role === "RN") bg = "#4a90e2";
+                    if (w.role === "LPN") bg = "#ba68c8";
+
+                    return (
+                      <div
+                        key={s.id}
+                        onClick={() => startEdit(s)}
+                        style={{
+                          padding: "4px 6px",
+                          borderRadius: "999px",
+                          background: bg,
+                          border: `2px solid ${borderColor}`,
+                          fontSize: "11px",
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {w.name} · {formatShiftRange(s.start_time, s.end_time)}
+                        {showOT && <strong> OT</strong>}
+                      </div>
+                    );
+                  })}
+
+                  {dayShifts.length === 0 && (
+                    <div style={{ fontSize: "11px", opacity: 0.25 }}>
+                      No shifts
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
       </div>
 
       {/* EDIT MODAL */}
@@ -870,174 +855,114 @@ export default function ShiftsPage() {
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(0,0,0,0.7)",
+            background: "rgba(0,0,0,0.5)",
             display: "flex",
             justifyContent: "center",
             alignItems: "center",
-            zIndex: 1000,
+            zIndex: 5000,
           }}
         >
-          <div
-            style={{
-              background: "#111",
-              padding: "20px",
-              borderRadius: "12px",
-              width: "380px",
-              color: "white",
-            }}
-          >
+          <div className="modal" style={{ width: "380px" }}>
             <h3>Edit Shift</h3>
 
-            <div style={{ marginBottom: "10px" }}>
-              <label>Start:</label>
-              <input
-                type="datetime-local"
-                value={editingShift.start_time}
-                onChange={(e) =>
-                  setEditingShift({
-                    ...editingShift,
-                    start_time: e.target.value,
-                  })
-                }
-              />
-            </div>
+            <label>Start:</label>
+            <input
+              type="datetime-local"
+              value={editingShift.start_time}
+              onChange={(e) =>
+                setEditingShift({ ...editingShift, start_time: e.target.value })
+              }
+            />
 
-            <div style={{ marginBottom: "10px" }}>
-              <label>End:</label>
-              <input
-                type="datetime-local"
-                value={editingShift.end_time}
-                onChange={(e) =>
-                  setEditingShift({
-                    ...editingShift,
-                    end_time: e.target.value,
-                  })
-                }
-              />
-            </div>
+            <label>End:</label>
+            <input
+              type="datetime-local"
+              value={editingShift.end_time}
+              onChange={(e) =>
+                setEditingShift({ ...editingShift, end_time: e.target.value })
+              }
+            />
 
-            <div style={{ marginBottom: "10px" }}>
-              <label>Unit:</label>
-              <select
-                value={editingShift.unit}
-                onChange={(e) =>
-                  setEditingShift({ ...editingShift, unit: e.target.value })
-                }
-              >
-                <option value="A Wing">A Wing</option>
-                <option value="Middle">Middle</option>
-                <option value="B Wing">B Wing</option>
-              </select>
-            </div>
+            <label>Unit:</label>
+            <select
+              value={editingShift.unit}
+              onChange={(e) =>
+                setEditingShift({ ...editingShift, unit: e.target.value })
+              }
+            >
+              <option value="A Wing">A Wing</option>
+              <option value="Middle">Middle</option>
+              <option value="B Wing">B Wing</option>
+            </select>
 
-            <div style={{ marginBottom: "10px" }}>
-              <label>Assignment:</label>
-              <select
-                value={editingShift.assignment_number || ""}
-                onChange={(e) =>
-                  setEditingShift({
-                    ...editingShift,
-                    assignment_number: e.target.value
-                      ? Number(e.target.value)
-                      : null,
-                  })
-                }
-              >
-                <option value="">None</option>
-                {[1, 2, 3, 4, 5].map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <label>Assignment:</label>
+            <select
+              value={editingShift.assignment_number || ""}
+              onChange={(e) =>
+                setEditingShift({
+                  ...editingShift,
+                  assignment_number: e.target.value
+                    ? Number(e.target.value)
+                    : null,
+                })
+              }
+            >
+              <option value="">None</option>
+              {[1, 2, 3, 4, 5].map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
 
-            <div style={{ display: "flex", gap: "10px" }}>
+            <div style={{ marginTop: "15px", display: "flex", gap: "10px" }}>
+              <button onClick={saveEdit}>Save</button>
+              <button onClick={() => setEditingShift(null)}>Cancel</button>
               <button
-                onClick={saveEdit}
-                style={{
-                  padding: "6px 10px",
-                  background: "#4a90e2",
-                  border: "none",
-                  borderRadius: "6px",
-                  color: "white",
-                  cursor: "pointer",
+                style={{ marginLeft: "auto", background: "#b33" }}
+                onClick={() => {
+                  setDeleteId(editingShift.id);
+                  setEditingShift(null);
                 }}
               >
-                Save
-              </button>
-
-              <button
-                onClick={() => setEditingShift(null)}
-                style={{
-                  padding: "6px 10px",
-                  background: "#666",
-                  border: "none",
-                  borderRadius: "6px",
-                  color: "white",
-                  cursor: "pointer",
-                }}
-              >
-                Cancel
+                Delete
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* DELETE CONFIRM MODAL */}
-      {deleteId !== null && (
+      {deleteId && (
         <div
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(0,0,0,0.7)",
+            background: "rgba(0,0,0,0.5)",
             display: "flex",
             justifyContent: "center",
             alignItems: "center",
-            zIndex: 1000,
+            zIndex: 5000,
           }}
         >
-          <div
-            style={{
-              background: "#222",
-              padding: "20px",
-              borderRadius: "12px",
-              width: "360px",
-              color: "white",
-              textAlign: "center",
-            }}
-          >
+          <div className="modal" style={{ width: "350px" }}>
             <h3>Delete Shift?</h3>
-            <p>This action cannot be undone.</p>
+            <p>This cannot be undone.</p>
 
-            <div style={{ display: "flex", gap: "10px", marginTop: "20px" }}>
+            <div style={{ display: "flex", gap: "10px" }}>
               <button
-                onClick={confirmDelete}
-                style={{
-                  flex: 1,
-                  background: "#b33",
-                  padding: "10px",
-                  borderRadius: "8px",
-                  border: "none",
-                  color: "white",
-                  cursor: "pointer",
+                style={{ background: "#b33", flex: 1 }}
+                onClick={async () => {
+                  await api.delete(`/shifts/${deleteId}`);
+                  setShifts((p) => p.filter((x) => x.id !== deleteId));
+                  setDeleteId(null);
                 }}
               >
-                Yes, Delete
+                Delete
               </button>
 
               <button
+                style={{ flex: 1 }}
                 onClick={() => setDeleteId(null)}
-                style={{
-                  flex: 1,
-                  background: "#666",
-                  padding: "10px",
-                  borderRadius: "8px",
-                  border: "none",
-                  color: "white",
-                  cursor: "pointer",
-                }}
               >
                 Cancel
               </button>

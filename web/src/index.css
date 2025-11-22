@@ -1,22 +1,168 @@
-:root {
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-  color-scheme: dark;
-  color: #ffffff;
-  background-color: #111111;
+/* ===========================================
+   DARK THEME (default)
+=========================================== */
+:root,
+[data-theme="dark"] {
+  --bg: #0c0c0c;
+  --bg2: #111;
+  --bg3: #151515;
+
+  --text: #ffffff;
+  --text-muted: #bbbbbb;
+
+  --surface: #0f0f0f;
+  --surface2: #1a1a1a;
+
+  --border: #333;
+  --border-light: #444;
+
+  --input-bg: #1e1e1e;
+  --input-text: #ffffff;
+  --input-border: #555;
+
+  --nav-bg: #1a1a1a;
+  --nav-text: #ffffff;
+
+  --button-bg: #2d8cff;
+  --button-text: #ffffff;
+
+  --modal-bg: #111;
+  --modal-text: #ffffff;
+
+  --calendar-bg-inmonth: #050d20;
+  --calendar-bg-out: #04060b;
 }
 
-/* Remove default margins and make body full width */
+/* ===========================================
+   LIGHT THEME — TRUE EXACT OPPOSITE
+=========================================== */
+[data-theme="light"] {
+  --bg: #ffffff;
+  --bg2: #f7f7f7;
+  --bg3: #ececec;
+
+  --text: #111111;
+  --text-muted: #666666;
+
+  --surface: #ffffff;
+  --surface2: #f1f1f1;
+
+  --border: #cccccc;
+  --border-light: #dddddd;
+
+  --input-bg: #ffffff;
+  --input-text: #000000;
+  --input-border: #777;
+
+  --nav-bg: #ffffff;
+  --nav-text: #111111;
+
+  --button-bg: #005bd1;
+  --button-text: #ffffff;
+
+  --modal-bg: #ffffff;
+  --modal-text: #111111;
+
+  --calendar-bg-inmonth: #e9eefc;
+  --calendar-bg-out: #f4f6ff;
+}
+
+/* ===========================================
+   GLOBAL
+=========================================== */
 body {
   margin: 0;
-  min-height: 100vh;
-  background-color: #111111;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Arial, sans-serif;
 }
 
-/* IMPORTANT: let the app stretch full width */
-#root {
+a {
+  color: var(--nav-text);
+}
+
+h1, h2, h3, h4, h5 {
+  color: var(--text);
+}
+
+/* NAVBAR */
+.navbar {
+  background: var(--nav-bg);
+  color: var(--nav-text);
+  border-bottom: 1px solid var(--border);
+}
+
+/* INPUTS / SELECTS */
+input,
+select,
+textarea {
+  background: var(--input-bg);
+  color: var(--input-text);
+  border: 1px solid var(--input-border);
+  padding: 6px;
+  border-radius: 6px;
+}
+
+input::placeholder {
+  color: var(--text-muted);
+}
+
+/* BUTTONS */
+button {
+  background: var(--button-bg);
+  color: var(--button-text);
+  border: none;
+  padding: 8px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+/* PANELS */
+.panel,
+.card,
+.section,
+.box {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+/* TABLES */
+table {
   width: 100%;
-  min-height: 100vh;
+  border-collapse: collapse;
+}
+th, td {
+  border-bottom: 1px solid var(--border-light);
+  padding: 6px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* CALENDAR */
+.calendar-cell {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+}
+
+.calendar-inmonth {
+  background: var(--calendar-bg-inmonth) !important;
+}
+
+.calendar-out {
+  background: var(--calendar-bg-out) !important;
+}
+
+.calendar-no-shifts {
+  color: var(--text-muted);
+}
+
+/* TRANSITIONS */
+* {
+  transition: background 0.25s ease, color 0.25s ease, border-color 0.25s ease;
 }

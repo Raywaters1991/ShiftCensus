@@ -7,6 +7,7 @@ import DashboardPage from "./pages/DashboardPage";
 import StaffPage from "./pages/StaffPage";
 import ShiftsPage from "./pages/ShiftsPage";
 import CensusPage from "./pages/CensusPage";
+import ThemeToggle from "./components/ThemeToggle";
 
 function NavLinkItem({ to, label }) {
   const location = useLocation();
@@ -17,10 +18,10 @@ function NavLinkItem({ to, label }) {
       to={to}
       style={{
         padding: "10px 20px",
-        color: active ? "#00aaff" : "white",
+        color: active ? "var(--button-bg)" : "var(--nav-text)",
         textDecoration: "none",
         fontSize: "18px",
-        borderBottom: active ? "3px solid #00aaff" : "3px solid transparent",
+        borderBottom: active ? `3px solid var(--button-bg)` : "3px solid transparent",
         fontWeight: active ? "bold" : "normal",
       }}
     >
@@ -33,26 +34,20 @@ export default function App() {
   const [orgCode, setOrgCode] = useState(null);
   const [user, setUser] = useState(null);
 
-  // Step 1: Org Code Required
-  if (!orgCode) {
-    return <OrgPage onOrgSelect={(code) => setOrgCode(code)} />;
-  }
-
-  // Step 2: User Login Required
-  if (!user) {
-    return <LoginPage onLogin={() => setUser(true)} />;
-  }
+  if (!orgCode) return <OrgPage onOrgSelect={setOrgCode} />;
+  if (!user) return <LoginPage onLogin={() => setUser(true)} />;
 
   return (
     <BrowserRouter>
-      {/* NAV BAR */}
       <div
+        className="navbar"
         style={{
           display: "flex",
           justifyContent: "center",
+          alignItems: "center",
           gap: "20px",
-          background: "#1e1e1e",
           padding: "15px 0",
+          position: "relative",
         }}
       >
         <NavLinkItem to="/" label={`Dashboard (${orgCode})`} />
@@ -74,6 +69,11 @@ export default function App() {
         >
           Logout
         </button>
+
+        {/* Theme toggle positioned cleanly at top-right */}
+        <div style={{ position: "absolute", right: "20px" }}>
+          <ThemeToggle />
+        </div>
       </div>
 
       <Routes>
