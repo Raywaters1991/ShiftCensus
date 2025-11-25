@@ -7,6 +7,10 @@
   --bg2: #111;
   --bg3: #151515;
 
+  /* NEW: page + calendar backgrounds */
+  --page-bg: #000000;            /* page background in dark mode */
+  --calendar-cell-bg: #050505;   /* calendar tiles in dark mode */
+
   --text: #ffffff;
   --text-muted: #bbbbbb;
 
@@ -34,12 +38,16 @@
 }
 
 /* ===========================================
-   LIGHT THEME — TRUE EXACT OPPOSITE
+   LIGHT THEME — TRUE OPPOSITE + SOFT GRAYS
 =========================================== */
 [data-theme="light"] {
   --bg: #ffffff;
   --bg2: #f7f7f7;
   --bg3: #ececec;
+
+  /* NEW: page + calendar backgrounds */
+  --page-bg: #f3f4f6;            /* light gray page background */
+  --calendar-cell-bg: #f9fafb;   /* very light gray tiles */
 
   --text: #111111;
   --text-muted: #666666;
@@ -144,7 +152,7 @@ th, td {
 
 /* CALENDAR */
 .calendar-cell {
-  background: var(--surface);
+  background: var(--calendar-cell-bg); /* was var(--surface) */
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: 8px;
@@ -165,4 +173,30 @@ th, td {
 /* TRANSITIONS */
 * {
   transition: background 0.25s ease, color 0.25s ease, border-color 0.25s ease;
+}
+
+/* ===========================================
+   MODAL SYSTEM — FIXED FOR DARK & LIGHT MODES
+=========================================== */
+
+/* Full-screen backdrop */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);   /* Always dark */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+/* Modal window */
+.modal {
+  background: var(--modal-bg);   /* now solid in both modes */
+  color: var(--modal-text);
+  padding: 20px;
+  width: 380px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  box-shadow: 0 0 20px rgba(0,0,0,0.3);
 }

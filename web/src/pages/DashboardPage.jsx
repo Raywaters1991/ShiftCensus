@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import api from "../services/api";
 
+// Block styling
 const shiftBlocks = [
   { key: "Day", label: "Day Shift", color: "#FFEB3B" },
   { key: "Evening", label: "Evening Shift", color: "#42A5F5" },
@@ -13,6 +14,9 @@ export default function DashboardPage() {
   const [census, setCensus] = useState([]);
   const [currentTime, setCurrentTime] = useState(new Date());
 
+  /* ------------------------------------------------
+     LOAD DATA + CLOCK TICK
+  -------------------------------------------------- */
   useEffect(() => {
     loadData();
     const dataInterval = setInterval(loadData, 5000);
@@ -35,8 +39,20 @@ export default function DashboardPage() {
     setCensus(censusRes.data);
   };
 
-  const getShiftType = (start) => {
+  /* ------------------------------------------------
+     SHIFT CLASSIFICATION (fixed!)
+  -------------------------------------------------- */
+  const getShiftType = (start, role) => {
     const hour = new Date(start).getHours();
+
+    // Nurses follow strict 12-hour blocks:
+    // Day = 06–18, Night = 18–06
+    if (role === "RN" || role === "LPN") {
+      if (hour >= 6 && hour < 18) return "Day";
+      return "Night";
+    }
+
+    // CNA 8-hour shifts
     if (hour >= 6 && hour < 14) return "Day";
     if (hour >= 14 && hour < 22) return "Evening";
     return "Night";
@@ -48,41 +64,46 @@ export default function DashboardPage() {
     return Math.max((e - s) / 3600000, 0);
   };
 
-  // Determine today's date at midnight
+  /* ------------------------------------------------
+     TODAY & CURRENT SHIFT (fixed to nurse logic)
+  -------------------------------------------------- */
   const todayMidnight = new Date();
   todayMidnight.setHours(0, 0, 0, 0);
 
-  // Highlight current shift
   const currentShiftKey = (() => {
     const h = currentTime.getHours();
-    if (h >= 6 && h < 14) return "Day";
-    if (h >= 14 && h < 22) return "Evening";
+    // RN/LPN logic for highlighting blocks
+    if (h >= 6 && h < 18) return "Day";
     return "Night";
   })();
 
+  /* ------------------------------------------------
+     RENDER SINGLE SHIFT BLOCK
+  -------------------------------------------------- */
   const renderShiftCard = (block) => {
     const { key, label, color } = block;
 
-    // STEP 1 — Filter only today's shifts
+    // Filter today's shifts only
     const todayShiftList = shifts.filter((shift) => {
-      const shiftDate = new Date(shift.start_time);
-      shiftDate.setHours(0, 0, 0, 0);
-      return shiftDate.getTime() === todayMidnight.getTime();
+      const d = new Date(shift.start_time);
+      d.setHours(0, 0, 0, 0);
+      return d.getTime() === todayMidnight.getTime();
     });
 
-    // STEP 2 — Filter today's shifts by shift type
-    const shiftList = todayShiftList.filter(
-      (shift) => getShiftType(shift.start_time) === key
-    );
+    // Correct role-aware shift filtering
+    const shiftList = todayShiftList.filter((shift) => {
+      const worker = staff.find((s) => s.id === shift.staff_id);
+      if (!worker) return false;
+      return getShiftType(shift.start_time, worker.role) === key;
+    });
 
-    // Licensed staff tracking
+    // Licensed + CNA tracking
     const licensed = {
       "A Wing": { RN: 0, LPN: 0, hoursRN: 0, hoursLPN: 0 },
       "B Wing": { RN: 0, LPN: 0, hoursRN: 0, hoursLPN: 0 },
       Middle: { RN: 0, LPN: 0, hoursRN: 0, hoursLPN: 0 },
     };
 
-    // CNA assignment groups
     const cnaGroups = {
       1: { count: 0, hours: 0 },
       2: { count: 0, hours: 0 },
@@ -97,22 +118,23 @@ export default function DashboardPage() {
 
       const hours = calcHours(shift.start_time, shift.end_time);
 
-      // Licensed staff hours
-      if ((worker.role === "RN" || worker.role === "LPN") && licensed[shift.unit]) {
-        if (worker.role === "RN") {
-          licensed[shift.unit].RN += 1;
-          licensed[shift.unit].hoursRN += hours;
-        } else {
-          licensed[shift.unit].LPN += 1;
-          licensed[shift.unit].hoursLPN += hours;
+      if (worker.role === "RN" || worker.role === "LPN") {
+        if (licensed[shift.unit]) {
+          if (worker.role === "RN") {
+            licensed[shift.unit].RN += 1;
+            licensed[shift.unit].hoursRN += hours;
+          } else {
+            licensed[shift.unit].LPN += 1;
+            licensed[shift.unit].hoursLPN += hours;
+          }
         }
       }
 
-      // CNA group hours
       if (worker.role === "CNA" && shift.assignment_number) {
-        if (cnaGroups[shift.assignment_number]) {
-          cnaGroups[shift.assignment_number].count += 1;
-          cnaGroups[shift.assignment_number].hours += hours;
+        const g = cnaGroups[shift.assignment_number];
+        if (g) {
+          g.count += 1;
+          g.hours += hours;
         }
       }
     });
@@ -139,12 +161,16 @@ export default function DashboardPage() {
       >
         <h2 style={{ fontWeight: "800", marginTop: 0 }}>{label}</h2>
 
-        {/* Licensed Staff */}
-        <h3 style={{ marginBottom: "6px", fontWeight: "700" }}>Licensed Staff</h3>
+        {/* Licensed nurses */}
+        <h3 style={{ marginBottom: "6px", fontWeight: "700" }}>
+          Licensed Staff
+        </h3>
+
         {Object.entries(licensed).map(([unit, d]) => {
           const rows = [];
           if (d.RN > 0) rows.push(`RN ${unit}: ${d.RN} | Hrs: ${d.hoursRN.toFixed(1)}`);
           if (d.LPN > 0) rows.push(`LPN ${unit}: ${d.LPN} | Hrs: ${d.hoursLPN.toFixed(1)}`);
+
           return rows.length ? (
             <div key={unit} style={{ marginBottom: "4px" }}>
               {rows.map((r, i) => (
@@ -173,9 +199,13 @@ export default function DashboardPage() {
     );
   };
 
+  /* ------------------------------------------------
+     RENDER PAGE
+  -------------------------------------------------- */
   return (
-    <div style={{ padding: "24px", fontFamily: "Arial", color: "#fff" }}>
+    <div style={{ padding: "24px", fontFamily: "Arial", color: "var(--text)" }}>
       <h1>ShiftCensus Dashboard</h1>
+
       <div style={{ opacity: 0.8, marginBottom: "16px" }}>
         Current Time: {currentTime.toLocaleString()}
       </div>
