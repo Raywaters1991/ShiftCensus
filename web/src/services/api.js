@@ -1,20 +1,52 @@
-import axios from "axios";
+// src/services/api.js
 
-const api = axios.create({
-  baseURL: "http://localhost:3001/api",
-});
+const API_BASE = "http://localhost:4000/api";   // DO NOT CHANGE
 
-// 🔹 Attach org_code to every request automatically
-api.interceptors.request.use((config) => {
-  // MUST match the key set in OrgPage.jsx: localStorage.setItem("orgCode", code)
-  const orgCode = localStorage.getItem("orgCode");
+function getToken() {
+  return sessionStorage.getItem("token") || "";
+}
 
-  if (orgCode) {
-    config.headers["x-org-code"] = orgCode;  // ← Backend looks for this
+function getOrg() {
+  return sessionStorage.getItem("org_code") || "";
+}
+
+async function request(method, path, body) {
+  const token = getToken();
+  const org = getOrg();
+
+  const res = await fetch(API_BASE + path, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      "x-org-code": org,
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  // If backend returned an error (4xx or 5xx)
+  if (!res.ok) {
+    let errorBody;
+    try {
+      errorBody = await res.json(); // try JSON
+    } catch {
+      errorBody = await res.text(); // fallback
+    }
+    console.error("SERVER ERROR:", errorBody);
+    throw new Error(
+      typeof errorBody === "string"
+        ? errorBody
+        : errorBody.error || "Request failed"
+    );
   }
 
-  return config;
-});
+  // SUCCESS — always JSON
+  return await res.json();
+}
 
-export default api;
-
+export default {
+  get:    (path)        => request("GET", path),
+  post:   (path, body)  => request("POST", path, body),
+  put:    (path, body)  => request("PUT", path, body),
+  delete: (path)        => request("DELETE", path),
+};

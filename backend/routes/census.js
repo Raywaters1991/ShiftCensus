@@ -1,119 +1,74 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const supabase = require('../supabase');
+const supabase = require("../supabase");
+const { requireAuth } = require("../middleware/auth");
 
-
-// Helper: Retrieve org code from headers
 function getOrgCode(req) {
-  return req.headers["x-org-code"] || null;
+  return req.user?.user_metadata?.org_code || null;
 }
 
-
-// =====================================================
-// GET census by organization
-// =====================================================
-router.get('/', async (req, res) => {
-  const org_code = getOrgCode(req);
-
-  if (!org_code) {
-    return res.status(400).json({ error: "Missing org_code" });
-  }
+router.get("/", requireAuth, async (req, res) => {
+  const org = getOrgCode(req);
+  if (!org) return res.status(400).json({ error: "Missing org_code" });
 
   const { data, error } = await supabase
-    .from('census')
-    .select('*')
-    .eq('org_code', org_code)
-    .order('id');
+    .from("census")
+    .select("*")
+    .eq("org_code", org)
+    .order("id");
 
-  if (error) return res.status(400).json(error);
-
+  if (error) return res.status(400).json({ error: error.message });
   res.json(data);
 });
 
+router.post("/", requireAuth, async (req, res) => {
+  const org = getOrgCode(req);
+  if (!org) return res.status(400).json({ error: "Missing org_code" });
 
-// =====================================================
-// CREATE census row
-// =====================================================
-router.post('/', async (req, res) => {
-  const org_code = getOrgCode(req);
   const { room, status, admitDate, expectedDischarge } = req.body;
 
-  if (!org_code) {
-    return res.status(400).json({ error: "Missing org_code" });
-  }
-
-  if (!room || !status) {
-    return res.status(400).json({ error: "Missing required fields" });
-  }
-
   const { data, error } = await supabase
-    .from('census')
+    .from("census")
     .insert([
       {
         room,
         status,
         admit_date: admitDate,
         expected_discharge: expectedDischarge,
-        org_code
-      }
+        org_code: org,
+      },
     ])
     .select();
 
-  if (error) return res.status(400).json(error);
-
+  if (error) return res.status(400).json({ error: error.message });
   res.json(data[0]);
 });
 
-
-// =====================================================
-// UPDATE census row
-// =====================================================
-router.put('/:id', async (req, res) => {
-  const org_code = getOrgCode(req);
-  const { room, status, admitDate, expectedDischarge } = req.body;
-
-  if (!org_code) {
-    return res.status(400).json({ error: "Missing org_code" });
-  }
+router.put("/:id", requireAuth, async (req, res) => {
+  const org = getOrgCode(req);
 
   const { data, error } = await supabase
-    .from('census')
-    .update({
-      room,
-      status,
-      admit_date: admitDate,
-      expected_discharge: expectedDischarge
-    })
-    .eq('id', req.params.id)
-    .eq('org_code', org_code) // Prevent editing another org’s data
+    .from("census")
+    .update(req.body)
+    .eq("id", req.params.id)
+    .eq("org_code", org)
     .select();
 
-  if (error) return res.status(400).json(error);
-
+  if (error) return res.status(400).json({ error: error.message });
   res.json(data[0]);
 });
 
-
-// =====================================================
-// DELETE census row
-// =====================================================
-router.delete('/:id', async (req, res) => {
-  const org_code = getOrgCode(req);
-
-  if (!org_code) {
-    return res.status(400).json({ error: "Missing org_code" });
-  }
+router.delete("/:id", requireAuth, async (req, res) => {
+  const org = getOrgCode(req);
 
   const { error } = await supabase
-    .from('census')
+    .from("census")
     .delete()
-    .eq('id', req.params.id)
-    .eq('org_code', org_code);
+    .eq("id", req.params.id)
+    .eq("org_code", org);
 
-  if (error) return res.status(400).json(error);
-
+  if (error) return res.status(400).json({ error: error.message });
   res.json({ message: "Census row deleted" });
 });
-
 
 module.exports = router;

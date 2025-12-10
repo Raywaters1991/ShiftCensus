@@ -1,109 +1,151 @@
+// src/pages/DashboardPage.jsx
 import { useEffect, useState } from "react";
 import api from "../services/api";
+import { useUser } from "../contexts/UserContext";
 
-// Block styling
-const shiftBlocks = [
-  { key: "Day", label: "Day Shift", color: "#FFEB3B" },
-  { key: "Evening", label: "Evening Shift", color: "#42A5F5" },
-  { key: "Night", label: "Night Shift", color: "#9575CD" },
+const SHIFT_BLOCKS = [
+  { key: "Day", label: "Day Shift" },
+  { key: "Evening", label: "Evening Shift" },
+  { key: "Night", label: "Night Shift" },
 ];
 
+/* -----------------------------------------------------------
+   UNIVERSAL TIMESTAMP PARSER — FIXES "INVALID DATE"
+------------------------------------------------------------ */
+function parseTS(value) {
+  if (!value) return null;
+
+  let iso = value;
+
+  // If backend sends "YYYY-MM-DD HH:MM:SS+00", fix it
+  if (typeof iso === "string" && iso.includes(" ") && !iso.includes("T")) {
+    iso = iso.replace(" ", "T");
+  }
+
+  // Convert to Date()
+  const d = new Date(iso);
+
+  // Prevent invalid date crashes
+  return isNaN(d.getTime()) ? null : d;
+}
+
 export default function DashboardPage() {
+  const { orgLogo } = useUser();
+
   const [shifts, setShifts] = useState([]);
   const [staff, setStaff] = useState([]);
   const [census, setCensus] = useState([]);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [loading, setLoading] = useState(true);
 
-  /* ------------------------------------------------
-     LOAD DATA + CLOCK TICK
-  -------------------------------------------------- */
+  /* -----------------------------------------------------------
+     LOAD ALL DASHBOARD DATA
+  ------------------------------------------------------------ */
   useEffect(() => {
     loadData();
-    const dataInterval = setInterval(loadData, 5000);
+
+    const refreshInterval = setInterval(loadData, 5000);
     const clockInterval = setInterval(() => setCurrentTime(new Date()), 1000);
+
     return () => {
-      clearInterval(dataInterval);
+      clearInterval(refreshInterval);
       clearInterval(clockInterval);
     };
   }, []);
 
-  const loadData = async () => {
-    const [shiftRes, staffRes, censusRes] = await Promise.all([
-      api.get("/shifts"),
-      api.get("/staff"),
-      api.get("/census"),
-    ]);
+  async function loadData() {
+    try {
+      const [shiftRes, staffRes, censusRes] = await Promise.all([
+        api.get("/shifts"),
+        api.get("/staff"),
+        api.get("/census"),
+      ]);
 
-    setShifts(shiftRes.data);
-    setStaff(staffRes.data);
-    setCensus(censusRes.data);
-  };
+      console.log("SHIFT API →", shiftRes);
+      console.log("STAFF API →", staffRes);
+      console.log("CENSUS API →", censusRes);
 
-  /* ------------------------------------------------
-     SHIFT CLASSIFICATION (fixed!)
-  -------------------------------------------------- */
-  const getShiftType = (start, role) => {
-    const hour = new Date(start).getHours();
+      // FIX: Normalize timestamps on load
+      const normalizedShifts = (shiftRes || []).map((s) => ({
+        ...s,
+        start_time: parseTS(s.start_time),
+        end_time: parseTS(s.end_time),
+      }));
 
-    // Nurses follow strict 12-hour blocks:
-    // Day = 06–18, Night = 18–06
-    if (role === "RN" || role === "LPN") {
-      if (hour >= 6 && hour < 18) return "Day";
-      return "Night";
+      setShifts(normalizedShifts);
+      setStaff(Array.isArray(staffRes) ? staffRes : []);
+      setCensus(Array.isArray(censusRes) ? censusRes : []);
+    } catch (err) {
+      console.error("Dashboard load error:", err);
     }
 
-    // CNA 8-hour shifts
+    setLoading(false);
+  }
+
+  /* -----------------------------------------------------------
+     SHIFT TYPE LOGIC
+  ------------------------------------------------------------ */
+  const getShiftType = (startTime, role) => {
+    if (!startTime) return "Unknown";
+
+    const hour = startTime.getHours();
+
+    if (role === "RN" || role === "LPN") {
+      return hour >= 6 && hour < 18 ? "Day" : "Night";
+    }
+
     if (hour >= 6 && hour < 14) return "Day";
     if (hour >= 14 && hour < 22) return "Evening";
     return "Night";
   };
 
   const calcHours = (start, end) => {
-    const s = new Date(start);
-    const e = new Date(end);
-    return Math.max((e - s) / 3600000, 0);
+    if (!start || !end) return 0;
+    return Math.max((end - start) / 3600000, 0);
   };
 
-  /* ------------------------------------------------
-     TODAY & CURRENT SHIFT (fixed to nurse logic)
-  -------------------------------------------------- */
-  const todayMidnight = new Date();
-  todayMidnight.setHours(0, 0, 0, 0);
+  const todayMidnight = (() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  })();
 
   const currentShiftKey = (() => {
     const h = currentTime.getHours();
-    // RN/LPN logic for highlighting blocks
-    if (h >= 6 && h < 18) return "Day";
+    if (h >= 6 && h < 14) return "Day";
+    if (h >= 14 && h < 22) return "Evening";
     return "Night";
   })();
 
-  /* ------------------------------------------------
-     RENDER SINGLE SHIFT BLOCK
-  -------------------------------------------------- */
-  const renderShiftCard = (block) => {
-    const { key, label, color } = block;
+  /* -----------------------------------------------------------
+     RENDER SINGLE SHIFT CARD
+  ------------------------------------------------------------ */
+  const renderShiftCard = ({ key, label }) => {
+    if (!Array.isArray(shifts) || !Array.isArray(staff)) return null;
 
-    // Filter today's shifts only
-    const todayShiftList = shifts.filter((shift) => {
+    const todayShifts = shifts.filter((shift) => {
+      if (!shift.start_time) return false;
+
       const d = new Date(shift.start_time);
       d.setHours(0, 0, 0, 0);
-      return d.getTime() === todayMidnight.getTime();
+
+      return d.getTime() === todayMidnight;
     });
 
-    // Correct role-aware shift filtering
-    const shiftList = todayShiftList.filter((shift) => {
+    const blockShifts = todayShifts.filter((shift) => {
       const worker = staff.find((s) => s.id === shift.staff_id);
       if (!worker) return false;
       return getShiftType(shift.start_time, worker.role) === key;
     });
 
-    // Licensed + CNA tracking
+    /* -------- LICENSED STAFF GROUPING -------- */
     const licensed = {
       "A Wing": { RN: 0, LPN: 0, hoursRN: 0, hoursLPN: 0 },
       "B Wing": { RN: 0, LPN: 0, hoursRN: 0, hoursLPN: 0 },
       Middle: { RN: 0, LPN: 0, hoursRN: 0, hoursLPN: 0 },
     };
 
+    /* -------- CNA GROUPS -------- */
     const cnaGroups = {
       1: { count: 0, hours: 0 },
       2: { count: 0, hours: 0 },
@@ -112,7 +154,7 @@ export default function DashboardPage() {
       5: { count: 0, hours: 0 },
     };
 
-    shiftList.forEach((shift) => {
+    blockShifts.forEach((shift) => {
       const worker = staff.find((s) => s.id === shift.staff_id);
       if (!worker) return;
 
@@ -120,21 +162,23 @@ export default function DashboardPage() {
 
       if (worker.role === "RN" || worker.role === "LPN") {
         if (licensed[shift.unit]) {
+          const unit = licensed[shift.unit];
+
           if (worker.role === "RN") {
-            licensed[shift.unit].RN += 1;
-            licensed[shift.unit].hoursRN += hours;
+            unit.RN++;
+            unit.hoursRN += hours;
           } else {
-            licensed[shift.unit].LPN += 1;
-            licensed[shift.unit].hoursLPN += hours;
+            unit.LPN++;
+            unit.hoursLPN += hours;
           }
         }
       }
 
-      if (worker.role === "CNA" && shift.assignment_number) {
-        const g = cnaGroups[shift.assignment_number];
-        if (g) {
-          g.count += 1;
-          g.hours += hours;
+      if (worker.role === "CNA") {
+        const grp = cnaGroups[shift.assignment_number];
+        if (grp) {
+          grp.count++;
+          grp.hours += hours;
         }
       }
     });
@@ -142,82 +186,104 @@ export default function DashboardPage() {
     return (
       <div
         key={key}
+        className={`glass-card ${currentShiftKey === key ? "active" : ""}`}
         style={{
-          background: color,
-          padding: "24px",
-          borderRadius: "18px",
-          color: "#000",
-          boxShadow:
-            currentShiftKey === key
-              ? "0 0 32px rgba(255,255,255,0.9)"
-              : "0 10px 18px rgba(0,0,0,0.4)",
-          border:
-            currentShiftKey === key
-              ? "4px solid #fff"
-              : "2px solid rgba(0,0,0,0.3)",
-          transform: currentShiftKey === key ? "translateY(-4px)" : "",
-          transition: "0.3s",
+          padding: "28px",
+          minHeight: "240px",
+          borderRadius: "10px",
+          background: "rgba(255,255,255,0.08)",
+          backdropFilter: "blur(6px)",
         }}
       >
-        <h2 style={{ fontWeight: "800", marginTop: 0 }}>{label}</h2>
+        <h2 style={{ marginTop: 0 }}>{label}</h2>
 
-        {/* Licensed nurses */}
-        <h3 style={{ marginBottom: "6px", fontWeight: "700" }}>
-          Licensed Staff
-        </h3>
+        <h3 style={{ marginBottom: "8px" }}>Licensed Staff</h3>
+        {Object.entries(licensed).map(([unit, data]) => {
+          const lines = [];
+          if (data.RN > 0)
+            lines.push(`RN ${unit}: ${data.RN} | ${data.hoursRN.toFixed(1)}h`);
+          if (data.LPN > 0)
+            lines.push(`LPN ${unit}: ${data.LPN} | ${data.hoursLPN.toFixed(1)}h`);
 
-        {Object.entries(licensed).map(([unit, d]) => {
-          const rows = [];
-          if (d.RN > 0) rows.push(`RN ${unit}: ${d.RN} | Hrs: ${d.hoursRN.toFixed(1)}`);
-          if (d.LPN > 0) rows.push(`LPN ${unit}: ${d.LPN} | Hrs: ${d.hoursLPN.toFixed(1)}`);
-
-          return rows.length ? (
-            <div key={unit} style={{ marginBottom: "4px" }}>
-              {rows.map((r, i) => (
-                <div key={i}>{r}</div>
-              ))}
-            </div>
-          ) : null;
+          return (
+            lines.length > 0 && (
+              <div key={unit} style={{ marginBottom: "4px" }}>
+                {lines.map((l, i) => (
+                  <div key={i}>{l}</div>
+                ))}
+              </div>
+            )
+          );
         })}
 
-        {/* CNA Groups */}
-        <h3 style={{ marginTop: "14px", fontWeight: "700" }}>CNAs</h3>
+        <h3 style={{ marginTop: "16px" }}>CNAs</h3>
         {Object.entries(cnaGroups)
           .filter(([_, g]) => g.count > 0)
           .map(([num, g]) => (
             <div key={num}>
-              CNA {num}: {g.count} | Hrs: {g.hours.toFixed(1)}
+              CNA {num}: {g.count} | {g.hours.toFixed(1)}h
             </div>
           ))}
 
-        {shiftList.length === 0 && (
-          <div style={{ fontStyle: "italic", marginTop: "10px" }}>
-            No staff scheduled for this shift today.
+        {blockShifts.length === 0 && (
+          <div style={{ marginTop: "10px", opacity: 0.8 }}>
+            No staff scheduled today.
           </div>
         )}
       </div>
     );
   };
 
-  /* ------------------------------------------------
-     RENDER PAGE
-  -------------------------------------------------- */
-  return (
-    <div style={{ padding: "24px", fontFamily: "Arial", color: "var(--text)" }}>
-      <h1>ShiftCensus Dashboard</h1>
+  /* -----------------------------------------------------------
+     PAGE RENDER
+  ------------------------------------------------------------ */
+  if (loading) {
+    return (
+      <div style={{ padding: 40, color: "white" }}>
+        Loading Dashboard...
+      </div>
+    );
+  }
 
-      <div style={{ opacity: 0.8, marginBottom: "16px" }}>
+  return (
+    <div style={{ padding: "32px", color: "white" }}>
+      {/* ⭐ BIG CENTERED LOGO ⭐ */}
+      <div style={{ textAlign: "center", marginBottom: "24px" }}>
+        {orgLogo && (
+          <img
+            src={orgLogo}
+            alt="Facility Logo"
+            style={{
+              height: "160px",
+              maxWidth: "100%",
+              objectFit: "contain",
+            }}
+          />
+        )}
+      </div>
+
+      {/* CURRENT TIME */}
+      <div
+        style={{
+          opacity: 0.9,
+          marginBottom: "16px",
+          fontSize: "18px",
+          textAlign: "center",
+        }}
+      >
         Current Time: {currentTime.toLocaleString()}
       </div>
 
+      {/* SHIFT BLOCKS */}
       <div
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(3, 1fr)",
           gap: "24px",
+          marginTop: "24px",
         }}
       >
-        {shiftBlocks.map(renderShiftCard)}
+        {SHIFT_BLOCKS.map(renderShiftCard)}
       </div>
     </div>
   );

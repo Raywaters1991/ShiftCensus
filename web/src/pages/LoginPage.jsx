@@ -1,128 +1,97 @@
 import { useState } from "react";
-import api from "../services/api";
+import { useNavigate } from "react-router-dom";
+import supabase from "../services/supabaseClient";
+import { useUser } from "../contexts/UserContext.jsx";
 
-export default function LoginPage({ onLogin }) {
+export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const { refreshUser } = useUser();
+  const navigate = useNavigate();
 
   const handleLogin = async (e) => {
     e.preventDefault();
+    setLoading(true);
 
-    // For now, fake login until backend auth is built
-    if (!email || !password) {
-      setError("Please enter your email and password.");
+    // Step 1 — authenticate
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      alert(error.message);
+      setLoading(false);
       return;
     }
 
-    // TEMP login (replace later with Supabase auth)
-    if (onLogin) onLogin(email);
+    // Step 2 — save JWT token
+    const session = data.session;
+    const token = session?.access_token;
+    sessionStorage.setItem("token", token);
+
+    // Step 3 — get user metadata (role + org_code)
+    const { data: authUser } = await supabase.auth.getUser();
+
+    const role = authUser?.user?.user_metadata?.role || "";
+    const org_code = authUser?.user?.user_metadata?.org_code || "";
+
+    // Step 4 — save clean values
+    sessionStorage.setItem("role", role);
+    sessionStorage.setItem("org_code", org_code);
+
+    // Step 5 — update global state
+    await refreshUser();
+
+    // Step 6 — proceed
+    navigate("/");
+    setLoading(false);
   };
 
   return (
-    <div
-      style={{
-        height: "100vh",
-        width: "100%",
-        background: "#0d0d0d",
-        display: "flex",
-        justifyContent: "center",
-        alignItems: "center",
-        padding: "20px",
-      }}
-    >
-      <div
-        style={{
-          background: "#111",
-          borderRadius: "16px",
-          padding: "40px",
-          width: "100%",
-          maxWidth: "420px",
-          boxShadow: "0 0 25px rgba(0, 150, 255, 0.3)",
-          textAlign: "center",
-        }}
-      >
-        {/* LOGO */}
-        <img
-          src="/logo.png"
-          alt="ShiftCensus Logo"
-          style={{ width: "160px", marginBottom: "20px" }}
+    <div style={{ padding: 40, color: "white" }}>
+      <h2>Login</h2>
+      <form onSubmit={handleLogin}>
+        <input
+          placeholder="Email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          style={input}
         />
 
-        <h2 style={{ color: "white", marginBottom: "20px" }}>
-          ShiftCensus
-        </h2>
+        <input
+          placeholder="Password"
+          type="password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          style={input}
+        />
 
-        {error && (
-          <div
-            style={{
-              background: "#330000",
-              color: "red",
-              padding: "10px",
-              borderRadius: "8px",
-              marginBottom: "15px",
-            }}
-          >
-            {error}
-          </div>
-        )}
-
-        <form onSubmit={handleLogin} style={{ textAlign: "left" }}>
-          <label style={{ color: "#bbb" }}>Email</label>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            style={{
-              width: "100%",
-              padding: "12px",
-              margin: "8px 0 16px",
-              borderRadius: "8px",
-              border: "1px solid #333",
-              background: "#222",
-              color: "white",
-            }}
-          />
-
-          <label style={{ color: "#bbb" }}>Password</label>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            style={{
-              width: "100%",
-              padding: "12px",
-              margin: "8px 0 20px",
-              borderRadius: "8px",
-              border: "1px solid #333",
-              background: "#222",
-              color: "white",
-            }}
-          />
-
-          <button
-            type="submit"
-            style={{
-              width: "100%",
-              padding: "12px",
-              background: "#008cff",
-              color: "white",
-              border: "none",
-              borderRadius: "8px",
-              cursor: "pointer",
-              fontSize: "16px",
-              fontWeight: "bold",
-              transition: "0.2s",
-            }}
-          >
-            Log In
-          </button>
-        </form>
-
-        <div style={{ marginTop: "15px", color: "#777" }}>
-          Forgot your password?
-        </div>
-      </div>
+        <button type="submit" style={button}>
+          {loading ? "Logging in..." : "Login"}
+        </button>
+      </form>
     </div>
   );
 }
+
+const input = {
+  width: "100%",
+  padding: 10,
+  marginBottom: 20,
+  background: "#111",
+  color: "white",
+  border: "1px solid #444",
+};
+
+const button = {
+  width: "100%",
+  padding: 12,
+  background: "#007bff",
+  color: "white",
+  border: "none",
+  borderRadius: 6,
+  fontWeight: "bold",
+  cursor: "pointer",
+};

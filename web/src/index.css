@@ -3,26 +3,15 @@
 =========================================== */
 :root,
 [data-theme="dark"] {
-  --bg: #0c0c0c;
+  --bg: #0a0a0a;
   --bg2: #111;
   --bg3: #151515;
-
-  /* NEW: page + calendar backgrounds */
-  --page-bg: #000000;            /* page background in dark mode */
-  --calendar-cell-bg: #050505;   /* calendar tiles in dark mode */
 
   --text: #ffffff;
   --text-muted: #bbbbbb;
 
-  --surface: #0f0f0f;
-  --surface2: #1a1a1a;
-
-  --border: #333;
-  --border-light: #444;
-
-  --input-bg: #1e1e1e;
-  --input-text: #ffffff;
-  --input-border: #555;
+  --surface-glass: rgba(255, 255, 255, 0.08);
+  --surface-glass-border: rgba(255, 255, 255, 0.12);
 
   --nav-bg: #1a1a1a;
   --nav-text: #ffffff;
@@ -30,7 +19,7 @@
   --button-bg: #2d8cff;
   --button-text: #ffffff;
 
-  --modal-bg: #111;
+  --modal-bg: rgba(20,20,20,0.85);
   --modal-text: #ffffff;
 
   --calendar-bg-inmonth: #050d20;
@@ -38,38 +27,27 @@
 }
 
 /* ===========================================
-   LIGHT THEME — TRUE OPPOSITE + SOFT GRAYS
+   LIGHT THEME
 =========================================== */
 [data-theme="light"] {
-  --bg: #ffffff;
-  --bg2: #f7f7f7;
-  --bg3: #ececec;
+  --bg: #f0f0f3;
+  --bg2: #ffffff;
+  --bg3: #e5e5e5;
 
-  /* NEW: page + calendar backgrounds */
-  --page-bg: #f3f4f6;            /* light gray page background */
-  --calendar-cell-bg: #f9fafb;   /* very light gray tiles */
+  --text: #222;
+  --text-muted: #555;
 
-  --text: #111111;
-  --text-muted: #666666;
-
-  --surface: #ffffff;
-  --surface2: #f1f1f1;
-
-  --border: #cccccc;
-  --border-light: #dddddd;
-
-  --input-bg: #ffffff;
-  --input-text: #000000;
-  --input-border: #777;
+  --surface-glass: rgba(255, 255, 255, 0.55);
+  --surface-glass-border: rgba(200, 200, 200, 0.45);
 
   --nav-bg: #ffffff;
-  --nav-text: #111111;
+  --nav-text: #111;
 
-  --button-bg: #005bd1;
+  --button-bg: #0066ff;
   --button-text: #ffffff;
 
-  --modal-bg: #ffffff;
-  --modal-text: #111111;
+  --modal-bg: rgba(255,255,255,0.80);
+  --modal-text: #111;
 
   --calendar-bg-inmonth: #e9eefc;
   --calendar-bg-out: #f4f6ff;
@@ -86,34 +64,44 @@ body {
   font-family: Arial, sans-serif;
 }
 
-a {
-  color: var(--nav-text);
-}
-
-h1, h2, h3, h4, h5 {
-  color: var(--text);
-}
-
 /* NAVBAR */
 .navbar {
   background: var(--nav-bg);
   color: var(--nav-text);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid rgba(255,255,255,0.1);
 }
 
-/* INPUTS / SELECTS */
-input,
-select,
-textarea {
-  background: var(--input-bg);
-  color: var(--input-text);
-  border: 1px solid var(--input-border);
-  padding: 6px;
-  border-radius: 6px;
+/* GLASS PANELS (Dashboard Cards) */
+.glass-card {
+  background: var(--surface-glass);
+  backdrop-filter: blur(20px) brightness(1.15);
+  -webkit-backdrop-filter: blur(20px) brightness(1.15);
+
+  padding: 24px;
+  border-radius: 22px;
+
+  border: 1px solid var(--surface-glass-border);
+
+  box-shadow:
+    0 8px 30px rgba(0,0,0,0.25),
+    inset 0 1px 0 rgba(255,255,255,0.12);
+
+  color: var(--text);
+  transition: 0.25s ease;
 }
 
-input::placeholder {
-  color: var(--text-muted);
+.glass-card.active {
+  box-shadow:
+    0 0 25px rgba(0,150,255,0.85),
+    0 8px 40px rgba(0,0,0,0.4),
+    inset 0 1px 0 rgba(255,255,255,0.25);
+  border: 1px solid rgba(0,150,255,0.65);
+  transform: translateY(-4px);
+}
+
+/* TEXT */
+h1, h2, h3 {
+  color: var(--text);
 }
 
 /* BUTTONS */
@@ -121,82 +109,17 @@ button {
   background: var(--button-bg);
   color: var(--button-text);
   border: none;
+  border-radius: 8px;
   padding: 8px 14px;
-  border-radius: 6px;
   cursor: pointer;
 }
 
-/* PANELS */
-.panel,
-.card,
-.section,
-.box {
-  background: var(--surface);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 12px;
-}
-
-/* TABLES */
-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-th, td {
-  border-bottom: 1px solid var(--border-light);
-  padding: 6px;
-  background: var(--surface);
-  color: var(--text);
-}
-
-/* CALENDAR */
-.calendar-cell {
-  background: var(--calendar-cell-bg); /* was var(--surface) */
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 8px;
-}
-
-.calendar-inmonth {
-  background: var(--calendar-bg-inmonth) !important;
-}
-
-.calendar-out {
-  background: var(--calendar-bg-out) !important;
-}
-
-.calendar-no-shifts {
-  color: var(--text-muted);
-}
-
-/* TRANSITIONS */
-* {
-  transition: background 0.25s ease, color 0.25s ease, border-color 0.25s ease;
-}
-
-/* ===========================================
-   MODAL SYSTEM — FIXED FOR DARK & LIGHT MODES
-=========================================== */
-
-/* Full-screen backdrop */
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.7);   /* Always dark */
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 1000;
-}
-
-/* Modal window */
+/* MODAL */
 .modal {
-  background: var(--modal-bg);   /* now solid in both modes */
+  background: var(--modal-bg);
   color: var(--modal-text);
   padding: 20px;
-  width: 380px;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  box-shadow: 0 0 20px rgba(0,0,0,0.3);
+  border-radius: 16px;
+  border: 1px solid var(--surface-glass-border);
+  backdrop-filter: blur(12px);
 }

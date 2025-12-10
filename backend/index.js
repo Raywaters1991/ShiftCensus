@@ -1,26 +1,42 @@
-const express = require('express');
-const cors = require('cors');
-require('dotenv').config();
+// backend/index.js
 
+require("dotenv").config();
+const express = require("express");
 const app = express();
-app.use(cors());
+const cors = require("cors");
+
+// JSON parser
 app.use(express.json());
-const staffRoutes = require('./routes/staff');
-app.use('/api/staff', staffRoutes);
-const shiftRoutes = require('./routes/shifts');
-app.use('/api/shifts', shiftRoutes);
-const censusRoutes = require('./routes/census');
-app.use('/api/census', censusRoutes);
+
+// GLOBAL CORS
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-org-code"],
+  })
+);
+
+// ROUTES
+app.use("/api/units", require("./routes/units"));
+app.use("/api/admin", require("./routes/admin"));
+app.use("/api/census", require("./routes/census"));
+app.use("/api/shifts", require("./routes/shifts"));
+app.use("/api/staff", require("./routes/staff"));
+app.use("/api/organizations", require("./routes/organizations"));
+app.use("/api/assignments", require("./routes/assignments"));
+app.use("/api/templates", require("./routes/templates"));
 
 
 
+// ⭐ ADD THIS LINE ⭐
+app.use("/api/shift-settings", require("./routes/shiftSettings"));
 
-// Test route
-app.get('/', (req, res) => {
-  res.json({ message: "ShiftCensus Backend Running" });
+// DEFAULT
+app.get("/", (req, res) => {
+  res.send("ShiftCensus backend running.");
 });
 
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`ShiftCensus API running on port ${PORT}`);
-});
+// START SERVER
+const PORT = process.env.PORT || 4000;
+app.listen(PORT, () => console.log(`Backend running on port ${PORT}`));

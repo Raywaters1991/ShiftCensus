@@ -1,87 +1,112 @@
-import { useState } from "react";
-import { BrowserRouter, Routes, Route, Link, useLocation } from "react-router-dom";
+// src/App.jsx
+import { useEffect } from "react";
+import { Routes, Route, useNavigate } from "react-router-dom";
+import { useUser } from "./contexts/UserContext.jsx";
+import { useTheme } from "./contexts/ThemeContext.jsx";
+import supabase from "./services/supabaseClient";
 
-import OrgPage from "./pages/OrgPage";
-import LoginPage from "./pages/LoginPage";
-import DashboardPage from "./pages/DashboardPage";
-import StaffPage from "./pages/StaffPage";
-import ShiftsPage from "./pages/ShiftsPage";
-import CensusPage from "./pages/CensusPage";
-import ThemeToggle from "./components/ThemeToggle";
+import LoginPage from "./pages/LoginPage.jsx";
+import DashboardPage from "./pages/DashboardPage.jsx";
+import ShiftsPage from "./pages/ShiftsPage.jsx";
+import CensusPage from "./pages/CensusPage.jsx";
+import AdminPage from "./pages/AdminPage.jsx";
+import SuperAdminPage from "./pages/SuperAdminPage.jsx";
+import ThemeToggle from "./components/ThemeToggle.jsx";
+
+import "./index.css";
 
 function NavLinkItem({ to, label }) {
-  const location = useLocation();
-  const active = location.pathname === to;
-
   return (
-    <Link
-      to={to}
+    <a
+      href={to}
       style={{
-        padding: "10px 20px",
-        color: active ? "var(--button-bg)" : "var(--nav-text)",
+        padding: "8px 16px",
+        color: "var(--nav-text)",
         textDecoration: "none",
-        fontSize: "18px",
-        borderBottom: active ? `3px solid var(--button-bg)` : "3px solid transparent",
-        fontWeight: active ? "bold" : "normal",
+        fontWeight: 600,
       }}
     >
       {label}
-    </Link>
+    </a>
   );
 }
 
 export default function App() {
-  const [orgCode, setOrgCode] = useState(null);
-  const [user, setUser] = useState(null);
+  const { user, profile, loading } = useUser();
+  const navigate = useNavigate();
+  const { theme } = useTheme();
 
-  if (!orgCode) return <OrgPage onOrgSelect={setOrgCode} />;
-  if (!user) return <LoginPage onLogin={() => setUser(true)} />;
+  const role = profile?.role || null;
+  const orgCode = profile?.org_code || null;
+
+  useEffect(() => {
+    if (!loading && !user) navigate("/login");
+  }, [loading, user, navigate]);
+
+  const isSuperAdmin = role === "superadmin";
+  const canSeeShifts = ["superadmin", "admin", "scheduler", "don"].includes(role);
+  const canSeeCensus = ["superadmin", "admin", "admissions", "don", "ed"].includes(role);
+  const canSeeAdmin = ["superadmin", "admin", "don", "ed"].includes(role);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    sessionStorage.clear();
+    window.location.href = "/login";
+  };
+
+  if (loading) return <div style={{ padding: 40 }}>Loading...</div>;
 
   return (
-    <BrowserRouter>
-      <div
-        className="navbar"
-        style={{
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-          gap: "20px",
-          padding: "15px 0",
-          position: "relative",
-        }}
-      >
-        <NavLinkItem to="/" label={`Dashboard (${orgCode})`} />
-        <NavLinkItem to="/staff" label="Staff" />
-        <NavLinkItem to="/shifts" label="Shifts" />
-        <NavLinkItem to="/census" label="Census" />
-
-        <button
-          onClick={() => setUser(null)}
+    <div>
+      {user && (
+        <div
+          className="navbar"
           style={{
-            marginLeft: "20px",
-            background: "#b33",
-            color: "white",
-            border: "none",
-            padding: "10px 20px",
-            borderRadius: "6px",
-            cursor: "pointer",
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+            gap: "20px",
+            padding: "15px",
+            borderBottom: "1px solid var(--border)",
+            position: "relative",
           }}
         >
-          Logout
-        </button>
+          <NavLinkItem to="/" label={`Dashboard (${orgCode || "No Org"})`} />
+          {canSeeShifts && <NavLinkItem to="/shifts" label="Shifts" />}
+          {canSeeCensus && <NavLinkItem to="/census" label="Census" />}
+          {canSeeAdmin && <NavLinkItem to="/admin" label="Admin" />}
+          {isSuperAdmin && <NavLinkItem to="/superadmin" label="Super Admin" />}
 
-        {/* Theme toggle positioned cleanly at top-right */}
-        <div style={{ position: "absolute", right: "20px" }}>
-          <ThemeToggle />
+          <button
+            onClick={handleLogout}
+            style={{
+              marginLeft: "20px",
+              background: "#b33",
+              color: "white",
+              border: "none",
+              padding: "10px 20px",
+              borderRadius: "6px",
+              cursor: "pointer",
+              fontWeight: "bold",
+            }}
+          >
+            Logout
+          </button>
+
+          <div style={{ position: "absolute", right: "20px" }}>
+            <ThemeToggle />
+          </div>
         </div>
-      </div>
+      )}
 
       <Routes>
-        <Route path="/" element={<DashboardPage org={orgCode} />} />
-        <Route path="/staff" element={<StaffPage org={orgCode} />} />
-        <Route path="/shifts" element={<ShiftsPage org={orgCode} />} />
-        <Route path="/census" element={<CensusPage org={orgCode} />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/" element={<DashboardPage />} />
+        {canSeeShifts && <Route path="/shifts" element={<ShiftsPage />} />}
+        {canSeeCensus && <Route path="/census" element={<CensusPage />} />}
+        {canSeeAdmin && <Route path="/admin" element={<AdminPage />} />}
+        {isSuperAdmin && <Route path="/superadmin" element={<SuperAdminPage />} />}
       </Routes>
-    </BrowserRouter>
+    </div>
   );
 }
