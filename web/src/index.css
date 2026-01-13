@@ -13,17 +13,24 @@
   --surface-glass: rgba(255, 255, 255, 0.08);
   --surface-glass-border: rgba(255, 255, 255, 0.12);
 
+  /* ✅ shared border token used by ThemeToggle + overlays */
+  --border: rgba(255, 255, 255, 0.14);
+
   --nav-bg: #1a1a1a;
   --nav-text: #ffffff;
 
   --button-bg: #2d8cff;
   --button-text: #ffffff;
 
-  --modal-bg: rgba(20,20,20,0.85);
+  --modal-bg: rgba(20, 20, 20, 0.85);
   --modal-text: #ffffff;
 
   --calendar-bg-inmonth: #050d20;
   --calendar-bg-out: #04060b;
+
+  /* ✅ ThemeToggle tokens */
+  --toggle-bg: rgba(255, 255, 255, 0.06);
+  --toggle-text: rgba(255, 255, 255, 0.92);
 }
 
 /* ===========================================
@@ -40,17 +47,24 @@
   --surface-glass: rgba(255, 255, 255, 0.55);
   --surface-glass-border: rgba(200, 200, 200, 0.45);
 
+  /* ✅ shared border token used by ThemeToggle + overlays */
+  --border: rgba(0, 0, 0, 0.12);
+
   --nav-bg: #ffffff;
   --nav-text: #111;
 
   --button-bg: #0066ff;
   --button-text: #ffffff;
 
-  --modal-bg: rgba(255,255,255,0.80);
+  --modal-bg: rgba(255, 255, 255, 0.80);
   --modal-text: #111;
 
   --calendar-bg-inmonth: #e9eefc;
   --calendar-bg-out: #f4f6ff;
+
+  /* ✅ ThemeToggle tokens */
+  --toggle-bg: rgba(0, 0, 0, 0.05);
+  --toggle-text: rgba(0, 0, 0, 0.88);
 }
 
 /* ===========================================
@@ -68,7 +82,8 @@ body {
 .navbar {
   background: var(--nav-bg);
   color: var(--nav-text);
-  border-bottom: 1px solid rgba(255,255,255,0.1);
+  /* ✅ was hardcoded white-ish; now theme-aware */
+  border-bottom: 1px solid var(--border);
 }
 
 /* GLASS PANELS (Dashboard Cards) */

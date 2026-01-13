@@ -1,6 +1,6 @@
 // src/pages/ShiftsPage.jsx
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import api from "../services/api";
 import { useUser } from "../contexts/UserContext";
 
@@ -23,9 +23,7 @@ function safeParseDate(dt) {
 }
 
 export default function ShiftsPage() {
-  const { profile } = useUser();
-  const orgLogo = profile?.org_logo || null;
-  const orgName = profile?.org_name || null;
+  const { orgLogo, orgName, orgCode, orgId } = useUser();
 
   // THEME ---------------------------------------------------------
   const [theme, setTheme] = useState(() => {
@@ -56,6 +54,10 @@ export default function ShiftsPage() {
   const [assignments, setAssignments] = useState([]);
   // Organization data (currently unused but kept for future)
   const [organization, setOrganization] = useState(null);
+
+  // UI state for loading/error
+  const [orgNotReady, setOrgNotReady] = useState(false);
+  const [lastLoadError, setLastLoadError] = useState("");
 
   // Filters
   const [searchTerm, setSearchTerm] = useState("");
@@ -101,7 +103,7 @@ export default function ShiftsPage() {
   const [activeTemplateId, setActiveTemplateId] = useState(null);
   const [templateName, setTemplateName] = useState("");
 
-  // Template grid state: { [staffId]: { staffId, unit, assignmentNumber, days:[{active,shiftType} x7] } }
+  // Template grid state
   const [templateGrid, setTemplateGrid] = useState({});
 
   // Template filters
@@ -121,15 +123,20 @@ export default function ShiftsPage() {
 
   const availableRoles = ["RN", "LPN", "CNA"];
 
-  // LOAD DATA -----------------------------------------------------
-  useEffect(() => {
-    loadPage();
-    const interval = setInterval(loadPage, 5000);
-    return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // ----------------------------------------------------------------
+  // LOAD DATA (FIXED)
+  // - Wait until org context exists (orgCode or orgId)
+  // - Prevent overlapping polling requests
+  // - Clean interval on org change/unmount
+  // ----------------------------------------------------------------
+  const loadingRef = useRef(false);
+  const intervalRef = useRef(null);
 
   async function loadPage() {
+    if (loadingRef.current) return; // prevent overlap
+    loadingRef.current = true;
+    setLastLoadError("");
+
     let shiftRes = [];
     let staffRes = [];
     let unitsRes = [];
@@ -149,14 +156,54 @@ export default function ShiftsPage() {
       assignRes = Array.isArray(results[3]) ? results[3] : [];
     } catch (err) {
       console.error("LOAD ERROR:", err);
-      // don't clear state on error
+      // keep existing state; just surface error
+      setLastLoadError(err?.message || "Load failed");
+    } finally {
+      loadingRef.current = false;
     }
 
-    setShifts(shiftRes || []);
-    setStaff(staffRes || []);
-    setUnits(unitsRes || []);
-    setAssignments(assignRes || []);
+    // Only set if we actually got arrays (avoid wiping on errors)
+    if (Array.isArray(shiftRes)) setShifts(shiftRes);
+    if (Array.isArray(staffRes)) setStaff(staffRes);
+    if (Array.isArray(unitsRes)) setUnits(unitsRes);
+    if (Array.isArray(assignRes)) setAssignments(assignRes);
   }
+
+  useEffect(() => {
+    // Clear any prior polling when org changes
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+
+    // If org is not ready yet, do nothing (prevents 400 spam)
+    const hasOrgContext =
+      (orgCode && String(orgCode).trim().length > 0) ||
+      (orgId && String(orgId).trim().length > 0);
+
+    if (!hasOrgContext) {
+      setOrgNotReady(true);
+      return;
+    }
+
+    setOrgNotReady(false);
+
+    // Initial load
+    loadPage();
+
+    // Poll
+    intervalRef.current = setInterval(() => {
+      loadPage();
+    }, 5000);
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+    // orgCode is enough; orgId included for safety if you later switch to id-only
+  }, [orgCode, orgId]);
 
   // HELPERS -------------------------------------------------------
   function sameDay(d1, d2) {
@@ -185,7 +232,6 @@ export default function ShiftsPage() {
     let hour = null;
 
     if (shift.start_local) {
-      // "22:00:00" style
       const [h] = String(shift.start_local).split(":");
       const parsed = parseInt(h, 10);
       hour = Number.isNaN(parsed) ? null : parsed;
@@ -212,8 +258,6 @@ export default function ShiftsPage() {
   // ------------------------------
   // OVERTIME CALCULATIONS
   // ------------------------------
-
-  // 1. Calculate hours for a shift
   function calculateShiftHours(shift) {
     if (!shift.start_local || !shift.end_local) return 0;
 
@@ -223,26 +267,23 @@ export default function ShiftsPage() {
     if (Number.isNaN(sHour) || Number.isNaN(eHour)) return 0;
 
     let duration = eHour - sHour;
-    if (duration < 0) duration += 24; // Night shift wrap-around
+    if (duration < 0) duration += 24;
 
     return duration;
   }
 
-  // 2. Get Sunday-week key for shift grouping
   function getWeekStart(dateStr) {
     if (!dateStr) return "";
     const d = new Date(dateStr + "T00:00:00");
     if (isNaN(d.getTime())) return "";
-    const day = d.getDay(); // 0 = Sun
+    const day = d.getDay();
     const sunday = new Date(d);
     sunday.setDate(d.getDate() - day);
     return sunday.toISOString().slice(0, 10);
   }
 
-  // 3. Compute total weekly hours per staff member
   function computeWeeklyHours(shiftsInput) {
     const totals = {};
-
     (shiftsInput || []).forEach((shift) => {
       if (!shift || !shift.shift_date) return;
 
@@ -250,21 +291,14 @@ export default function ShiftsPage() {
       if (!weekKey) return;
 
       const staffKey = `${shift.staff_id}-${weekKey}`;
-
       if (!totals[staffKey]) totals[staffKey] = 0;
       totals[staffKey] += calculateShiftHours(shift);
     });
-
     return totals;
   }
 
-  // Memoized weekly hours (key: `${staff_id}-${weekStartYmd}`)
-  const weeklyHours = useMemo(
-    () => computeWeeklyHours(shifts),
-    [shifts]
-  );
+  const weeklyHours = useMemo(() => computeWeeklyHours(shifts), [shifts]);
 
-  // staffById map
   const staffById = useMemo(() => {
     const map = {};
     (staff || []).forEach((s) => {
@@ -304,11 +338,8 @@ export default function ShiftsPage() {
       }
 
       if (filterRole !== "All" && worker.role !== filterRole) return false;
-
       if (filterUnit !== "All" && shift.unit !== filterUnit) return false;
-
-      if (filterShiftType !== "All" && shiftType !== filterShiftType)
-        return false;
+      if (filterShiftType !== "All" && shiftType !== filterShiftType) return false;
 
       return true;
     });
@@ -349,17 +380,12 @@ export default function ShiftsPage() {
     const month = currentMonth.getMonth();
 
     const firstDayOfMonth = new Date(year, month, 1);
-    const firstWeekday = firstDayOfMonth.getDay(); // 0 = Sun
+    const firstWeekday = firstDayOfMonth.getDay();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
 
     const cells = [];
-    for (let i = 0; i < firstWeekday; i++) {
-      cells.push(null);
-    }
-    for (let day = 1; day <= daysInMonth; day++) {
-      cells.push(new Date(year, month, day));
-    }
-
+    for (let i = 0; i < firstWeekday; i++) cells.push(null);
+    for (let day = 1; day <= daysInMonth; day++) cells.push(new Date(year, month, day));
     return cells;
   }, [currentMonth]);
 
@@ -428,9 +454,7 @@ export default function ShiftsPage() {
         shift_date: form.date,
         unit: form.unit,
         shiftType: form.shiftType,
-        assignment_number: form.assignmentNumber
-          ? Number(form.assignmentNumber)
-          : null,
+        assignment_number: form.assignmentNumber ? Number(form.assignmentNumber) : null,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       };
 
@@ -439,7 +463,7 @@ export default function ShiftsPage() {
       closeAllModals();
     } catch (err) {
       console.error("ADD SHIFT ERROR:", err);
-      alert("Error adding shift. See console for details.");
+      alert(err?.message || "Error adding shift. See console for details.");
     }
   }
 
@@ -462,22 +486,16 @@ export default function ShiftsPage() {
         shift_date: form.date,
         unit: form.unit,
         shiftType: form.shiftType,
-        assignment_number: form.assignmentNumber
-          ? Number(form.assignmentNumber)
-          : null,
-        timezone:
-          editingShift.timezone ||
-          Intl.DateTimeFormat().resolvedOptions().timeZone,
+        assignment_number: form.assignmentNumber ? Number(form.assignmentNumber) : null,
+        timezone: editingShift.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
       };
 
       const updated = await api.put(`/shifts/${editingShift.id}`, payload);
-      setShifts((prev) =>
-        prev.map((s) => (s.id === editingShift.id ? updated : s))
-      );
+      setShifts((prev) => prev.map((s) => (s.id === editingShift.id ? updated : s)));
       closeAllModals();
     } catch (err) {
       console.error("EDIT SHIFT ERROR:", err);
-      alert("Error updating shift. See console for details.");
+      alert(err?.message || "Error updating shift. See console for details.");
     }
   }
 
@@ -485,10 +503,7 @@ export default function ShiftsPage() {
   useEffect(() => {
     try {
       if (typeof window !== "undefined") {
-        window.localStorage.setItem(
-          "shift_templates_v3",
-          JSON.stringify(templates)
-        );
+        window.localStorage.setItem("shift_templates_v3", JSON.stringify(templates));
       }
     } catch {
       // ignore
@@ -512,7 +527,6 @@ export default function ShiftsPage() {
   }
 
   function openTemplateModal() {
-    // if we already have an active template, load it; else create empty grid
     if (activeTemplateId) {
       const tmpl = templates.find((t) => t.id === activeTemplateId);
       if (tmpl) {
@@ -562,35 +576,24 @@ export default function ShiftsPage() {
       return {
         ...prev,
         [staffId]:
-          typeof updater === "function"
-            ? updater(existing)
-            : { ...existing, ...updater },
+          typeof updater === "function" ? updater(existing) : { ...existing, ...updater },
       };
     });
   }
 
   function handleChangeUnitForStaff(staffId, unitName) {
-    updateTemplateCell(staffId, (row) => ({
-      ...row,
-      unit: unitName,
-    }));
+    updateTemplateCell(staffId, (row) => ({ ...row, unit: unitName }));
   }
 
   function handleChangeAssignmentForStaff(staffId, assignmentNumber) {
-    updateTemplateCell(staffId, (row) => ({
-      ...row,
-      assignmentNumber,
-    }));
+    updateTemplateCell(staffId, (row) => ({ ...row, assignmentNumber }));
   }
 
   function handleToggleDay(staffId, dayIndex) {
     updateTemplateCell(staffId, (row) => {
       const days = row.days.slice();
       const current = days[dayIndex] || { active: false, shiftType: "Day" };
-      days[dayIndex] = {
-        ...current,
-        active: !current.active,
-      };
+      days[dayIndex] = { ...current, active: !current.active };
       return { ...row, days };
     });
   }
@@ -599,10 +602,7 @@ export default function ShiftsPage() {
     updateTemplateCell(staffId, (row) => {
       const days = row.days.slice();
       const current = days[dayIndex] || { active: false, shiftType: "Day" };
-      days[dayIndex] = {
-        ...current,
-        shiftType,
-      };
+      days[dayIndex] = { ...current, shiftType };
       return { ...row, days };
     });
   }
@@ -643,7 +643,6 @@ export default function ShiftsPage() {
       return;
     }
 
-    // build patterns from grid, only include rows with at least one active day
     const patterns = Object.values(templateGrid)
       .filter((row) => row && row.days && row.days.some((d) => d.active))
       .map((row) => ({
@@ -664,25 +663,12 @@ export default function ShiftsPage() {
     if (activeTemplateId) {
       setTemplates((prev) =>
         prev.map((t) =>
-          t.id === activeTemplateId
-            ? {
-                ...t,
-                name: templateName.trim(),
-                patterns,
-              }
-            : t
+          t.id === activeTemplateId ? { ...t, name: templateName.trim(), patterns } : t
         )
       );
     } else {
       const newId = Date.now();
-      setTemplates((prev) => [
-        ...prev,
-        {
-          id: newId,
-          name: templateName.trim(),
-          patterns,
-        },
-      ]);
+      setTemplates((prev) => [...prev, { id: newId, name: templateName.trim(), patterns }]);
       setActiveTemplateId(newId);
     }
 
@@ -704,9 +690,7 @@ export default function ShiftsPage() {
       alert("Please choose a week start date.");
       return;
     }
-    const tmpl = activeTemplateId
-      ? templates.find((t) => t.id === activeTemplateId)
-      : null;
+    const tmpl = activeTemplateId ? templates.find((t) => t.id === activeTemplateId) : null;
 
     if (!tmpl) {
       alert("No template selected. Save and select a template first.");
@@ -737,10 +721,7 @@ export default function ShiftsPage() {
             shift_date: ymd,
             unit: pattern.unit || "",
             shiftType: day.shiftType || "Day",
-            assignment_number:
-              isCNA && pattern.assignmentNumber
-                ? Number(pattern.assignmentNumber)
-                : null,
+            assignment_number: isCNA && pattern.assignmentNumber ? Number(pattern.assignmentNumber) : null,
             timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           });
         }
@@ -762,24 +743,17 @@ export default function ShiftsPage() {
       alert("Template applied.");
     } catch (err) {
       console.error("APPLY TEMPLATE ERROR:", err);
-      alert("Error applying template. See console for details.");
+      alert(err?.message || "Error applying template. See console for details.");
     }
   }
 
   // TEMPLATE VIEW HELPERS ----------------------------------------
   const templateFilteredStaff = useMemo(() => {
     return (staff || []).filter((s) => {
-      if (
-        templateSearch &&
-        !s.name.toLowerCase().includes(templateSearch.toLowerCase())
-      ) {
+      if (templateSearch && !s.name.toLowerCase().includes(templateSearch.toLowerCase())) {
         return false;
       }
-      if (
-        templateRoleFilter !== "All" &&
-        s.role &&
-        s.role !== templateRoleFilter
-      ) {
+      if (templateRoleFilter !== "All" && s.role && s.role !== templateRoleFilter) {
         return false;
       }
       return true;
@@ -793,9 +767,7 @@ export default function ShiftsPage() {
   // RENDER --------------------------------------------------------
   const bgColor = isDark ? "#050509" : "#f3f4f6";
   const textColor = isDark ? "#ffffff" : "#111827";
-  const calendarCellBg = isDark
-    ? "rgba(255,255,255,0.03)"
-    : "rgba(255,255,255,0.7)";
+  const calendarCellBg = isDark ? "rgba(255,255,255,0.03)" : "rgba(255,255,255,0.7)";
 
   return (
     <div
@@ -808,6 +780,59 @@ export default function ShiftsPage() {
         position: "relative",
       }}
     >
+      {/* ORG NOT READY BANNER */}
+      {orgNotReady && (
+        <div
+          style={{
+            marginBottom: 14,
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: isDark ? "rgba(245,158,11,0.12)" : "rgba(245,158,11,0.18)",
+            border: isDark ? "1px solid rgba(245,158,11,0.35)" : "1px solid rgba(245,158,11,0.35)",
+            color: textColor,
+            fontWeight: 700,
+          }}
+        >
+          Loading organization context… (waiting for org selection)
+        </div>
+      )}
+
+      {/* ERROR BANNER (non-blocking) */}
+      {!!lastLoadError && !orgNotReady && (
+        <div
+          style={{
+            marginBottom: 14,
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: isDark ? "rgba(239,68,68,0.12)" : "rgba(239,68,68,0.14)",
+            border: "1px solid rgba(239,68,68,0.35)",
+            color: textColor,
+            fontWeight: 700,
+            display: "flex",
+            justifyContent: "space-between",
+            gap: 10,
+          }}
+        >
+          <span>Load error: {lastLoadError}</span>
+          <button
+            onClick={() => loadPage()}
+            style={{
+              padding: "6px 10px",
+              borderRadius: 999,
+              border: "1px solid rgba(255,255,255,0.15)",
+              background: isDark ? "rgba(0,0,0,0.35)" : "rgba(255,255,255,0.7)",
+              color: textColor,
+              cursor: "pointer",
+              fontWeight: 800,
+              fontSize: 12,
+              whiteSpace: "nowrap",
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* THEME TOGGLE */}
       <button
         onClick={() => setTheme(isDark ? "light" : "dark")}
@@ -848,16 +873,14 @@ export default function ShiftsPage() {
         ) : (
           <h1 style={{ fontSize: "28px" }}>{orgName || "Shifts"}</h1>
         )}
+        {/* helpful debug line (remove later) */}
+        <div style={{ fontSize: 12, opacity: 0.6 }}>
+          Org: {orgCode || "—"} {orgId ? `(${String(orgId).slice(0, 8)}…)` : ""}
+        </div>
       </div>
 
-      {!anyShifts && (
-        <div
-          style={{
-            opacity: 0.8,
-            marginBottom: "16px",
-            fontSize: "18px",
-          }}
-        >
+      {!anyShifts && !orgNotReady && (
+        <div style={{ opacity: 0.8, marginBottom: "16px", fontSize: "18px" }}>
           No shifts found — your database may be empty.
         </div>
       )}
@@ -876,22 +899,16 @@ export default function ShiftsPage() {
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <button
             onClick={() =>
-              setCurrentMonth(
-                (prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1)
-              )
+              setCurrentMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))
             }
             style={navButtonStyle}
           >
             ◀
           </button>
-          <div style={{ fontSize: "18px", fontWeight: 600 }}>
-            {formatMonthTitle(currentMonth)}
-          </div>
+          <div style={{ fontSize: "18px", fontWeight: 600 }}>{formatMonthTitle(currentMonth)}</div>
           <button
             onClick={() =>
-              setCurrentMonth(
-                (prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1)
-              )
+              setCurrentMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))
             }
             style={navButtonStyle}
           >
@@ -909,9 +926,7 @@ export default function ShiftsPage() {
             ...inputStyle,
             background: isDark ? "rgba(0,0,0,0.5)" : "#ffffff",
             color: textColor,
-            borderColor: isDark
-              ? "rgba(255,255,255,0.15)"
-              : "rgba(17,24,39,0.2)",
+            borderColor: isDark ? "rgba(255,255,255,0.15)" : "rgba(17,24,39,0.2)",
           }}
         />
 
@@ -923,9 +938,7 @@ export default function ShiftsPage() {
             ...selectStyle,
             background: isDark ? "rgba(0,0,0,0.5)" : "#ffffff",
             color: textColor,
-            borderColor: isDark
-              ? "rgba(255,255,255,0.15)"
-              : "rgba(17,24,39,0.2)",
+            borderColor: isDark ? "rgba(255,255,255,0.15)" : "rgba(17,24,39,0.2)",
           }}
         >
           <option value="All">All Roles</option>
@@ -944,9 +957,7 @@ export default function ShiftsPage() {
             ...selectStyle,
             background: isDark ? "rgba(0,0,0,0.5)" : "#ffffff",
             color: textColor,
-            borderColor: isDark
-              ? "rgba(255,255,255,0.15)"
-              : "rgba(17,24,39,0.2)",
+            borderColor: isDark ? "rgba(255,255,255,0.15)" : "rgba(17,24,39,0.2)",
           }}
         >
           <option value="All">All Units</option>
@@ -965,9 +976,7 @@ export default function ShiftsPage() {
             ...selectStyle,
             background: isDark ? "rgba(0,0,0,0.5)" : "#ffffff",
             color: textColor,
-            borderColor: isDark
-              ? "rgba(255,255,255,0.15)"
-              : "rgba(17,24,39,0.2)",
+            borderColor: isDark ? "rgba(255,255,255,0.15)" : "rgba(17,24,39,0.2)",
           }}
         >
           <option value="All">All Shift Types</option>
@@ -988,6 +997,7 @@ export default function ShiftsPage() {
         </button>
       </div>
 
+      {/* --- everything below this point is your existing UI unchanged --- */}
       {/* WEEKDAY HEADERS */}
       <div
         style={{
@@ -1064,23 +1074,10 @@ export default function ShiftsPage() {
                   alignItems: "center",
                 }}
               >
-                <span
-                  style={{
-                    fontWeight: 600,
-                    fontSize: "13px",
-                  }}
-                >
-                  {date.getDate()}
-                </span>
+                <span style={{ fontWeight: 600, fontSize: "13px" }}>{date.getDate()}</span>
                 {dayShifts.length > 0 && (
-                  <span
-                    style={{
-                      fontSize: "10px",
-                      opacity: 0.7,
-                    }}
-                  >
-                    {dayShifts.length} shift
-                    {dayShifts.length !== 1 ? "s" : ""}
+                  <span style={{ fontSize: "10px", opacity: 0.7 }}>
+                    {dayShifts.length} shift{dayShifts.length !== 1 ? "s" : ""}
                   </span>
                 )}
               </div>
@@ -1101,16 +1098,12 @@ export default function ShiftsPage() {
                   const shiftType = getShiftTypeForShift(shift, role);
                   const roleColor = roleColors[role] || "#777";
 
-                  // -------------------------
-                  // Determine OT / approaching OT for THIS shift
-                  // -------------------------
                   let showOTBadge = false;
                   let showApproachingBadge = false;
 
                   if (shift.shift_date) {
                     const weekKey = getWeekStart(shift.shift_date);
 
-                    // Pull all shifts for this staff member in this week
                     const weekShifts = (shifts || [])
                       .filter(
                         (s) =>
@@ -1128,9 +1121,7 @@ export default function ShiftsPage() {
                         return aTime.localeCompare(bTime);
                       });
 
-                    // Running hours to determine which shift triggered OT
                     let running = 0;
-
                     for (const s of weekShifts) {
                       const hrs = calculateShiftHours(s);
                       const before = running;
@@ -1139,11 +1130,7 @@ export default function ShiftsPage() {
                       if (s.id === shift.id) {
                         if (before < 40 && running > 40) {
                           showOTBadge = true;
-                        } else if (
-                          before < 36 &&
-                          running >= 36 &&
-                          running <= 40
-                        ) {
+                        } else if (before < 36 && running >= 36 && running <= 40) {
                           showApproachingBadge = true;
                         }
                         break;
@@ -1161,14 +1148,11 @@ export default function ShiftsPage() {
                       style={{
                         borderRadius: "6px",
                         padding: "4px 6px",
-                        background: isDark
-                          ? "rgba(0,0,0,0.6)"
-                          : "rgba(15,23,42,0.08)",
+                        background: isDark ? "rgba(0,0,0,0.6)" : "rgba(15,23,42,0.08)",
                         borderLeft: `4px solid ${roleColor}`,
                         fontSize: "11px",
                       }}
                     >
-                      {/* Header */}
                       <div
                         style={{
                           display: "flex",
@@ -1179,9 +1163,7 @@ export default function ShiftsPage() {
                         <span style={{ fontWeight: 600 }}>
                           {worker?.name || `Staff #${shift.staff_id}`}
                         </span>
-                        <span style={{ fontSize: "10px", opacity: 0.8 }}>
-                          {shiftType}
-                        </span>
+                        <span style={{ fontSize: "10px", opacity: 0.8 }}>{shiftType}</span>
                       </div>
 
                       <div style={{ fontSize: "10px", opacity: 0.85 }}>
@@ -1200,15 +1182,8 @@ export default function ShiftsPage() {
                         </div>
                       )}
 
-                      {/* BADGES ONLY ON THE SHIFT THAT TRIGGERS THE THRESHOLD */}
                       {(showOTBadge || showApproachingBadge) && (
-                        <div
-                          style={{
-                            marginTop: "4px",
-                            display: "flex",
-                            justifyContent: "flex-end",
-                          }}
-                        >
+                        <div style={{ marginTop: "4px", display: "flex", justifyContent: "flex-end" }}>
                           {showOTBadge && (
                             <span
                               style={{
@@ -1282,22 +1257,12 @@ export default function ShiftsPage() {
             {editModalOpen ? "Edit Shift" : "Add Shift"}
           </h2>
 
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              gap: "10px",
-              marginBottom: "12px",
-            }}
-          >
-            {/* Staff */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginBottom: "12px" }}>
             <label style={labelStyle}>
               <span>Staff member</span>
               <select
                 value={form.staffId}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, staffId: e.target.value }))
-                }
+                onChange={(e) => setForm((f) => ({ ...f, staffId: e.target.value }))}
                 style={fieldSelectStyle}
               >
                 <option value="">Select staff…</option>
@@ -1309,27 +1274,21 @@ export default function ShiftsPage() {
               </select>
             </label>
 
-            {/* Date */}
             <label style={labelStyle}>
               <span>Date</span>
               <input
                 type="date"
                 value={form.date}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, date: e.target.value }))
-                }
+                onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
                 style={fieldInputStyle}
               />
             </label>
 
-            {/* Unit */}
             <label style={labelStyle}>
               <span>Unit</span>
               <select
                 value={form.unit}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, unit: e.target.value }))
-                }
+                onChange={(e) => setForm((f) => ({ ...f, unit: e.target.value }))}
                 style={fieldSelectStyle}
               >
                 <option value="">Select unit…</option>
@@ -1341,14 +1300,11 @@ export default function ShiftsPage() {
               </select>
             </label>
 
-            {/* Shift type */}
             <label style={labelStyle}>
               <span>Shift type</span>
               <select
                 value={form.shiftType}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, shiftType: e.target.value }))
-                }
+                onChange={(e) => setForm((f) => ({ ...f, shiftType: e.target.value }))}
                 style={fieldSelectStyle}
               >
                 <option value="">Select a shift type…</option>
@@ -1358,39 +1314,24 @@ export default function ShiftsPage() {
               </select>
             </label>
 
-            {/* Assignment */}
             <label style={labelStyle}>
               <span>Assignment # (optional)</span>
               <input
                 type="number"
                 min="1"
                 value={form.assignmentNumber}
-                onChange={(e) =>
-                  setForm((f) => ({
-                    ...f,
-                    assignmentNumber: e.target.value,
-                  }))
-                }
+                onChange={(e) => setForm((f) => ({ ...f, assignmentNumber: e.target.value }))}
                 style={fieldInputStyle}
               />
             </label>
           </div>
 
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "flex-end",
-              gap: "8px",
-              marginTop: "4px",
-            }}
-          >
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "4px" }}>
             <button onClick={closeAllModals} style={secondaryButtonStyle}>
               Cancel
             </button>
             <button
-              onClick={
-                editModalOpen ? handleSubmitEditShift : handleSubmitNewShift
-              }
+              onClick={editModalOpen ? handleSubmitEditShift : handleSubmitNewShift}
               style={primaryButtonStyle}
             >
               {editModalOpen ? "Save changes" : "Create shift"}
@@ -1399,29 +1340,16 @@ export default function ShiftsPage() {
         </Modal>
       )}
 
-      {/* TEMPLATE MODAL (NEW) */}
+      {/* TEMPLATE MODAL */}
       {templateModalOpen && (
         <Modal onClose={closeAllModals}>
-          <h2 style={{ marginBottom: "10px", fontSize: "18px" }}>
-            Weekly Staffing Template
-          </h2>
+          <h2 style={{ marginBottom: "10px", fontSize: "18px" }}>Weekly Staffing Template</h2>
 
-          {/* Template header: select / new / delete */}
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "8px",
-              marginBottom: "12px",
-              alignItems: "center",
-            }}
-          >
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "12px", alignItems: "center" }}>
             <select
               value={activeTemplateId || ""}
               onChange={(e) =>
-                e.target.value
-                  ? handleSelectTemplate(Number(e.target.value))
-                  : handleNewTemplate()
+                e.target.value ? handleSelectTemplate(Number(e.target.value)) : handleNewTemplate()
               }
               style={fieldSelectStyle}
             >
@@ -1446,25 +1374,13 @@ export default function ShiftsPage() {
             </button>
 
             {activeTemplateId && (
-              <button
-                onClick={handleDeleteTemplate}
-                style={smallDangerButtonStyle}
-              >
+              <button onClick={handleDeleteTemplate} style={smallDangerButtonStyle}>
                 Delete
               </button>
             )}
           </div>
 
-          {/* Apply section */}
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "8px",
-              marginBottom: "12px",
-              alignItems: "center",
-            }}
-          >
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "12px", alignItems: "center" }}>
             <label style={{ ...labelStyle, maxWidth: "200px" }}>
               <span>Week start (Sunday)</span>
               <input
@@ -1482,31 +1398,17 @@ export default function ShiftsPage() {
                 min="1"
                 max="12"
                 value={templateWeeksCount}
-                onChange={(e) =>
-                  setTemplateWeeksCount(Number(e.target.value) || 1)
-                }
+                onChange={(e) => setTemplateWeeksCount(Number(e.target.value) || 1)}
                 style={fieldInputStyle}
               />
             </label>
 
-            <button
-              onClick={handleApplyTemplate}
-              style={{ ...primaryButtonStyle, marginTop: "16px" }}
-            >
+            <button onClick={handleApplyTemplate} style={{ ...primaryButtonStyle, marginTop: "16px" }}>
               Apply to calendar
             </button>
           </div>
 
-          {/* Template filters */}
-          <div
-            style={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "8px",
-              marginBottom: "10px",
-              alignItems: "center",
-            }}
-          >
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "10px", alignItems: "center" }}>
             <input
               type="text"
               placeholder="Filter by staff name…"
@@ -1529,7 +1431,6 @@ export default function ShiftsPage() {
             </select>
           </div>
 
-          {/* GRID: staff vs days */}
           <div
             style={{
               maxHeight: "420px",
@@ -1539,7 +1440,6 @@ export default function ShiftsPage() {
               padding: "6px",
             }}
           >
-            {/* Header row */}
             <div
               style={{
                 display: "grid",
@@ -1595,21 +1495,16 @@ export default function ShiftsPage() {
                     borderBottom: "1px solid rgba(30,64,175,0.25)",
                   }}
                 >
-                  {/* Staff */}
                   <div>
                     <div style={{ fontWeight: 600 }}>
-                      {s.name}{" "}
-                      <span style={{ opacity: 0.7 }}>({s.role})</span>
+                      {s.name} <span style={{ opacity: 0.7 }}>({s.role})</span>
                     </div>
                   </div>
 
-                  {/* Unit */}
                   <div>
                     <select
                       value={row.unit}
-                      onChange={(e) =>
-                        handleChangeUnitForStaff(s.id, e.target.value)
-                      }
+                      onChange={(e) => handleChangeUnitForStaff(s.id, e.target.value)}
                       style={{ ...fieldSelectStyle, fontSize: "11px" }}
                     >
                       <option value="">Unit…</option>
@@ -1621,14 +1516,11 @@ export default function ShiftsPage() {
                     </select>
                   </div>
 
-                  {/* Assignment (CNA only) */}
                   <div>
                     {s.role === "CNA" ? (
                       <select
                         value={row.assignmentNumber || ""}
-                        onChange={(e) =>
-                          handleChangeAssignmentForStaff(s.id, e.target.value)
-                        }
+                        onChange={(e) => handleChangeAssignmentForStaff(s.id, e.target.value)}
                         style={{ ...fieldSelectStyle, fontSize: "11px" }}
                       >
                         <option value="">Assignment…</option>
@@ -1640,13 +1532,10 @@ export default function ShiftsPage() {
                         ))}
                       </select>
                     ) : (
-                      <span style={{ fontSize: "11px", opacity: 0.7 }}>
-                        Whole unit
-                      </span>
+                      <span style={{ fontSize: "11px", opacity: 0.7 }}>Whole unit</span>
                     )}
                   </div>
 
-                  {/* Days */}
                   {row.days.map((day, idx) => (
                     <div
                       key={idx}
@@ -1657,19 +1546,13 @@ export default function ShiftsPage() {
                         gap: "3px",
                       }}
                     >
-                      {/* square checkbox */}
                       <input
                         type="checkbox"
                         checked={day.active}
                         onChange={() => handleToggleDay(s.id, idx)}
-                        style={{
-                          width: "14px",
-                          height: "14px",
-                          cursor: "pointer",
-                        }}
+                        style={{ width: "14px", height: "14px", cursor: "pointer" }}
                       />
 
-                      {/* circle shift selectors */}
                       {day.active && (
                         <div
                           style={{
@@ -1694,14 +1577,8 @@ export default function ShiftsPage() {
                                 type="radio"
                                 name={`st-${s.id}-${idx}`}
                                 checked={day.shiftType === st}
-                                onChange={() =>
-                                  handleSetDayShiftType(s.id, idx, st)
-                                }
-                                style={{
-                                  width: "10px",
-                                  height: "10px",
-                                  cursor: "pointer",
-                                }}
+                                onChange={() => handleSetDayShiftType(s.id, idx, st)}
+                                style={{ width: "10px", height: "10px", cursor: "pointer" }}
                               />
                               <span>{st[0]}</span>
                             </label>
@@ -1715,13 +1592,7 @@ export default function ShiftsPage() {
             })}
           </div>
 
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "flex-end",
-              marginTop: "14px",
-            }}
-          >
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "14px" }}>
             <button onClick={closeAllModals} style={secondaryButtonStyle}>
               Close
             </button>
@@ -1735,7 +1606,6 @@ export default function ShiftsPage() {
 // ------------------------------------------------------------------
 // Reusable Modal component
 // ------------------------------------------------------------------
-
 function Modal({ children, onClose }) {
   return (
     <div
@@ -1775,7 +1645,6 @@ function Modal({ children, onClose }) {
 // ------------------------------------------------------------------
 // Small shared styles
 // ------------------------------------------------------------------
-
 const inputStyle = {
   padding: "6px 10px",
   borderRadius: "6px",
@@ -1840,16 +1709,6 @@ const secondaryButtonStyle = {
   color: "#e5e7eb",
   cursor: "pointer",
   fontSize: "13px",
-};
-
-const smallButtonStyle = {
-  padding: "4px 10px",
-  borderRadius: "999px",
-  border: "none",
-  background: "#3b82f6",
-  color: "#eff6ff",
-  cursor: "pointer",
-  fontSize: "12px",
 };
 
 const smallDangerButtonStyle = {

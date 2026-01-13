@@ -1,19 +1,16 @@
 // backend/index.js
-
 require("dotenv").config();
 const express = require("express");
 const app = express();
 const cors = require("cors");
 
-// JSON parser
 app.use(express.json());
 
-// GLOBAL CORS
 app.use(
   cors({
     origin: "*",
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "x-org-code"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-org-id", "x-org-code"],
   })
 );
 
@@ -26,17 +23,17 @@ app.use("/api/staff", require("./routes/staff"));
 app.use("/api/organizations", require("./routes/organizations"));
 app.use("/api/assignments", require("./routes/assignments"));
 app.use("/api/templates", require("./routes/templates"));
-
-
-
-// ⭐ ADD THIS LINE ⭐
 app.use("/api/shift-settings", require("./routes/shiftSettings"));
 
-// DEFAULT
+// ✅ ORG SETTINGS
+app.use("/api/org-settings", require("./routes/orgSettings"));
+
+// ✅ FACILITY (rooms/beds)
+app.use("/api/facility", require("./routes/facility"));
+
 app.get("/", (req, res) => {
   res.send("ShiftCensus backend running.");
 });
 
-// START SERVER
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`Backend running on port ${PORT}`));

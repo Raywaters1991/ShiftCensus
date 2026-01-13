@@ -2,10 +2,34 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/png" href="/logo.png" />
+
+    <!-- Mobile / Responsive -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
     <title>ShiftCensus</title>
+
+    <!-- Theme colors (Android Chrome, mobile UI) -->
+    <meta name="theme-color" content="#0b0b0b" />
+    <meta name="color-scheme" content="dark light" />
+
+    <!-- Favicons (Chrome/Edge/Safari) -->
+    <!-- NOTE: Chrome often prefers explicit 16/32 AND sometimes .ico -->
+    <link rel="icon" href="/favicon.ico?v=202512" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png?v=202512" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png?v=202512" />
+    <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48x48.png?v=202512" />
+
+    <!-- iOS Home Screen -->
+    <link rel="apple-touch-icon" sizes="192x192" href="/favicon-192x192.png?v=202512" />
+    <link rel="apple-touch-icon" sizes="256x256" href="/favicon-256x256.png?v=202512" />
+
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+
+    <!-- PWA / Android install -->
+    <link rel="manifest" href="/manifest.webmanifest?v=202512" />
   </head>
+
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>

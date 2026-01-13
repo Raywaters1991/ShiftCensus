@@ -1,9 +1,11 @@
 // backend/routes/shifts.js
-
 const express = require("express");
 const router = express.Router();
 const { createClient } = require("@supabase/supabase-js");
 require("dotenv").config();
+
+const { requireAuth } = require("../middleware/auth"); // keep your existing auth
+const { requireOrg } = require("../middleware/orgGuard"); // ✅ updated middleware
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -12,7 +14,6 @@ const supabase = createClient(
 
 /* ------------------------------------------------------------------
    Build local → UTC timestamp
-   timeStr is already "HH:MM:SS" from DB (no need to add :00)
 ------------------------------------------------------------------- */
 function buildDateTime(shift_date, timeStr, timezone) {
   const localString = `${shift_date}T${timeStr}`;
@@ -38,7 +39,6 @@ function computeShiftTimes(shift_date, setting, timezone) {
   const startUtc = buildDateTime(shift_date, setting.start_local, timezone);
   let endUtc = buildDateTime(shift_date, setting.end_local, timezone);
 
-  // Overnight shift example: 18:00 → 06:00 next day
   if (setting.end_local < setting.start_local) {
     const d = new Date(endUtc);
     d.setUTCDate(d.getUTCDate() + 1);
@@ -48,18 +48,21 @@ function computeShiftTimes(shift_date, setting, timezone) {
   return { startUtc, endUtc };
 }
 
+// ✅ enforce auth + org context for everything in this router
+router.use(requireAuth);
+router.use(requireOrg);
+
 /* ------------------------------------------------------------------
    GET — fetch all shifts for facility
 ------------------------------------------------------------------- */
 router.get("/", async (req, res) => {
   try {
-    const org = req.headers["x-org-code"];
-    if (!org) return res.status(400).json({ error: "Missing org_code" });
+    const orgCode = req.org_code; // ✅ resolved server-side
 
     const { data, error } = await supabase
       .from("shifts")
       .select("*")
-      .eq("org_code", org)
+      .eq("org_code", orgCode)
       .order("start_time", { ascending: true });
 
     if (error) throw error;
@@ -76,38 +79,36 @@ router.get("/", async (req, res) => {
 ------------------------------------------------------------------- */
 router.post("/", async (req, res) => {
   try {
-    const org = req.headers["x-org-code"];
-    if (!org) return res.status(400).json({ error: "Missing org_code" });
+    const orgCode = req.org_code;
 
     const { staff_id, shift_date, shiftType, unit, assignment_number, timezone } =
       req.body;
 
     if (!staff_id || !shift_date || !shiftType) {
-      return res
-        .status(400)
-        .json({ error: "Missing required fields: staff_id, shift_date, shiftType" });
+      return res.status(400).json({
+        error: "Missing required fields: staff_id, shift_date, shiftType",
+      });
     }
 
     const facilityTimezone = timezone || "America/Los_Angeles";
 
-    /* --- Get role of staff --- */
     const { data: staffData, error: staffErr } = await supabase
       .from("staff")
       .select("role")
       .eq("id", staff_id)
-      .eq("org_code", org)
+      .eq("org_code", orgCode)
       .single();
 
-    if (staffErr || !staffData)
+    if (staffErr || !staffData) {
       return res.status(400).json({ error: "Invalid staff_id" });
+    }
 
     const role = staffData.role;
 
-    /* --- Get shift settings for role + shiftType --- */
     const { data: setting, error: settingErr } = await supabase
       .from("shift_settings")
       .select("*")
-      .eq("org_code", org)
+      .eq("org_code", orgCode)
       .eq("role", role)
       .eq("shift_type", shiftType)
       .single();
@@ -118,22 +119,12 @@ router.post("/", async (req, res) => {
       });
     }
 
-    /* --- Compute start/end UTC timestamps --- */
     const { startUtc, endUtc } = computeShiftTimes(
       shift_date,
       setting,
       facilityTimezone
     );
 
-    console.log("✨ Creating shift →", {
-      shift_date,
-      start_local: setting.start_local,
-      end_local: setting.end_local,
-      startUtc,
-      endUtc,
-    });
-
-    /* --- Insert shift --- */
     const { data, error } = await supabase
       .from("shifts")
       .insert([
@@ -148,7 +139,7 @@ router.post("/", async (req, res) => {
           start_time: startUtc,
           end_time: endUtc,
           timezone: facilityTimezone,
-          org_code: org,
+          org_code: orgCode,
         },
       ])
       .select();
@@ -167,40 +158,35 @@ router.post("/", async (req, res) => {
 ------------------------------------------------------------------- */
 router.put("/:id", async (req, res) => {
   try {
-    const org = req.headers["x-org-code"];
-    if (!org) return res.status(400).json({ error: "Missing org_code" });
-
+    const orgCode = req.org_code;
     const id = req.params.id;
 
     const { staff_id, shift_date, shiftType, unit, assignment_number, timezone } =
       req.body;
 
     if (!staff_id || !shift_date || !shiftType) {
-      return res
-        .status(400)
-        .json({ error: "Missing required fields: staff_id, shift_date, shiftType" });
+      return res.status(400).json({
+        error: "Missing required fields: staff_id, shift_date, shiftType",
+      });
     }
 
     const facilityTimezone = timezone || "America/Los_Angeles";
 
-    /* --- Get role --- */
     const { data: staffData } = await supabase
       .from("staff")
       .select("role")
       .eq("id", staff_id)
-      .eq("org_code", org)
+      .eq("org_code", orgCode)
       .single();
 
-    if (!staffData)
-      return res.status(400).json({ error: "Invalid staff_id" });
+    if (!staffData) return res.status(400).json({ error: "Invalid staff_id" });
 
     const role = staffData.role;
 
-    /* --- Get settings --- */
     const { data: setting } = await supabase
       .from("shift_settings")
       .select("*")
-      .eq("org_code", org)
+      .eq("org_code", orgCode)
       .eq("role", role)
       .eq("shift_type", shiftType)
       .single();
@@ -211,14 +197,12 @@ router.put("/:id", async (req, res) => {
       });
     }
 
-    /* --- Recompute timestamps --- */
     const { startUtc, endUtc } = computeShiftTimes(
       shift_date,
       setting,
       facilityTimezone
     );
 
-    /* --- Update shift --- */
     const { data, error } = await supabase
       .from("shifts")
       .update({
@@ -234,7 +218,7 @@ router.put("/:id", async (req, res) => {
         timezone: facilityTimezone,
       })
       .eq("id", id)
-      .eq("org_code", org)
+      .eq("org_code", orgCode)
       .select();
 
     if (error) throw error;
@@ -251,14 +235,13 @@ router.put("/:id", async (req, res) => {
 ------------------------------------------------------------------- */
 router.delete("/:id", async (req, res) => {
   try {
-    const org = req.headers["x-org-code"];
-    if (!org) return res.status(400).json({ error: "Missing org_code" });
+    const orgCode = req.org_code;
 
     const { error } = await supabase
       .from("shifts")
       .delete()
       .eq("id", req.params.id)
-      .eq("org_code", org);
+      .eq("org_code", orgCode);
 
     if (error) throw error;
 

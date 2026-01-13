@@ -2,120 +2,147 @@
 
 const express = require("express");
 const router = express.Router();
-const { createClient } = require("@supabase/supabase-js");
-require("dotenv").config();
+const supabase = require("../supabase");
+const { requireAuth } = require("../middleware/auth");
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
+// -----------------------------------------------------
+// Helpers
+// -----------------------------------------------------
+async function resolveOrgCode(req) {
+  const orgCodeHeader = req.headers["x-org-code"];
+  if (orgCodeHeader) return String(orgCodeHeader).trim();
 
-// GET all assignments for org
-router.get("/", async (req, res) => {
-  try {
-    const org = req.headers["x-org-code"];
-    if (!org) return res.status(400).json({ error: "Missing org_code" });
+  const orgIdHeader = req.headers["x-org-id"];
+  if (!orgIdHeader) return null;
 
-    const { data, error } = await supabase
-      .from("cna_assignments")
-      .select("*")
-      .eq("org_code", org)
-      .order("unit", { ascending: true })
-      .order("number", { ascending: true });
+  const orgId = String(orgIdHeader).trim();
 
-    if (error) throw error;
+  const { data, error } = await supabase
+    .from("orgs")
+    .select("org_code")
+    .eq("id", orgId)
+    .maybeSingle();
 
-    res.json(data || []);
-  } catch (err) {
-    console.error("ASSIGNMENTS GET ERROR:", err);
-    res.status(500).json({ error: "Server error" });
+  if (error) {
+    console.error("ORG RESOLVE ERROR (assignments):", error);
+    return null;
   }
+
+  return data?.org_code ? String(data.org_code).trim() : null;
+}
+
+// =====================================================
+// GET assignments (org-scoped)
+// =====================================================
+router.get("/", requireAuth, async (req, res) => {
+  const orgCode = await resolveOrgCode(req);
+  if (!orgCode) {
+    return res.status(400).json({ error: "Missing org_code" });
+  }
+
+  const { data, error } = await supabase
+    .from("cna_assignments")
+    .select("*")
+    .eq("org_code", orgCode)
+    .order("unit", { ascending: true })
+    .order("number", { ascending: true });
+
+  if (error) {
+    console.error("ASSIGNMENTS GET ERROR:", error);
+    return res.status(500).json({ error: "Failed to load assignments" });
+  }
+
+  res.json(data || []);
 });
 
-// CREATE assignment
-router.post("/", async (req, res) => {
-  try {
-    const org = req.headers["x-org-code"];
-    if (!org) return res.status(400).json({ error: "Missing org_code" });
-
-    const { unit, number, label } = req.body;
-
-    if (!unit || !number)
-      return res.status(400).json({ error: "Missing fields" });
-
-    const { data, error } = await supabase
-      .from("cna_assignments")
-      .insert([
-        {
-          org_code: org,
-          unit,
-          number,
-          label: label || null,
-        },
-      ])
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    res.json(data);
-  } catch (err) {
-    console.error("ASSIGNMENTS POST ERROR:", err);
-    res.status(500).json({ error: err.message });
+// =====================================================
+// CREATE assignment (org-scoped)
+// =====================================================
+router.post("/", requireAuth, async (req, res) => {
+  const orgCode = await resolveOrgCode(req);
+  if (!orgCode) {
+    return res.status(400).json({ error: "Missing org_code" });
   }
-});
 
-// UPDATE assignment
-router.put("/:id", async (req, res) => {
-  try {
-    const org = req.headers["x-org-code"];
-    if (!org) return res.status(400).json({ error: "Missing org_code" });
+  const { unit, number, label } = req.body;
 
-    const { id } = req.params;
-    const { unit, number, label } = req.body;
+  if (!unit || !number) {
+    return res.status(400).json({ error: "Unit and number required" });
+  }
 
-    const { data, error } = await supabase
-      .from("cna_assignments")
-      .update({
+  const { data, error } = await supabase
+    .from("cna_assignments")
+    .insert([
+      {
+        org_code: orgCode,
         unit,
         number,
         label: label || null,
-      })
-      .eq("id", id)
-      .eq("org_code", org)
-      .select()
-      .single();
+      },
+    ])
+    .select()
+    .single();
 
-    if (error) throw error;
-
-    res.json(data);
-  } catch (err) {
-    console.error("ASSIGNMENTS PUT ERROR:", err);
-    res.status(500).json({ error: err.message });
+  if (error) {
+    console.error("ASSIGNMENTS POST ERROR:", error);
+    return res.status(500).json({ error: "Failed to create assignment" });
   }
+
+  res.json(data);
 });
 
-// DELETE assignment
-router.delete("/:id", async (req, res) => {
-  try {
-    const org = req.headers["x-org-code"];
-    if (!org) return res.status(400).json({ error: "Missing org_code" });
-
-    const { id } = req.params;
-
-    const { error } = await supabase
-      .from("cna_assignments")
-      .delete()
-      .eq("id", id)
-      .eq("org_code", org);
-
-    if (error) throw error;
-
-    res.json({ success: true });
-  } catch (err) {
-    console.error("ASSIGNMENTS DELETE ERROR:", err);
-    res.status(500).json({ error: err.message });
+// =====================================================
+// UPDATE assignment (org-scoped)
+// =====================================================
+router.put("/:id", requireAuth, async (req, res) => {
+  const orgCode = await resolveOrgCode(req);
+  if (!orgCode) {
+    return res.status(400).json({ error: "Missing org_code" });
   }
+
+  const { unit, number, label } = req.body;
+
+  const { data, error } = await supabase
+    .from("cna_assignments")
+    .update({
+      unit,
+      number,
+      label: label || null,
+    })
+    .eq("id", req.params.id)
+    .eq("org_code", orgCode)
+    .select()
+    .single();
+
+  if (error) {
+    console.error("ASSIGNMENTS PUT ERROR:", error);
+    return res.status(500).json({ error: "Failed to update assignment" });
+  }
+
+  res.json(data);
+});
+
+// =====================================================
+// DELETE assignment (org-scoped)
+// =====================================================
+router.delete("/:id", requireAuth, async (req, res) => {
+  const orgCode = await resolveOrgCode(req);
+  if (!orgCode) {
+    return res.status(400).json({ error: "Missing org_code" });
+  }
+
+  const { error } = await supabase
+    .from("cna_assignments")
+    .delete()
+    .eq("id", req.params.id)
+    .eq("org_code", orgCode);
+
+  if (error) {
+    console.error("ASSIGNMENTS DELETE ERROR:", error);
+    return res.status(500).json({ error: "Failed to delete assignment" });
+  }
+
+  res.json({ success: true });
 });
 
 module.exports = router;
