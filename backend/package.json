@@ -11,10 +11,11 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@supabase/supabase-js": "^2.81.1",
+    "@supabase/supabase-js": "^2.95.3",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "twilio": "^5.12.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.11"

@@ -22,37 +22,42 @@ function safeParseDate(dt) {
   return isNaN(d.getTime()) ? null : d;
 }
 
+function toYMD(date) {
+  const d = date instanceof Date ? date : safeParseDate(date);
+  if (!d) return "";
+  return d.toISOString().slice(0, 10);
+}
+
+function formatPrettyDate(ymd) {
+  const d = new Date(ymd + "T00:00:00");
+  return d.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  });
+}
+
+// -----------------------------------------------------------
+// HTML ESCAPER (print-safe)
+// -----------------------------------------------------------
+function escapeHtml(str) {
+  return String(str || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 export default function ShiftsPage() {
   const { orgLogo, orgName, orgCode, orgId } = useUser();
-
-  // THEME ---------------------------------------------------------
-  const [theme, setTheme] = useState(() => {
-    if (typeof window === "undefined") return "dark";
-    try {
-      return window.localStorage.getItem("sc_shifts_theme") || "dark";
-    } catch {
-      return "dark";
-    }
-  });
-
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      try {
-        window.localStorage.setItem("sc_shifts_theme", theme);
-      } catch {
-        // ignore storage errors
-      }
-    }
-  }, [theme]);
-
-  const isDark = theme === "dark";
 
   // DATA ----------------------------------------------------------
   const [shifts, setShifts] = useState([]);
   const [staff, setStaff] = useState([]);
   const [units, setUnits] = useState([]);
   const [assignments, setAssignments] = useState([]);
-  // Organization data (currently unused but kept for future)
   const [organization, setOrganization] = useState(null);
 
   // UI state for loading/error
@@ -89,31 +94,6 @@ export default function ShiftsPage() {
   };
   const [form, setForm] = useState(emptyForm);
 
-  // TEMPLATE SYSTEM (v3) -----------------------------------------
-  const [templates, setTemplates] = useState(() => {
-    try {
-      if (typeof window === "undefined") return [];
-      const stored = window.localStorage.getItem("shift_templates_v3");
-      return stored ? JSON.parse(stored) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [activeTemplateId, setActiveTemplateId] = useState(null);
-  const [templateName, setTemplateName] = useState("");
-
-  // Template grid state
-  const [templateGrid, setTemplateGrid] = useState({});
-
-  // Template filters
-  const [templateSearch, setTemplateSearch] = useState("");
-  const [templateRoleFilter, setTemplateRoleFilter] = useState("All");
-
-  // Apply parameters
-  const [templateWeekStart, setTemplateWeekStart] = useState("");
-  const [templateWeeksCount, setTemplateWeeksCount] = useState(1);
-
   // Role colors
   const roleColors = {
     RN: "#4a90e2",
@@ -125,22 +105,19 @@ export default function ShiftsPage() {
 
   // ----------------------------------------------------------------
   // LOAD DATA (FIXED)
-  // - Wait until org context exists (orgCode or orgId)
-  // - Prevent overlapping polling requests
-  // - Clean interval on org change/unmount
   // ----------------------------------------------------------------
   const loadingRef = useRef(false);
   const intervalRef = useRef(null);
 
   async function loadPage() {
-    if (loadingRef.current) return; // prevent overlap
+    if (loadingRef.current) return;
     loadingRef.current = true;
     setLastLoadError("");
 
-    let shiftRes = [];
-    let staffRes = [];
-    let unitsRes = [];
-    let assignRes = [];
+    let shiftRes = null;
+    let staffRes = null;
+    let unitsRes = null;
+    let assignRes = null;
 
     try {
       const results = await Promise.all([
@@ -150,19 +127,17 @@ export default function ShiftsPage() {
         api.get("/assignments"),
       ]);
 
-      shiftRes = Array.isArray(results[0]) ? results[0] : [];
-      staffRes = Array.isArray(results[1]) ? results[1] : [];
-      unitsRes = Array.isArray(results[2]) ? results[2] : [];
-      assignRes = Array.isArray(results[3]) ? results[3] : [];
+      shiftRes = results[0];
+      staffRes = results[1];
+      unitsRes = results[2];
+      assignRes = results[3];
     } catch (err) {
       console.error("LOAD ERROR:", err);
-      // keep existing state; just surface error
       setLastLoadError(err?.message || "Load failed");
     } finally {
       loadingRef.current = false;
     }
 
-    // Only set if we actually got arrays (avoid wiping on errors)
     if (Array.isArray(shiftRes)) setShifts(shiftRes);
     if (Array.isArray(staffRes)) setStaff(staffRes);
     if (Array.isArray(unitsRes)) setUnits(unitsRes);
@@ -170,13 +145,11 @@ export default function ShiftsPage() {
   }
 
   useEffect(() => {
-    // Clear any prior polling when org changes
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
     }
 
-    // If org is not ready yet, do nothing (prevents 400 spam)
     const hasOrgContext =
       (orgCode && String(orgCode).trim().length > 0) ||
       (orgId && String(orgId).trim().length > 0);
@@ -188,10 +161,8 @@ export default function ShiftsPage() {
 
     setOrgNotReady(false);
 
-    // Initial load
     loadPage();
 
-    // Poll
     intervalRef.current = setInterval(() => {
       loadPage();
     }, 5000);
@@ -202,7 +173,6 @@ export default function ShiftsPage() {
         intervalRef.current = null;
       }
     };
-    // orgCode is enough; orgId included for safety if you later switch to id-only
   }, [orgCode, orgId]);
 
   // HELPERS -------------------------------------------------------
@@ -221,14 +191,11 @@ export default function ShiftsPage() {
     });
   }
 
-  function toYMD(date) {
-    const d = date instanceof Date ? date : safeParseDate(date);
-    if (!d) return "";
-    return d.toISOString().slice(0, 10);
-  }
-
   // Infer shift type from role + start_local / start_time
   function getShiftTypeForShift(shift, role) {
+    // Prefer explicit shiftType if your backend saves it
+    if (shift.shiftType) return shift.shiftType;
+
     let hour = null;
 
     if (shift.start_local) {
@@ -246,23 +213,25 @@ export default function ShiftsPage() {
 
     if (hour === null || Number.isNaN(hour)) return "Unknown";
 
-    if (role === "RN" || role === "LPN") {
-      return hour < 18 ? "Day" : "Night";
-    }
+    const r = String(role || "").toUpperCase();
 
+    // Nurses: Day vs Night
+    if (r === "RN" || r === "LPN") return hour < 18 ? "Day" : "Night";
+
+    // CNA: Day / Evening / Night
     if (hour < 14) return "Day";
     if (hour < 22) return "Evening";
     return "Night";
   }
 
   // ------------------------------
-  // OVERTIME CALCULATIONS
+  // OVERTIME CALCULATIONS (RESTORED)
   // ------------------------------
   function calculateShiftHours(shift) {
     if (!shift.start_local || !shift.end_local) return 0;
 
-    const [sHour] = shift.start_local.split(":").map(Number);
-    const [eHour] = shift.end_local.split(":").map(Number);
+    const [sHour] = String(shift.start_local).split(":").map(Number);
+    const [eHour] = String(shift.end_local).split(":").map(Number);
 
     if (Number.isNaN(sHour) || Number.isNaN(eHour)) return 0;
 
@@ -276,29 +245,13 @@ export default function ShiftsPage() {
     if (!dateStr) return "";
     const d = new Date(dateStr + "T00:00:00");
     if (isNaN(d.getTime())) return "";
-    const day = d.getDay();
+    const day = d.getDay(); // 0=Sunday
     const sunday = new Date(d);
     sunday.setDate(d.getDate() - day);
     return sunday.toISOString().slice(0, 10);
   }
 
-  function computeWeeklyHours(shiftsInput) {
-    const totals = {};
-    (shiftsInput || []).forEach((shift) => {
-      if (!shift || !shift.shift_date) return;
-
-      const weekKey = getWeekStart(shift.shift_date);
-      if (!weekKey) return;
-
-      const staffKey = `${shift.staff_id}-${weekKey}`;
-      if (!totals[staffKey]) totals[staffKey] = 0;
-      totals[staffKey] += calculateShiftHours(shift);
-    });
-    return totals;
-  }
-
-  const weeklyHours = useMemo(() => computeWeeklyHours(shifts), [shifts]);
-
+  // Staff map
   const staffById = useMemo(() => {
     const map = {};
     (staff || []).forEach((s) => {
@@ -308,7 +261,7 @@ export default function ShiftsPage() {
     return map;
   }, [staff]);
 
-  // FILTERED SHIFTS -----------------------------------------------
+  // FILTERED SHIFTS (for calendar view only) -----------------------
   const filteredShifts = useMemo(() => {
     return (shifts || []).filter((shift) => {
       if (!shift) return false;
@@ -353,7 +306,7 @@ export default function ShiftsPage() {
     currentMonth,
   ]);
 
-  // GROUP SHIFTS BY DAY -------------------------------------------
+  // GROUP SHIFTS BY DAY (for calendar view) ------------------------
   const shiftsByDay = useMemo(() => {
     const map = {};
     filteredShifts.forEach((shift) => {
@@ -385,7 +338,8 @@ export default function ShiftsPage() {
 
     const cells = [];
     for (let i = 0; i < firstWeekday; i++) cells.push(null);
-    for (let day = 1; day <= daysInMonth; day++) cells.push(new Date(year, month, day));
+    for (let day = 1; day <= daysInMonth; day++)
+      cells.push(new Date(year, month, day));
     return cells;
   }, [currentMonth]);
 
@@ -397,6 +351,26 @@ export default function ShiftsPage() {
   }, [shifts]);
 
   const anyShifts = (shifts || []).length > 0;
+
+  // ASSIGNMENTS helpers ------------------------------------------
+  function getAssignmentsForUnit(unitName) {
+    if (!unitName) return [];
+    return (assignments || []).filter((a) => a.unit === unitName);
+  }
+
+  const selectedStaff = useMemo(() => {
+    const id = Number(form.staffId);
+    if (!id) return null;
+    return staffById[id] || null;
+  }, [form.staffId, staffById]);
+
+  const isSelectedCNA =
+    String(selectedStaff?.role || "").toUpperCase() === "CNA";
+
+  const unitAssignmentsForForm = useMemo(
+    () => getAssignmentsForUnit(form.unit),
+    [form.unit, assignments]
+  );
 
   // ADD / EDIT MODAL HELPERS -------------------------------------
   function openAddModal(date) {
@@ -449,12 +423,18 @@ export default function ShiftsPage() {
         return;
       }
 
+      const isCNA = String(worker.role || "").toUpperCase() === "CNA";
+      if (isCNA && !form.assignmentNumber) {
+        alert("CNA shifts require an assignment.");
+        return;
+      }
+
       const payload = {
         staff_id: worker.id,
         shift_date: form.date,
         unit: form.unit,
         shiftType: form.shiftType,
-        assignment_number: form.assignmentNumber ? Number(form.assignmentNumber) : null,
+        assignment_number: isCNA ? Number(form.assignmentNumber) : null,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       };
 
@@ -475,9 +455,16 @@ export default function ShiftsPage() {
         alert("Please fill all required fields.");
         return;
       }
+
       const worker = staff.find((s) => s.id === Number(form.staffId));
       if (!worker) {
         alert("Invalid staff selection.");
+        return;
+      }
+
+      const isCNA = String(worker.role || "").toUpperCase() === "CNA";
+      if (isCNA && !form.assignmentNumber) {
+        alert("CNA shifts require an assignment.");
         return;
       }
 
@@ -486,12 +473,16 @@ export default function ShiftsPage() {
         shift_date: form.date,
         unit: form.unit,
         shiftType: form.shiftType,
-        assignment_number: form.assignmentNumber ? Number(form.assignmentNumber) : null,
-        timezone: editingShift.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+        assignment_number: isCNA ? Number(form.assignmentNumber) : null,
+        timezone:
+          editingShift.timezone ||
+          Intl.DateTimeFormat().resolvedOptions().timeZone,
       };
 
       const updated = await api.put(`/shifts/${editingShift.id}`, payload);
-      setShifts((prev) => prev.map((s) => (s.id === editingShift.id ? updated : s)));
+      setShifts((prev) =>
+        prev.map((s) => (s.id === editingShift.id ? updated : s))
+      );
       closeAllModals();
     } catch (err) {
       console.error("EDIT SHIFT ERROR:", err);
@@ -499,15 +490,49 @@ export default function ShiftsPage() {
     }
   }
 
+  async function handleDeleteShift() {
+    if (!editingShift?.id) return;
+    const ok = window.confirm("Delete this shift?");
+    if (!ok) return;
+
+    try {
+      await api.delete(`/shifts/${editingShift.id}`);
+      setShifts((prev) => prev.filter((s) => s.id !== editingShift.id));
+      closeAllModals();
+    } catch (err) {
+      console.error("DELETE SHIFT ERROR:", err);
+      alert(err?.message || "Error deleting shift.");
+    }
+  }
+
   // TEMPLATE SYSTEM (v3) -----------------------------------------
+  const [templates, setTemplates] = useState(() => {
+    try {
+      if (typeof window === "undefined") return [];
+      const stored = window.localStorage.getItem("shift_templates_v3");
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [activeTemplateId, setActiveTemplateId] = useState(null);
+  const [templateName, setTemplateName] = useState("");
+  const [templateGrid, setTemplateGrid] = useState({});
+  const [templateSearch, setTemplateSearch] = useState("");
+  const [templateRoleFilter, setTemplateRoleFilter] = useState("All");
+  const [templateWeekStart, setTemplateWeekStart] = useState("");
+  const [templateWeeksCount, setTemplateWeeksCount] = useState(1);
+
   useEffect(() => {
     try {
       if (typeof window !== "undefined") {
-        window.localStorage.setItem("shift_templates_v3", JSON.stringify(templates));
+        window.localStorage.setItem(
+          "shift_templates_v3",
+          JSON.stringify(templates)
+        );
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
   }, [templates]);
 
   function buildEmptyGridFromStaff() {
@@ -564,19 +589,22 @@ export default function ShiftsPage() {
 
   function updateTemplateCell(staffId, updater) {
     setTemplateGrid((prev) => {
-      const existing = prev[staffId] || {
-        staffId,
-        unit: "",
-        assignmentNumber: "",
-        days: Array.from({ length: 7 }, () => ({
-          active: false,
-          shiftType: "Day",
-        })),
-      };
+      const existing =
+        prev[staffId] || {
+          staffId,
+          unit: "",
+          assignmentNumber: "",
+          days: Array.from({ length: 7 }, () => ({
+            active: false,
+            shiftType: "Day",
+          })),
+        };
       return {
         ...prev,
         [staffId]:
-          typeof updater === "function" ? updater(existing) : { ...existing, ...updater },
+          typeof updater === "function"
+            ? updater(existing)
+            : { ...existing, ...updater },
       };
     });
   }
@@ -663,12 +691,17 @@ export default function ShiftsPage() {
     if (activeTemplateId) {
       setTemplates((prev) =>
         prev.map((t) =>
-          t.id === activeTemplateId ? { ...t, name: templateName.trim(), patterns } : t
+          t.id === activeTemplateId
+            ? { ...t, name: templateName.trim(), patterns }
+            : t
         )
       );
     } else {
       const newId = Date.now();
-      setTemplates((prev) => [...prev, { id: newId, name: templateName.trim(), patterns }]);
+      setTemplates((prev) => [
+        ...prev,
+        { id: newId, name: templateName.trim(), patterns },
+      ]);
       setActiveTemplateId(newId);
     }
 
@@ -690,7 +723,9 @@ export default function ShiftsPage() {
       alert("Please choose a week start date.");
       return;
     }
-    const tmpl = activeTemplateId ? templates.find((t) => t.id === activeTemplateId) : null;
+    const tmpl = activeTemplateId
+      ? templates.find((t) => t.id === activeTemplateId)
+      : null;
 
     if (!tmpl) {
       alert("No template selected. Save and select a template first.");
@@ -714,14 +749,17 @@ export default function ShiftsPage() {
           dayDate.setDate(baseDate.getDate() + w * 7 + idx);
           const ymd = toYMD(dayDate);
 
-          const isCNA = worker.role === "CNA";
+          const isCNA = String(worker.role || "").toUpperCase() === "CNA";
 
           payloads.push({
             staff_id: worker.id,
             shift_date: ymd,
             unit: pattern.unit || "",
             shiftType: day.shiftType || "Day",
-            assignment_number: isCNA && pattern.assignmentNumber ? Number(pattern.assignmentNumber) : null,
+            assignment_number:
+              isCNA && pattern.assignmentNumber
+                ? Number(pattern.assignmentNumber)
+                : null,
             timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           });
         }
@@ -747,27 +785,310 @@ export default function ShiftsPage() {
     }
   }
 
-  // TEMPLATE VIEW HELPERS ----------------------------------------
   const templateFilteredStaff = useMemo(() => {
     return (staff || []).filter((s) => {
-      if (templateSearch && !s.name.toLowerCase().includes(templateSearch.toLowerCase())) {
+      if (
+        templateSearch &&
+        !s.name.toLowerCase().includes(templateSearch.toLowerCase())
+      ) {
         return false;
       }
-      if (templateRoleFilter !== "All" && s.role && s.role !== templateRoleFilter) {
+      if (
+        templateRoleFilter !== "All" &&
+        s.role &&
+        s.role !== templateRoleFilter
+      ) {
         return false;
       }
       return true;
     });
   }, [staff, templateSearch, templateRoleFilter]);
 
-  function getAssignmentsForUnit(unitName) {
+  // ==============================================================
+  // PRINT WHOLE MONTH (5 PAGES) — NO POPUPS
+  // Pages:
+  // 1) Day Nurses (RN/LPN)
+  // 2) Night Nurses (RN/LPN)
+  // 3) Day CNAs
+  // 4) Evening CNAs
+  // 5) Night CNAs
+  // ==============================================================
+
+  function buildMonthlyPrintHTML(year, monthIndex) {
+    const monthTitle = new Date(year, monthIndex, 1).toLocaleDateString(
+      "en-US",
+      {
+        month: "long",
+        year: "numeric",
+      }
+    );
+
+    const orgTitle = orgName || "Schedule";
+    const printedAt = new Date().toLocaleString();
+
+    // Collect entries for the month
+    const dayNurses = [];
+    const nightNurses = [];
+    const dayCNAs = [];
+    const eveCNAs = [];
+    const nightCNAs = [];
+
+    (shifts || []).forEach((shift) => {
+      if (!shift?.shift_date) return;
+
+      const d = new Date(shift.shift_date + "T00:00:00");
+      if (isNaN(d.getTime())) return;
+      if (d.getFullYear() !== year || d.getMonth() !== monthIndex) return;
+
+      const worker = staffById[shift.staff_id];
+      const role = String(worker?.role || shift.role || "").toUpperCase();
+      const name = worker?.name || `Staff #${shift.staff_id}`;
+      const unit = shift.unit || "";
+      const assignment = shift.assignment_number
+        ? String(shift.assignment_number)
+        : "";
+
+      const st = getShiftTypeForShift(shift, role); // Day / Evening / Night
+      const shiftType =
+        st === "Evening" ? "Evening" : st === "Night" ? "Night" : "Day";
+
+      const row = {
+        date: shift.shift_date,
+        datePretty: formatPrettyDate(shift.shift_date),
+        name,
+        unit,
+        assignment,
+        role,
+        shiftType,
+      };
+
+      const isNurse = role === "RN" || role === "LPN";
+      const isCNA = role === "CNA";
+
+      if (isNurse) {
+        if (shiftType === "Night") nightNurses.push(row);
+        else dayNurses.push(row); // everything not Night -> Day page
+      } else if (isCNA) {
+        if (shiftType === "Night") nightCNAs.push(row);
+        else if (shiftType === "Evening") eveCNAs.push(row);
+        else dayCNAs.push(row);
+      }
+    });
+
+    // Sort: date then name
+    function sortRows(arr) {
+      return arr.sort((a, b) => {
+        if (a.date !== b.date) return String(a.date).localeCompare(String(b.date));
+        return String(a.name).localeCompare(String(b.name));
+      });
+    }
+
+    sortRows(dayNurses);
+    sortRows(nightNurses);
+    sortRows(dayCNAs);
+    sortRows(eveCNAs);
+    sortRows(nightCNAs);
+
+    // Group rows by date so we can add date header rows
+    function groupByDate(rows) {
+      const map = {};
+      (rows || []).forEach((r) => {
+        if (!map[r.date]) map[r.date] = [];
+        map[r.date].push(r);
+      });
+      const orderedDates = Object.keys(map).sort((a, b) =>
+        String(a).localeCompare(String(b))
+      );
+      return { map, orderedDates };
+    }
+
+    const renderTable = (rows, showAssignment) => {
+      if (!rows.length) {
+        return `<div class="empty">No shifts scheduled.</div>`;
+      }
+
+      const { map, orderedDates } = groupByDate(rows);
+
+      const colCount = showAssignment ? 4 : 3;
+
+      const body = orderedDates
+        .map((dateKey) => {
+          const dateLabel = formatPrettyDate(dateKey);
+
+          const dateHeader = `
+            <tr class="dateRow">
+              <td colspan="${colCount}">${escapeHtml(dateLabel)}</td>
+            </tr>
+          `;
+
+          const lines = (map[dateKey] || [])
+            .map(
+              (r) => `
+              <tr>
+                <td class="col-date">${escapeHtml(r.datePretty)}</td>
+                <td>${escapeHtml(r.name)}</td>
+                <td class="col-unit">${escapeHtml(r.unit || "—")}</td>
+                ${
+                  showAssignment
+                    ? `<td class="col-asg">${escapeHtml(
+                        r.assignment || "—"
+                      )}</td>`
+                    : ``
+                }
+              </tr>
+            `
+            )
+            .join("");
+
+          return dateHeader + lines;
+        })
+        .join("");
+
+      return `
+        <table>
+          <thead>
+            <tr>
+              <th class="col-date">Date</th>
+              <th>Name</th>
+              <th class="col-unit">Unit</th>
+              ${showAssignment ? `<th class="col-asg">Assignment</th>` : ``}
+            </tr>
+          </thead>
+          <tbody>
+            ${body}
+          </tbody>
+        </table>
+      `;
+    };
+
+    return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(orgTitle)} • ${escapeHtml(monthTitle)}</title>
+  <style>
+    @page { size: portrait; margin: 12mm; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color:#111; }
+    .topbar { display:flex; justify-content:space-between; align-items:flex-end; margin-bottom:10px; }
+    .org { font-size:20px; font-weight:900; }
+    .sub { font-size:12px; color:#444; font-weight:700; }
+    h2 { margin: 10px 0 8px; font-size:16px; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { border:1px solid #d1d5db; padding:6px; font-size:12px; vertical-align:top; }
+    th { background:#f3f4f6; text-transform:uppercase; letter-spacing:0.06em; font-size:11px; }
+    .col-date { width: 34%; font-weight:800; }
+    .col-unit { width: 22%; }
+    .col-asg { width: 18%; }
+
+    .dateRow td {
+      background: #111827;
+      color: #fff;
+      font-weight: 900;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      font-size: 11px;
+      padding: 8px 6px;
+    }
+
+    .page { page-break-before: always; }
+    .page:first-of-type { page-break-before: auto; }
+    .empty { padding: 10px; border: 1px dashed #9ca3af; color:#374151; font-weight:700; }
+    .tiny { margin-top:10px; font-size:10px; color:#6b7280; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div>
+      <div class="org">${escapeHtml(orgTitle)}</div>
+      <div class="sub">${escapeHtml(monthTitle)} • Monthly Schedule</div>
+    </div>
+    <div class="sub">Printed: ${escapeHtml(printedAt)}</div>
+  </div>
+
+  <div class="page">
+    <h2>Day Nurses (RN/LPN)</h2>
+    ${renderTable(dayNurses, false)}
+  </div>
+
+  <div class="page">
+    <h2>Night Nurses (RN/LPN)</h2>
+    ${renderTable(nightNurses, false)}
+  </div>
+
+  <div class="page">
+    <h2>Day CNAs</h2>
+    ${renderTable(dayCNAs, true)}
+  </div>
+
+  <div class="page">
+    <h2>Evening CNAs</h2>
+    ${renderTable(eveCNAs, true)}
+  </div>
+
+  <div class="page">
+    <h2>Night CNAs</h2>
+    ${renderTable(nightCNAs, true)}
+  </div>
+
+  <div class="tiny">
+    ShiftCensus • Do not include patient identifiers on posted schedules.
+  </div>
+
+  <script>
+    window.onload = () => setTimeout(() => { window.focus(); window.print(); }, 60);
+  </script>
+</body>
+</html>`;
+  }
+
+  function printMonth() {
+    const year = currentMonth.getFullYear();
+    const monthIndex = currentMonth.getMonth();
+    const html = buildMonthlyPrintHTML(year, monthIndex);
+
+    // ✅ NO POPUP: hidden iframe printing
+    const iframe = document.createElement("iframe");
+    iframe.style.position = "fixed";
+    iframe.style.right = "0";
+    iframe.style.bottom = "0";
+    iframe.style.width = "0";
+    iframe.style.height = "0";
+    iframe.style.border = "0";
+    iframe.setAttribute("aria-hidden", "true");
+
+    iframe.srcdoc = html;
+
+    iframe.onload = () => {
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } catch (e) {
+        console.error("Print failed:", e);
+        alert("Print failed. Check browser permissions.");
+      } finally {
+        setTimeout(() => {
+          try {
+            document.body.removeChild(iframe);
+          } catch {}
+        }, 1000);
+      }
+    };
+
+    document.body.appendChild(iframe);
+  }
+
+  // ==============================================================
+  // TEMPLATE VIEW HELPERS
+  // ==============================================================
+  function getAssignmentsForUnitLocal(unitName) {
     return (assignments || []).filter((a) => a.unit === unitName);
   }
 
   // RENDER --------------------------------------------------------
-  const bgColor = isDark ? "#050509" : "#f3f4f6";
-  const textColor = isDark ? "#ffffff" : "#111827";
-  const calendarCellBg = isDark ? "rgba(255,255,255,0.03)" : "rgba(255,255,255,0.7)";
+  const isDark = true;
+  const bgColor = "#050509";
+  const textColor = "#ffffff";
+  const calendarCellBg = "rgba(255,255,255,0.03)";
 
   return (
     <div
@@ -787,8 +1108,8 @@ export default function ShiftsPage() {
             marginBottom: 14,
             padding: "10px 12px",
             borderRadius: 10,
-            background: isDark ? "rgba(245,158,11,0.12)" : "rgba(245,158,11,0.18)",
-            border: isDark ? "1px solid rgba(245,158,11,0.35)" : "1px solid rgba(245,158,11,0.35)",
+            background: "rgba(245,158,11,0.12)",
+            border: "1px solid rgba(245,158,11,0.35)",
             color: textColor,
             fontWeight: 700,
           }}
@@ -797,14 +1118,14 @@ export default function ShiftsPage() {
         </div>
       )}
 
-      {/* ERROR BANNER (non-blocking) */}
+      {/* ERROR BANNER */}
       {!!lastLoadError && !orgNotReady && (
         <div
           style={{
             marginBottom: 14,
             padding: "10px 12px",
             borderRadius: 10,
-            background: isDark ? "rgba(239,68,68,0.12)" : "rgba(239,68,68,0.14)",
+            background: "rgba(239,68,68,0.12)",
             border: "1px solid rgba(239,68,68,0.35)",
             color: textColor,
             fontWeight: 700,
@@ -814,48 +1135,36 @@ export default function ShiftsPage() {
           }}
         >
           <span>Load error: {lastLoadError}</span>
-          <button
-            onClick={() => loadPage()}
-            style={{
-              padding: "6px 10px",
-              borderRadius: 999,
-              border: "1px solid rgba(255,255,255,0.15)",
-              background: isDark ? "rgba(0,0,0,0.35)" : "rgba(255,255,255,0.7)",
-              color: textColor,
-              cursor: "pointer",
-              fontWeight: 800,
-              fontSize: 12,
-              whiteSpace: "nowrap",
-            }}
-          >
+          <button onClick={() => loadPage()} style={navButtonStyle}>
             Retry
           </button>
         </div>
       )}
 
-      {/* THEME TOGGLE */}
+      {/* PRINT BUTTON (NO POPUPS) */}
       <button
-        onClick={() => setTheme(isDark ? "light" : "dark")}
+        onClick={printMonth}
         style={{
           position: "fixed",
           top: "90px",
           right: "28px",
           zIndex: 40,
-          padding: "6px 14px",
+          padding: "8px 14px",
           borderRadius: "999px",
-          border: "none",
-          background: isDark ? "#f9fafb" : "#111827",
-          color: isDark ? "#111827" : "#f9fafb",
-          boxShadow: "0 6px 18px rgba(0,0,0,0.3)",
+          border: "1px solid rgba(255,255,255,0.18)",
+          background: "rgba(0,0,0,0.55)",
+          color: "#fff",
+          boxShadow: "0 6px 18px rgba(0,0,0,0.35)",
           cursor: "pointer",
           fontSize: "12px",
+          fontWeight: 800,
           display: "flex",
           alignItems: "center",
-          gap: "6px",
+          gap: "8px",
         }}
+        title="Print the current month"
       >
-        <span>{isDark ? "Light mode" : "Dark mode"}</span>
-        <span>{isDark ? "☀️" : "🌙"}</span>
+        🖨 Print
       </button>
 
       <div style={{ marginBottom: "16px" }}>
@@ -873,9 +1182,9 @@ export default function ShiftsPage() {
         ) : (
           <h1 style={{ fontSize: "28px" }}>{orgName || "Shifts"}</h1>
         )}
-        {/* helpful debug line (remove later) */}
         <div style={{ fontSize: 12, opacity: 0.6 }}>
-          Org: {orgCode || "—"} {orgId ? `(${String(orgId).slice(0, 8)}…)` : ""}
+          Org: {orgCode || "—"}{" "}
+          {orgId ? `(${String(orgId).slice(0, 8)}…)` : ""}
         </div>
       </div>
 
@@ -899,16 +1208,22 @@ export default function ShiftsPage() {
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <button
             onClick={() =>
-              setCurrentMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))
+              setCurrentMonth(
+                (prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1)
+              )
             }
             style={navButtonStyle}
           >
             ◀
           </button>
-          <div style={{ fontSize: "18px", fontWeight: 600 }}>{formatMonthTitle(currentMonth)}</div>
+          <div style={{ fontSize: "18px", fontWeight: 600 }}>
+            {formatMonthTitle(currentMonth)}
+          </div>
           <button
             onClick={() =>
-              setCurrentMonth((prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))
+              setCurrentMonth(
+                (prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1)
+              )
             }
             style={navButtonStyle}
           >
@@ -924,9 +1239,9 @@ export default function ShiftsPage() {
           onChange={(e) => setSearchTerm(e.target.value)}
           style={{
             ...inputStyle,
-            background: isDark ? "rgba(0,0,0,0.5)" : "#ffffff",
+            background: "rgba(0,0,0,0.5)",
             color: textColor,
-            borderColor: isDark ? "rgba(255,255,255,0.15)" : "rgba(17,24,39,0.2)",
+            borderColor: "rgba(255,255,255,0.15)",
           }}
         />
 
@@ -936,9 +1251,9 @@ export default function ShiftsPage() {
           onChange={(e) => setFilterRole(e.target.value)}
           style={{
             ...selectStyle,
-            background: isDark ? "rgba(0,0,0,0.5)" : "#ffffff",
+            background: "rgba(0,0,0,0.5)",
             color: textColor,
-            borderColor: isDark ? "rgba(255,255,255,0.15)" : "rgba(17,24,39,0.2)",
+            borderColor: "rgba(255,255,255,0.15)",
           }}
         >
           <option value="All">All Roles</option>
@@ -955,9 +1270,9 @@ export default function ShiftsPage() {
           onChange={(e) => setFilterUnit(e.target.value)}
           style={{
             ...selectStyle,
-            background: isDark ? "rgba(0,0,0,0.5)" : "#ffffff",
+            background: "rgba(0,0,0,0.5)",
             color: textColor,
-            borderColor: isDark ? "rgba(255,255,255,0.15)" : "rgba(17,24,39,0.2)",
+            borderColor: "rgba(255,255,255,0.15)",
           }}
         >
           <option value="All">All Units</option>
@@ -974,9 +1289,9 @@ export default function ShiftsPage() {
           onChange={(e) => setFilterShiftType(e.target.value)}
           style={{
             ...selectStyle,
-            background: isDark ? "rgba(0,0,0,0.5)" : "#ffffff",
+            background: "rgba(0,0,0,0.5)",
             color: textColor,
-            borderColor: isDark ? "rgba(255,255,255,0.15)" : "rgba(17,24,39,0.2)",
+            borderColor: "rgba(255,255,255,0.15)",
           }}
         >
           <option value="All">All Shift Types</option>
@@ -997,7 +1312,6 @@ export default function ShiftsPage() {
         </button>
       </div>
 
-      {/* --- everything below this point is your existing UI unchanged --- */}
       {/* WEEKDAY HEADERS */}
       <div
         style={{
@@ -1056,9 +1370,7 @@ export default function ShiftsPage() {
                 background: calendarCellBg,
                 border: isToday
                   ? "1px solid rgba(59,130,246,0.9)"
-                  : isDark
-                  ? "1px solid rgba(255,255,255,0.08)"
-                  : "1px solid rgba(17,24,39,0.12)",
+                  : "1px solid rgba(255,255,255,0.08)",
                 display: "flex",
                 flexDirection: "column",
                 fontSize: "12px",
@@ -1074,7 +1386,9 @@ export default function ShiftsPage() {
                   alignItems: "center",
                 }}
               >
-                <span style={{ fontWeight: 600, fontSize: "13px" }}>{date.getDate()}</span>
+                <span style={{ fontWeight: 600, fontSize: "13px" }}>
+                  {date.getDate()}
+                </span>
                 {dayShifts.length > 0 && (
                   <span style={{ fontSize: "10px", opacity: 0.7 }}>
                     {dayShifts.length} shift{dayShifts.length !== 1 ? "s" : ""}
@@ -1095,9 +1409,11 @@ export default function ShiftsPage() {
                 {dayShifts.map((shift) => {
                   const worker = staffById[shift.staff_id];
                   const role = worker?.role || shift.role || "STAFF";
-                  const shiftType = getShiftTypeForShift(shift, role);
-                  const roleColor = roleColors[role] || "#777";
+                  const roleUpper = String(role).toUpperCase();
+                  const shiftType = getShiftTypeForShift(shift, roleUpper);
+                  const roleColor = roleColors[roleUpper] || "#777";
 
+                  // --- OT badges (restored) ---
                   let showOTBadge = false;
                   let showApproachingBadge = false;
 
@@ -1128,11 +1444,9 @@ export default function ShiftsPage() {
                       running += hrs;
 
                       if (s.id === shift.id) {
-                        if (before < 40 && running > 40) {
-                          showOTBadge = true;
-                        } else if (before < 36 && running >= 36 && running <= 40) {
+                        if (before < 40 && running > 40) showOTBadge = true;
+                        else if (before < 36 && running >= 36 && running <= 40)
                           showApproachingBadge = true;
-                        }
                         break;
                       }
                     }
@@ -1148,7 +1462,7 @@ export default function ShiftsPage() {
                       style={{
                         borderRadius: "6px",
                         padding: "4px 6px",
-                        background: isDark ? "rgba(0,0,0,0.6)" : "rgba(15,23,42,0.08)",
+                        background: "rgba(0,0,0,0.6)",
                         borderLeft: `4px solid ${roleColor}`,
                         fontSize: "11px",
                       }}
@@ -1163,11 +1477,13 @@ export default function ShiftsPage() {
                         <span style={{ fontWeight: 600 }}>
                           {worker?.name || `Staff #${shift.staff_id}`}
                         </span>
-                        <span style={{ fontSize: "10px", opacity: 0.8 }}>{shiftType}</span>
+                        <span style={{ fontSize: "10px", opacity: 0.8 }}>
+                          {shiftType}
+                        </span>
                       </div>
 
                       <div style={{ fontSize: "10px", opacity: 0.85 }}>
-                        {role} • {shift.unit || "No unit"}
+                        {roleUpper} • {shift.unit || "No unit"}
                       </div>
 
                       {shift.assignment_number && (
@@ -1183,7 +1499,13 @@ export default function ShiftsPage() {
                       )}
 
                       {(showOTBadge || showApproachingBadge) && (
-                        <div style={{ marginTop: "4px", display: "flex", justifyContent: "flex-end" }}>
+                        <div
+                          style={{
+                            marginTop: "4px",
+                            display: "flex",
+                            justifyContent: "flex-end",
+                          }}
+                        >
                           {showOTBadge && (
                             <span
                               style={{
@@ -1225,31 +1547,6 @@ export default function ShiftsPage() {
         })}
       </div>
 
-      {/* FLOATING ADD BUTTON */}
-      <button
-        onClick={() => openAddModal(null)}
-        style={{
-          position: "fixed",
-          right: "28px",
-          bottom: "28px",
-          width: "52px",
-          height: "52px",
-          borderRadius: "999px",
-          border: "none",
-          background: "#ef4444",
-          color: "#ffffff",
-          fontSize: "26px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          boxShadow: "0 10px 25px rgba(0,0,0,0.45)",
-          cursor: "pointer",
-          zIndex: 30,
-        }}
-      >
-        +
-      </button>
-
       {/* ADD / EDIT MODALS */}
       {(addModalOpen || editModalOpen) && (
         <Modal onClose={closeAllModals}>
@@ -1257,12 +1554,25 @@ export default function ShiftsPage() {
             {editModalOpen ? "Edit Shift" : "Add Shift"}
           </h2>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginBottom: "12px" }}>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "10px",
+              marginBottom: "12px",
+            }}
+          >
             <label style={labelStyle}>
               <span>Staff member</span>
               <select
                 value={form.staffId}
-                onChange={(e) => setForm((f) => ({ ...f, staffId: e.target.value }))}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    staffId: e.target.value,
+                    assignmentNumber: "",
+                  }))
+                }
                 style={fieldSelectStyle}
               >
                 <option value="">Select staff…</option>
@@ -1279,7 +1589,9 @@ export default function ShiftsPage() {
               <input
                 type="date"
                 value={form.date}
-                onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, date: e.target.value }))
+                }
                 style={fieldInputStyle}
               />
             </label>
@@ -1288,7 +1600,13 @@ export default function ShiftsPage() {
               <span>Unit</span>
               <select
                 value={form.unit}
-                onChange={(e) => setForm((f) => ({ ...f, unit: e.target.value }))}
+                onChange={(e) =>
+                  setForm((f) => ({
+                    ...f,
+                    unit: e.target.value,
+                    assignmentNumber: "",
+                  }))
+                }
                 style={fieldSelectStyle}
               >
                 <option value="">Select unit…</option>
@@ -1300,11 +1618,38 @@ export default function ShiftsPage() {
               </select>
             </label>
 
+            {/* CNA Assignment */}
+            {isSelectedCNA && (
+              <label style={labelStyle}>
+                <span>Assignment (required for CNA)</span>
+                <select
+                  value={form.assignmentNumber}
+                  onChange={(e) =>
+                    setForm((f) => ({ ...f, assignmentNumber: e.target.value }))
+                  }
+                  style={fieldSelectStyle}
+                  disabled={!form.unit}
+                >
+                  <option value="">
+                    {form.unit ? "Select assignment…" : "Select a unit first…"}
+                  </option>
+                  {unitAssignmentsForForm.map((a) => (
+                    <option key={a.id} value={a.number}>
+                      #{a.number}
+                      {a.label ? ` – ${a.label}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+
             <label style={labelStyle}>
               <span>Shift type</span>
               <select
                 value={form.shiftType}
-                onChange={(e) => setForm((f) => ({ ...f, shiftType: e.target.value }))}
+                onChange={(e) =>
+                  setForm((f) => ({ ...f, shiftType: e.target.value }))
+                }
                 style={fieldSelectStyle}
               >
                 <option value="">Select a shift type…</option>
@@ -1313,29 +1658,38 @@ export default function ShiftsPage() {
                 <option value="Night">Night</option>
               </select>
             </label>
-
-            <label style={labelStyle}>
-              <span>Assignment # (optional)</span>
-              <input
-                type="number"
-                min="1"
-                value={form.assignmentNumber}
-                onChange={(e) => setForm((f) => ({ ...f, assignmentNumber: e.target.value }))}
-                style={fieldInputStyle}
-              />
-            </label>
           </div>
 
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "4px" }}>
-            <button onClick={closeAllModals} style={secondaryButtonStyle}>
-              Cancel
-            </button>
-            <button
-              onClick={editModalOpen ? handleSubmitEditShift : handleSubmitNewShift}
-              style={primaryButtonStyle}
-            >
-              {editModalOpen ? "Save changes" : "Create shift"}
-            </button>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: "8px",
+              marginTop: "4px",
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              {editModalOpen && (
+                <button onClick={handleDeleteShift} style={dangerButtonStyle}>
+                  Delete shift
+                </button>
+              )}
+            </div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+              <button onClick={closeAllModals} style={secondaryButtonStyle}>
+                Cancel
+              </button>
+              <button
+                onClick={
+                  editModalOpen ? handleSubmitEditShift : handleSubmitNewShift
+                }
+                style={primaryButtonStyle}
+              >
+                {editModalOpen ? "Save changes" : "Create shift"}
+              </button>
+            </div>
           </div>
         </Modal>
       )}
@@ -1343,13 +1697,25 @@ export default function ShiftsPage() {
       {/* TEMPLATE MODAL */}
       {templateModalOpen && (
         <Modal onClose={closeAllModals}>
-          <h2 style={{ marginBottom: "10px", fontSize: "18px" }}>Weekly Staffing Template</h2>
+          <h2 style={{ marginBottom: "10px", fontSize: "18px" }}>
+            Weekly Staffing Template
+          </h2>
 
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "12px", alignItems: "center" }}>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "8px",
+              marginBottom: "12px",
+              alignItems: "center",
+            }}
+          >
             <select
               value={activeTemplateId || ""}
               onChange={(e) =>
-                e.target.value ? handleSelectTemplate(Number(e.target.value)) : handleNewTemplate()
+                e.target.value
+                  ? handleSelectTemplate(Number(e.target.value))
+                  : handleNewTemplate()
               }
               style={fieldSelectStyle}
             >
@@ -1374,13 +1740,24 @@ export default function ShiftsPage() {
             </button>
 
             {activeTemplateId && (
-              <button onClick={handleDeleteTemplate} style={smallDangerButtonStyle}>
+              <button
+                onClick={handleDeleteTemplate}
+                style={smallDangerButtonStyle}
+              >
                 Delete
               </button>
             )}
           </div>
 
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "12px", alignItems: "center" }}>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "8px",
+              marginBottom: "12px",
+              alignItems: "center",
+            }}
+          >
             <label style={{ ...labelStyle, maxWidth: "200px" }}>
               <span>Week start (Sunday)</span>
               <input
@@ -1398,17 +1775,30 @@ export default function ShiftsPage() {
                 min="1"
                 max="12"
                 value={templateWeeksCount}
-                onChange={(e) => setTemplateWeeksCount(Number(e.target.value) || 1)}
+                onChange={(e) =>
+                  setTemplateWeeksCount(Number(e.target.value) || 1)
+                }
                 style={fieldInputStyle}
               />
             </label>
 
-            <button onClick={handleApplyTemplate} style={{ ...primaryButtonStyle, marginTop: "16px" }}>
+            <button
+              onClick={handleApplyTemplate}
+              style={{ ...primaryButtonStyle, marginTop: "16px" }}
+            >
               Apply to calendar
             </button>
           </div>
 
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "10px", alignItems: "center" }}>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "8px",
+              marginBottom: "10px",
+              alignItems: "center",
+            }}
+          >
             <input
               type="text"
               placeholder="Filter by staff name…"
@@ -1480,7 +1870,7 @@ export default function ShiftsPage() {
                   })),
                 };
 
-              const unitAssignments = getAssignmentsForUnit(row.unit);
+              const unitAssignments = getAssignmentsForUnitLocal(row.unit);
 
               return (
                 <div
@@ -1504,7 +1894,9 @@ export default function ShiftsPage() {
                   <div>
                     <select
                       value={row.unit}
-                      onChange={(e) => handleChangeUnitForStaff(s.id, e.target.value)}
+                      onChange={(e) =>
+                        handleChangeUnitForStaff(s.id, e.target.value)
+                      }
                       style={{ ...fieldSelectStyle, fontSize: "11px" }}
                     >
                       <option value="">Unit…</option>
@@ -1517,10 +1909,12 @@ export default function ShiftsPage() {
                   </div>
 
                   <div>
-                    {s.role === "CNA" ? (
+                    {String(s.role || "").toUpperCase() === "CNA" ? (
                       <select
                         value={row.assignmentNumber || ""}
-                        onChange={(e) => handleChangeAssignmentForStaff(s.id, e.target.value)}
+                        onChange={(e) =>
+                          handleChangeAssignmentForStaff(s.id, e.target.value)
+                        }
                         style={{ ...fieldSelectStyle, fontSize: "11px" }}
                       >
                         <option value="">Assignment…</option>
@@ -1532,7 +1926,9 @@ export default function ShiftsPage() {
                         ))}
                       </select>
                     ) : (
-                      <span style={{ fontSize: "11px", opacity: 0.7 }}>Whole unit</span>
+                      <span style={{ fontSize: "11px", opacity: 0.7 }}>
+                        Whole unit
+                      </span>
                     )}
                   </div>
 
@@ -1550,7 +1946,11 @@ export default function ShiftsPage() {
                         type="checkbox"
                         checked={day.active}
                         onChange={() => handleToggleDay(s.id, idx)}
-                        style={{ width: "14px", height: "14px", cursor: "pointer" }}
+                        style={{
+                          width: "14px",
+                          height: "14px",
+                          cursor: "pointer",
+                        }}
                       />
 
                       {day.active && (
@@ -1577,8 +1977,14 @@ export default function ShiftsPage() {
                                 type="radio"
                                 name={`st-${s.id}-${idx}`}
                                 checked={day.shiftType === st}
-                                onChange={() => handleSetDayShiftType(s.id, idx, st)}
-                                style={{ width: "10px", height: "10px", cursor: "pointer" }}
+                                onChange={() =>
+                                  handleSetDayShiftType(s.id, idx, st)
+                                }
+                                style={{
+                                  width: "10px",
+                                  height: "10px",
+                                  cursor: "pointer",
+                                }}
                               />
                               <span>{st[0]}</span>
                             </label>
@@ -1592,7 +1998,13 @@ export default function ShiftsPage() {
             })}
           </div>
 
-          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "14px" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              marginTop: "14px",
+            }}
+          >
             <button onClick={closeAllModals} style={secondaryButtonStyle}>
               Close
             </button>
@@ -1719,4 +2131,15 @@ const smallDangerButtonStyle = {
   color: "#fef2f2",
   cursor: "pointer",
   fontSize: "12px",
+};
+
+const dangerButtonStyle = {
+  padding: "6px 12px",
+  borderRadius: "999px",
+  border: "none",
+  background: "#ef4444",
+  color: "#fff",
+  cursor: "pointer",
+  fontSize: "13px",
+  fontWeight: 800,
 };

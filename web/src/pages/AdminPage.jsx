@@ -3,11 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import api from "../services/api";
 import { useUser } from "../contexts/UserContext";
+import OrgSwitcher from "../components/OrgSwitcher";
 
 const SHIFT_TYPES = ["Day", "Evening", "Night"];
 
 export default function AdminPage() {
-  const { orgName, orgLogo, role } = useUser();
+  const { orgName, orgId, orgCode, role, switchOrg } = useUser();
 
   const [activeTab, setActiveTab] = useState(() => {
     if (typeof window === "undefined") return "staff";
@@ -22,6 +23,26 @@ export default function AdminPage() {
 
   const [loading, setLoading] = useState(false);
 
+  // ✅ facility switcher (normal users use OrgSwitcher memberships; superadmin uses all orgs list)
+  const [orgSwitcherOpen, setOrgSwitcherOpen] = useState(false);
+  const [superOrgs, setSuperOrgs] = useState([]);
+  const [superOrgsLoading, setSuperOrgsLoading] = useState(false);
+  const isSuperAdmin = String(role || "").toLowerCase() === "superadmin";
+
+  async function loadSuperOrgs() {
+    if (!isSuperAdmin) return;
+    setSuperOrgsLoading(true);
+    try {
+      const data = await api.get("/organizations"); // assumes GET /organizations exists for superadmin
+      setSuperOrgs(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error("LOAD SUPER ORGS ERROR:", e);
+      setSuperOrgs([]);
+    } finally {
+      setSuperOrgsLoading(false);
+    }
+  }
+
   // ---------------------------
   // Core Admin Data
   // ---------------------------
@@ -33,7 +54,12 @@ export default function AdminPage() {
   const [editingUnitId, setEditingUnitId] = useState(null);
   const [editingShiftId, setEditingShiftId] = useState(null);
 
-  const [staffForm, setStaffForm] = useState({ name: "", role: "", email: "", phone: "" });
+  const [staffForm, setStaffForm] = useState({
+    name: "",
+    role: "",
+    email: "",
+    phone: "",
+  });
   const [unitForm, setUnitForm] = useState({ name: "" });
   const [shiftForm, setShiftForm] = useState({
     role: "",
@@ -43,6 +69,45 @@ export default function AdminPage() {
   });
 
   // ---------------------------
+  // SHIFT SETTINGS UI (ROLE BUBBLES)
+  // ---------------------------
+  const [selectedShiftRole, setSelectedShiftRole] = useState("ALL");
+
+  const roleOptions = useMemo(() => {
+    const set = new Set(
+      (shiftSettings || [])
+        .map((s) => String(s?.role || "").trim())
+        .filter(Boolean)
+    );
+
+    (staff || []).forEach((st) => {
+      const r = String(st?.role || "").trim();
+      if (r) set.add(r);
+    });
+
+    return Array.from(set).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
+    );
+  }, [shiftSettings, staff]);
+
+  const filteredShiftSettings = useMemo(() => {
+    if (selectedShiftRole === "ALL") return shiftSettings;
+    return (shiftSettings || []).filter(
+      (s) => String(s?.role || "").trim() === selectedShiftRole
+    );
+  }, [shiftSettings, selectedShiftRole]);
+
+  // ---------------------------
+  // STAFF ADD + CSV IMPORT
+  // ---------------------------
+  const [showAddStaff, setShowAddStaff] = useState(false);
+  const [staffAdding, setStaffAdding] = useState(false);
+
+  const [csvUploading, setCsvUploading] = useState(false);
+  const [csvError, setCsvError] = useState("");
+  const csvInputRef = useRef(null);
+
+  // ---------------------------
   // PRIVACY SETTINGS
   // ---------------------------
   const [orgSettings, setOrgSettings] = useState(null);
@@ -50,7 +115,7 @@ export default function AdminPage() {
   const [showAck, setShowAck] = useState(false);
 
   // ---------------------------
-  // ROOMS & BEDS (NEW)
+  // ROOMS & BEDS
   // ---------------------------
   const [rooms, setRooms] = useState([]);
   const [roomsLoading, setRoomsLoading] = useState(false);
@@ -68,19 +133,36 @@ export default function AdminPage() {
 
   const dragBedIdRef = useRef(null);
 
-  const canManagePrivacy = ["superadmin", "admin", "don", "ed"].includes(String(role || "").toLowerCase());
-  const canManageFacility = ["superadmin", "admin", "don", "ed"].includes(String(role || "").toLowerCase());
+  const canManagePrivacy = ["superadmin", "admin", "don", "ed"].includes(
+    String(role || "").toLowerCase()
+  );
+  const canManageFacility = ["superadmin", "admin", "don", "ed"].includes(
+    String(role || "").toLowerCase()
+  );
 
+  // ✅ IMPORTANT: reload org-scoped data whenever orgId changes
   useEffect(() => {
+    if (!orgId) return;
     loadAll();
     loadOrgSettings();
+    if (activeTab === "rooms_beds") loadRooms();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [orgId]);
+
+  // initial load for superadmin org list (for Change Facility)
+  useEffect(() => {
+    if (isSuperAdmin) loadSuperOrgs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSuperAdmin]);
 
   async function loadAll() {
     setLoading(true);
     try {
-      const [s, u, ss] = await Promise.all([api.get("/staff"), api.get("/units"), api.get("/shift-settings")]);
+      const [s, u, ss] = await Promise.all([
+        api.get("/staff"),
+        api.get("/units"),
+        api.get("/shift-settings"),
+      ]);
       setStaff(Array.isArray(s) ? s : []);
       setUnits(Array.isArray(u) ? u : []);
       setShiftSettings(Array.isArray(ss) ? ss : []);
@@ -112,20 +194,28 @@ export default function AdminPage() {
     try {
       const data = await api.get("/facility/rooms");
       const list = Array.isArray(data) ? data : [];
-
-      // Ensure stable order (backend already sorts, but keep UI safe)
       const sorted = list.slice().sort(sortByOrderThenName);
 
       setRooms(sorted);
 
-      const firstActive = sorted.find((r) => r.is_active !== false) || sorted[0] || null;
-      setSelectedRoomId((prev) => prev ?? firstActive?.id ?? null);
+      const firstActive =
+        sorted.find((r) => r.is_active !== false) || sorted[0] || null;
 
-      // IMPORTANT: backend returns beds nested on each room
-      const currentRoomId = (selectedRoomId ?? firstActive?.id) || null;
+      setSelectedRoomId((prev) => {
+        if (prev) return prev;
+        return firstActive?.id ?? null;
+      });
+
+      const currentRoomId =
+        (selectedRoomId ?? firstActive?.id) || null;
+
       if (currentRoomId) {
         const room = sorted.find((r) => r.id === currentRoomId);
-        setBeds(Array.isArray(room?.beds) ? room.beds.slice().sort(sortByOrderThenLabel) : []);
+        setBeds(
+          Array.isArray(room?.beds)
+            ? room.beds.slice().sort(sortByOrderThenLabel)
+            : []
+        );
       } else {
         setBeds([]);
       }
@@ -144,18 +234,19 @@ export default function AdminPage() {
   function syncBedsFromRooms(roomId, roomsList) {
     const list = Array.isArray(roomsList) ? roomsList : rooms;
     const room = list.find((r) => r.id === roomId);
-    const nextBeds = Array.isArray(room?.beds) ? room.beds.slice().sort(sortByOrderThenLabel) : [];
+    const nextBeds = Array.isArray(room?.beds)
+      ? room.beds.slice().sort(sortByOrderThenLabel)
+      : [];
     setBeds(nextBeds);
   }
 
-  // Load rooms when tab opens
   useEffect(() => {
     if (activeTab !== "rooms_beds") return;
+    if (!orgId) return;
     loadRooms();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
+  }, [activeTab, orgId]);
 
-  // When room selection changes, derive beds from rooms (NO extra API call)
   useEffect(() => {
     if (activeTab !== "rooms_beds") return;
     if (!selectedRoomId) {
@@ -177,7 +268,11 @@ export default function AdminPage() {
   async function savePrivacy({ enabled, format, acknowledged }) {
     setPrivacySaving(true);
     try {
-      const updated = await api.put("/org-settings/identifiers", { enabled, format, acknowledged });
+      const updated = await api.put("/org-settings/identifiers", {
+        enabled,
+        format,
+        acknowledged,
+      });
       setOrgSettings(updated);
     } catch (e) {
       alert(e.message || "Failed to update privacy settings");
@@ -187,8 +282,50 @@ export default function AdminPage() {
   }
 
   // ==================================================
+  // SHIFT SETTINGS UI HELPERS
+  // ==================================================
+  function selectShiftRole(roleName) {
+    const next = roleName || "ALL";
+    setSelectedShiftRole(next);
+
+    if (next !== "ALL") {
+      setShiftForm((p) => ({ ...p, role: next }));
+    }
+
+    setEditingShiftId(null);
+  }
+
+  // ==================================================
   // STAFF ACTIONS
   // ==================================================
+  async function addStaff() {
+    const payload = {
+      name: String(staffForm.name || "").trim(),
+      role: String(staffForm.role || "").trim(),
+      email: String(staffForm.email || "").trim() || null,
+      phone: String(staffForm.phone || "").trim() || null,
+    };
+
+    if (!payload.name || !payload.role) {
+      return alert("Name and Role are required.");
+    }
+
+    setStaffAdding(true);
+    try {
+      const created = await api.post("/staff", payload);
+      setStaff((prev) => [...prev, created]);
+      setShowAddStaff(false);
+      setStaffForm({ name: "", role: "", email: "", phone: "" });
+    } catch (e) {
+      alert(
+        e?.message ||
+          "Failed to add staff. If POST /staff isn't wired yet, tell me and I’ll add the backend route."
+      );
+    } finally {
+      setStaffAdding(false);
+    }
+  }
+
   async function saveStaff(id) {
     const payload = {
       name: String(staffForm.name || "").trim(),
@@ -205,6 +342,142 @@ export default function AdminPage() {
     if (!window.confirm("Delete this staff member?")) return;
     await api.delete(`/staff/${id}`);
     setStaff((prev) => prev.filter((s) => s.id !== id));
+  }
+
+  function normalizeHeader(h) {
+    return String(h || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "_");
+  }
+
+  function parseCsvText(text) {
+    const rows = [];
+    let row = [];
+    let cur = "";
+    let inQuotes = false;
+
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      const next = text[i + 1];
+
+      if (ch === '"' && inQuotes && next === '"') {
+        cur += '"';
+        i++;
+        continue;
+      }
+
+      if (ch === '"') {
+        inQuotes = !inQuotes;
+        continue;
+      }
+
+      if (ch === "," && !inQuotes) {
+        row.push(cur);
+        cur = "";
+        continue;
+      }
+
+      if ((ch === "\n" || ch === "\r") && !inQuotes) {
+        if (ch === "\r" && next === "\n") i++;
+        row.push(cur);
+        cur = "";
+        if (row.some((c) => String(c).trim() !== "")) rows.push(row);
+        row = [];
+        continue;
+      }
+
+      cur += ch;
+    }
+
+    if (cur.length || row.length) {
+      row.push(cur);
+      if (row.some((c) => String(c).trim() !== "")) rows.push(row);
+    }
+
+    return rows;
+  }
+
+  function buildStaffFromCsvRows(rows) {
+    if (!rows || rows.length < 2)
+      return {
+        staffRows: [],
+        errors: ["CSV must include a header row and at least 1 data row."],
+      };
+
+    const header = rows[0].map(normalizeHeader);
+
+    const idxName = header.findIndex((h) => h === "name" || h === "full_name");
+    const idxRole = header.findIndex((h) => h === "role" || h === "title");
+    const idxEmail = header.findIndex((h) => h === "email" || h === "e-mail");
+    const idxPhone = header.findIndex(
+      (h) => h === "phone" || h === "phone_number" || h === "mobile"
+    );
+
+    const errors = [];
+    if (idxName < 0) errors.push('Missing required column: "name"');
+    if (idxRole < 0) errors.push('Missing required column: "role"');
+    if (errors.length) return { staffRows: [], errors };
+
+    const staffRows = [];
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i] || [];
+      const item = {
+        name: String(r[idxName] ?? "").trim(),
+        role: String(r[idxRole] ?? "").trim(),
+        email: idxEmail >= 0 ? String(r[idxEmail] ?? "").trim() || null : null,
+        phone: idxPhone >= 0 ? String(r[idxPhone] ?? "").trim() || null : null,
+      };
+      if (!item.name && !item.role && !item.email && !item.phone) continue;
+      if (!item.name || !item.role) {
+        errors.push(`Row ${i + 1}: name and role are required.`);
+        continue;
+      }
+      staffRows.push(item);
+    }
+
+    if (staffRows.length === 0 && errors.length === 0)
+      errors.push("No valid rows found.");
+    return { staffRows, errors };
+  }
+
+  async function onCsvSelected(file) {
+    setCsvError("");
+    if (!file) return;
+
+    const name = String(file.name || "").toLowerCase();
+    if (!name.endsWith(".csv")) {
+      setCsvError("Please upload a .csv file.");
+      return;
+    }
+
+    setCsvUploading(true);
+    try {
+      const text = await file.text();
+      const rows = parseCsvText(text);
+      const { staffRows, errors } = buildStaffFromCsvRows(rows);
+
+      if (errors.length) {
+        setCsvError(errors.slice(0, 6).join(" "));
+        return;
+      }
+
+      const created = [];
+      for (const s of staffRows) {
+        // eslint-disable-next-line no-await-in-loop
+        const c = await api.post("/staff", s);
+        created.push(c);
+      }
+
+      setStaff((prev) => [...prev, ...created]);
+      alert(`Imported ${created.length} staff member(s).`);
+    } catch (e) {
+      console.error("CSV UPLOAD ERROR:", e);
+      setCsvError(e?.message || "Failed to import CSV.");
+    } finally {
+      setCsvUploading(false);
+      if (csvInputRef.current) csvInputRef.current.value = "";
+    }
   }
 
   // ==================================================
@@ -236,16 +509,33 @@ export default function AdminPage() {
   // SHIFT SETTINGS ACTIONS
   // ==================================================
   async function addShift() {
-    const roleVal = String(shiftForm.role || "").trim();
+    const roleVal =
+      selectedShiftRole !== "ALL"
+        ? selectedShiftRole
+        : String(shiftForm.role || "").trim();
+
     if (!roleVal) return;
+
     const created = await api.post("/shift-settings", { ...shiftForm, role: roleVal });
     setShiftSettings((prev) => [...prev, created]);
-    setShiftForm({ role: "", shift_type: "Day", start_local: "07:00", end_local: "15:00" });
+
+    setShiftForm((p) => ({
+      ...p,
+      role: selectedShiftRole !== "ALL" ? selectedShiftRole : "",
+      shift_type: "Day",
+      start_local: "07:00",
+      end_local: "15:00",
+    }));
   }
 
   async function saveShift(id) {
-    const roleVal = String(shiftForm.role || "").trim();
+    const roleVal =
+      selectedShiftRole !== "ALL"
+        ? selectedShiftRole
+        : String(shiftForm.role || "").trim();
+
     if (!roleVal) return;
+
     const updated = await api.patch(`/shift-settings/${id}`, { ...shiftForm, role: roleVal });
     setShiftSettings((prev) => prev.map((s) => (s.id === id ? updated : s)));
     setEditingShiftId(null);
@@ -258,7 +548,7 @@ export default function AdminPage() {
   }
 
   // ==================================================
-  // ROOMS ACTIONS (NEW)
+  // ROOMS ACTIONS
   // ==================================================
   async function addRoom() {
     if (!canManageFacility) return;
@@ -266,18 +556,19 @@ export default function AdminPage() {
     if (!name) return;
     setRoomSaving(true);
     try {
-      const created = await api.post("/facility/rooms", { name, is_active: !!roomForm.is_active });
+      const created = await api.post("/facility/rooms", {
+        name,
+        is_active: !!roomForm.is_active,
+      });
 
       setRooms((prev) => {
         const next = [...prev, created].sort(sortByOrderThenName);
-        // If we just created the first room, select it
         if (!selectedRoomId && created?.id) setSelectedRoomId(created.id);
         return next;
       });
 
       setRoomForm({ name: "", is_active: true });
 
-      // If currently selected room is the created one, sync beds
       if (!selectedRoomId && created?.id) {
         setBeds([]);
       }
@@ -294,8 +585,15 @@ export default function AdminPage() {
     if (!name) return;
     setRoomSaving(true);
     try {
-      const updated = await api.patch(`/facility/rooms/${id}`, { name, is_active: !!roomForm.is_active });
-      setRooms((prev) => prev.map((r) => (r.id === id ? { ...r, ...updated } : r)).sort(sortByOrderThenName));
+      const updated = await api.patch(`/facility/rooms/${id}`, {
+        name,
+        is_active: !!roomForm.is_active,
+      });
+      setRooms((prev) =>
+        prev
+          .map((r) => (r.id === id ? { ...r, ...updated } : r))
+          .sort(sortByOrderThenName)
+      );
       setEditingRoomId(null);
       setRoomForm({ name: "", is_active: true });
     } catch (e) {
@@ -309,8 +607,14 @@ export default function AdminPage() {
     if (!canManageFacility) return;
     setRoomSaving(true);
     try {
-      const updated = await api.patch(`/facility/rooms/${room.id}`, { is_active: !(room.is_active !== false) });
-      setRooms((prev) => prev.map((r) => (r.id === room.id ? { ...r, ...updated } : r)).sort(sortByOrderThenName));
+      const updated = await api.patch(`/facility/rooms/${room.id}`, {
+        is_active: !(room.is_active !== false),
+      });
+      setRooms((prev) =>
+        prev
+          .map((r) => (r.id === room.id ? { ...r, ...updated } : r))
+          .sort(sortByOrderThenName)
+      );
     } catch (e) {
       alert(e?.message || "Failed to update room.");
     } finally {
@@ -319,7 +623,7 @@ export default function AdminPage() {
   }
 
   // ==================================================
-  // BEDS ACTIONS (NEW)
+  // BEDS ACTIONS
   // ==================================================
   async function addBed() {
     if (!canManageFacility) return;
@@ -333,10 +637,8 @@ export default function AdminPage() {
         is_active: !!bedForm.is_active,
       });
 
-      // Update beds list
       setBeds((prev) => [...prev, created].sort(sortByOrderThenLabel));
 
-      // Also update rooms state so switching rooms keeps beds in sync
       setRooms((prev) =>
         prev
           .map((r) => {
@@ -361,14 +663,21 @@ export default function AdminPage() {
     if (!label) return;
     setBedSaving(true);
     try {
-      const updated = await api.patch(`/facility/beds/${id}`, { label, is_active: !!bedForm.is_active });
+      const updated = await api.patch(`/facility/beds/${id}`, {
+        label,
+        is_active: !!bedForm.is_active,
+      });
 
-      setBeds((prev) => prev.map((b) => (b.id === id ? updated : b)).sort(sortByOrderThenLabel));
+      setBeds((prev) =>
+        prev.map((b) => (b.id === id ? updated : b)).sort(sortByOrderThenLabel)
+      );
 
       setRooms((prev) =>
         prev.map((r) => {
           if (r.id !== selectedRoomId) return r;
-          const nextBeds = (Array.isArray(r.beds) ? r.beds : []).map((b) => (b.id === id ? updated : b));
+          const nextBeds = (Array.isArray(r.beds) ? r.beds : []).map((b) =>
+            b.id === id ? updated : b
+          );
           return { ...r, beds: nextBeds };
         })
       );
@@ -386,14 +695,22 @@ export default function AdminPage() {
     if (!canManageFacility) return;
     setBedSaving(true);
     try {
-      const updated = await api.patch(`/facility/beds/${bed.id}`, { is_active: !(bed.is_active !== false) });
+      const updated = await api.patch(`/facility/beds/${bed.id}`, {
+        is_active: !(bed.is_active !== false),
+      });
 
-      setBeds((prev) => prev.map((b) => (b.id === bed.id ? updated : b)).sort(sortByOrderThenLabel));
+      setBeds((prev) =>
+        prev
+          .map((b) => (b.id === bed.id ? updated : b))
+          .sort(sortByOrderThenLabel)
+      );
 
       setRooms((prev) =>
         prev.map((r) => {
           if (r.id !== selectedRoomId) return r;
-          const nextBeds = (Array.isArray(r.beds) ? r.beds : []).map((b) => (b.id === bed.id ? updated : b));
+          const nextBeds = (Array.isArray(r.beds) ? r.beds : []).map((b) =>
+            b.id === bed.id ? updated : b
+          );
           return { ...r, beds: nextBeds };
         })
       );
@@ -408,10 +725,8 @@ export default function AdminPage() {
     if (!canManageFacility) return;
     if (!selectedRoomId) return;
 
-    // UI update first
     setBeds(nextBeds);
 
-    // Keep rooms state in sync too
     setRooms((prev) =>
       prev.map((r) => {
         if (r.id !== selectedRoomId) return r;
@@ -420,12 +735,17 @@ export default function AdminPage() {
     );
 
     try {
-      // ✅ backend expects: { room_id, bed_ids }
       const bed_ids = nextBeds.map((b) => b.id);
-      await api.post("/facility/beds/reorder", { room_id: selectedRoomId, bed_ids });
+      await api.post("/facility/beds/reorder", {
+        room_id: selectedRoomId,
+        bed_ids,
+      });
     } catch (e) {
       console.error("REORDER SAVE ERROR:", e);
-      alert(e?.message || "Failed to save bed order. (Tell me if you need the backend reorder route.)");
+      alert(
+        e?.message ||
+          "Failed to save bed order. (Tell me if you need the backend reorder route.)"
+      );
     }
   }
 
@@ -474,23 +794,67 @@ export default function AdminPage() {
       {/* TOP BAR */}
       <div style={ui.topBar}>
         <div style={ui.brand}>
-          {orgLogo ? <img src={orgLogo} alt={orgName} style={ui.logo} /> : null}
           <div style={{ minWidth: 0 }}>
             <div style={ui.h1}>Admin Panel</div>
             <div style={ui.sub}>
-              <span style={{ color: "#E5E7EB", fontWeight: 900 }}>{orgName}</span>
-              {headerSubtitle ? <span style={{ marginLeft: 10, color: "#9CA3AF" }}>{headerSubtitle}</span> : null}
+              <span style={{ color: "#E5E7EB", fontWeight: 900 }}>
+                {orgName || "No facility selected"}
+              </span>
+
+              <span style={{ marginLeft: 10, color: "#9CA3AF" }}>
+                orgId:{" "}
+                <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }}>
+                  {orgId || "—"}
+                </span>
+                {orgCode ? (
+                  <>
+                    {" "}
+                    • orgCode:{" "}
+                    <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }}>
+                      {orgCode}
+                    </span>
+                  </>
+                ) : null}
+              </span>
+
+              {headerSubtitle ? (
+                <span style={{ marginLeft: 10, color: "#9CA3AF" }}>{headerSubtitle}</span>
+              ) : null}
               {loading ? <span style={{ marginLeft: 10, color: "#9CA3AF" }}>Loading…</span> : null}
             </div>
           </div>
         </div>
 
         <div style={ui.topActions}>
-          <button style={ui.btnGhost} onClick={loadAll} disabled={loading}>
+          <button style={ui.btnGhost} onClick={loadAll} disabled={loading || !orgId}>
             Refresh
+          </button>
+          <button
+            style={ui.btnGhost}
+            onClick={() => setOrgSwitcherOpen(true)}
+            disabled={isSuperAdmin ? superOrgsLoading : false}
+          >
+            Change Facility
           </button>
         </div>
       </div>
+
+      {/* ✅ ORG SWITCHERS */}
+      {!isSuperAdmin ? (
+        <OrgSwitcher open={orgSwitcherOpen} onClose={() => setOrgSwitcherOpen(false)} />
+      ) : (
+        <SuperAdminOrgSwitcher
+          open={orgSwitcherOpen}
+          onClose={() => setOrgSwitcherOpen(false)}
+          orgs={superOrgs}
+          loading={superOrgsLoading}
+          onPick={(pickedOrgId) => {
+            // ✅ this updates storage/context via UserContext, then AdminPage reloads because orgId changes
+            switchOrg(pickedOrgId);
+            setOrgSwitcherOpen(false);
+          }}
+        />
+      )}
 
       {/* TABS */}
       <div style={ui.tabs}>
@@ -503,15 +867,53 @@ export default function AdminPage() {
 
       {/* CONTENT */}
       <div style={ui.contentGrid}>
+        {!orgId ? (
+          <div style={ui.card}>
+            <div style={ui.notice}>
+              No facility selected. Click <b>Change Facility</b> to pick the organization you want to manage.
+            </div>
+          </div>
+        ) : null}
+
         {/* STAFF */}
-        {activeTab === "staff" && (
+        {activeTab === "staff" && orgId && (
           <div style={ui.card}>
             <div style={ui.cardHeader}>
               <div>
                 <div style={ui.cardTitle}>Staff</div>
                 <div style={ui.cardSub}>Manage staff directory for scheduling and assignments.</div>
               </div>
+
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <button
+                  style={ui.btnPrimary}
+                  onClick={() => {
+                    setStaffForm({ name: "", role: "", email: "", phone: "" });
+                    setShowAddStaff(true);
+                  }}
+                >
+                  + Add Staff
+                </button>
+
+                <input
+                  ref={csvInputRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  style={{ display: "none" }}
+                  onChange={(e) => onCsvSelected(e.target.files?.[0])}
+                />
+                <button
+                  style={ui.btnGhost}
+                  onClick={() => csvInputRef.current?.click()}
+                  disabled={csvUploading}
+                  title="CSV columns: name, role, email, phone"
+                >
+                  {csvUploading ? "Importing…" : "Import CSV"}
+                </button>
+              </div>
             </div>
+
+            {csvError ? <div style={{ ...ui.notice, borderColor: "rgba(239,68,68,0.35)" }}>{csvError}</div> : null}
 
             <div style={{ overflowX: "auto" }}>
               <table style={ui.table}>
@@ -632,11 +1034,67 @@ export default function AdminPage() {
                 </tbody>
               </table>
             </div>
+
+            {/* ADD STAFF MODAL */}
+            {showAddStaff ? (
+              <div onMouseDown={() => setShowAddStaff(false)} style={ui.modalOverlay}>
+                <div onMouseDown={(e) => e.stopPropagation()} style={ui.modal}>
+                  <div style={ui.modalTitle}>Add Staff Member</div>
+                  <div style={ui.modalBody}>
+                    <div style={{ display: "grid", gap: 10 }}>
+                      <input
+                        style={ui.input}
+                        placeholder="Name *"
+                        value={staffForm.name}
+                        onChange={(e) => setStaffForm((p) => ({ ...p, name: e.target.value }))}
+                      />
+                      <input
+                        style={ui.input}
+                        placeholder="Role * (CNA, LPN, RN, Scheduler, etc.)"
+                        value={staffForm.role}
+                        onChange={(e) => setStaffForm((p) => ({ ...p, role: e.target.value }))}
+                      />
+                      <input
+                        style={ui.input}
+                        placeholder="Email"
+                        value={staffForm.email}
+                        onChange={(e) => setStaffForm((p) => ({ ...p, email: e.target.value }))}
+                      />
+                      <input
+                        style={ui.input}
+                        placeholder="Phone"
+                        value={staffForm.phone}
+                        onChange={(e) => setStaffForm((p) => ({ ...p, phone: e.target.value }))}
+                      />
+                      <div style={{ color: "#9CA3AF", fontSize: 12 }}>
+                        Required: <b>Name</b> and <b>Role</b>.
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={ui.modalActions}>
+                    <button
+                      style={ui.btnGhost}
+                      onClick={() => {
+                        setShowAddStaff(false);
+                        setStaffForm({ name: "", role: "", email: "", phone: "" });
+                      }}
+                      disabled={staffAdding}
+                    >
+                      Cancel
+                    </button>
+                    <button style={ui.btnPrimary} onClick={addStaff} disabled={staffAdding}>
+                      {staffAdding ? "Adding…" : "Add Staff"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </div>
         )}
 
         {/* UNITS */}
-        {activeTab === "units" && (
+        {activeTab === "units" && orgId && (
           <div style={ui.card}>
             <div style={ui.cardHeader}>
               <div>
@@ -726,22 +1184,65 @@ export default function AdminPage() {
         )}
 
         {/* SHIFT SETTINGS */}
-        {activeTab === "shifts" && (
+        {activeTab === "shifts" && orgId && (
           <div style={ui.card}>
             <div style={ui.cardHeader}>
               <div>
                 <div style={ui.cardTitle}>Shift Settings</div>
-                <div style={ui.cardSub}>Define standard shifts by role (CNA/LPN/RN).</div>
+                <div style={ui.cardSub}>Click a role bubble to manage shift templates for that role.</div>
               </div>
             </div>
 
+            <div style={ui.roleBubbleWrap}>
+              <button
+                type="button"
+                onClick={() => selectShiftRole("ALL")}
+                style={ui.roleBubble(selectedShiftRole === "ALL")}
+                title="Show all roles"
+              >
+                All
+              </button>
+
+              {roleOptions.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => selectShiftRole(r)}
+                  style={ui.roleBubble(selectedShiftRole === r)}
+                  title={`Manage ${r} shifts`}
+                >
+                  {r}
+                </button>
+              ))}
+
+              {roleOptions.length === 0 ? (
+                <div style={{ color: "#9CA3AF", fontSize: 12, padding: "6px 0" }}>
+                  No roles yet. Add your first shift setting below.
+                </div>
+              ) : null}
+            </div>
+
             <div style={ui.inlineFormWrap}>
-              <input
-                style={{ ...ui.input, minWidth: 200 }}
-                placeholder="Role (CNA, LPN, RN)"
-                value={shiftForm.role}
-                onChange={(e) => setShiftForm({ ...shiftForm, role: e.target.value })}
-              />
+              {selectedShiftRole === "ALL" ? (
+                <input
+                  style={{ ...ui.input, minWidth: 200 }}
+                  placeholder="Role (CNA, LPN, RN)"
+                  value={shiftForm.role}
+                  onChange={(e) => setShiftForm({ ...shiftForm, role: e.target.value })}
+                />
+              ) : (
+                <div style={ui.roleLockedPill} title="Role is locked by the selected bubble">
+                  Role: <span style={{ fontWeight: 1000 }}>{selectedShiftRole}</span>
+                  <button
+                    type="button"
+                    onClick={() => selectShiftRole("ALL")}
+                    style={ui.roleUnlockBtn}
+                    title="Unlock role (switch back to All)"
+                  >
+                    Change
+                  </button>
+                </div>
+              )}
 
               <select
                 style={ui.select}
@@ -784,12 +1285,12 @@ export default function AdminPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {shiftSettings.map((s) => {
+                  {filteredShiftSettings.map((s) => {
                     const isEdit = editingShiftId === s.id;
                     return (
                       <tr key={s.id} style={ui.tr}>
                         <td style={ui.td}>
-                          {isEdit ? (
+                          {isEdit && selectedShiftRole === "ALL" ? (
                             <input
                               style={ui.input}
                               value={shiftForm.role}
@@ -878,10 +1379,12 @@ export default function AdminPage() {
                     );
                   })}
 
-                  {shiftSettings.length === 0 ? (
+                  {filteredShiftSettings.length === 0 ? (
                     <tr>
                       <td style={ui.emptyRow} colSpan={4}>
-                        No shift settings yet.
+                        {selectedShiftRole === "ALL"
+                          ? "No shift settings yet."
+                          : `No shift settings for ${selectedShiftRole} yet.`}
                       </td>
                     </tr>
                   ) : null}
@@ -891,14 +1394,14 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* ROOMS & BEDS (UPDATED FIXES) */}
-        {activeTab === "rooms_beds" && (
+        {/* ROOMS & BEDS */}
+        {activeTab === "rooms_beds" && orgId && (
           <div style={ui.card}>
             <div style={ui.cardHeader}>
               <div>
                 <div style={ui.cardTitle}>Rooms & Beds</div>
                 <div style={ui.cardSub}>
-                  Fully customizable facility layout. Create rooms with any names, then add beds per room (A/B, 1/2, “Window”, etc.).
+                  Fully customizable facility layout. Create rooms with any names, then add beds per room.
                 </div>
               </div>
 
@@ -910,10 +1413,11 @@ export default function AdminPage() {
             </div>
 
             {!canManageFacility ? (
-              <div style={ui.notice}>You don’t have permission to manage facility layout for this organization.</div>
+              <div style={ui.notice}>
+                You don’t have permission to manage facility layout for this organization.
+              </div>
             ) : (
               <div style={ui.rbGrid}>
-                {/* Left: Rooms list */}
                 <div style={ui.rbLeft}>
                   <div style={ui.rbPanelTitle}>Rooms</div>
 
@@ -969,11 +1473,7 @@ export default function AdminPage() {
                           const selected = r.id === selectedRoomId;
                           const inactive = r.is_active === false;
                           return (
-                            <div
-                              key={r.id}
-                              onClick={() => setSelectedRoomId(r.id)}
-                              style={ui.roomRow(selected, inactive)}
-                            >
+                            <div key={r.id} onClick={() => setSelectedRoomId(r.id)} style={ui.roomRow(selected, inactive)}>
                               <div style={{ minWidth: 0 }}>
                                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                   <div style={{ fontWeight: 950, color: "white", opacity: inactive ? 0.55 : 1 }}>
@@ -1014,7 +1514,6 @@ export default function AdminPage() {
                   </div>
                 </div>
 
-                {/* Right: Beds for selected room */}
                 <div style={ui.rbRight}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
                     <div>
@@ -1119,11 +1618,7 @@ export default function AdminPage() {
                                 </div>
 
                                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                                  <button
-                                    style={ui.btnMiniGhost}
-                                    onClick={() => moveBedByIndex(idx, idx - 1)}
-                                    disabled={idx === 0}
-                                  >
+                                  <button style={ui.btnMiniGhost} onClick={() => moveBedByIndex(idx, idx - 1)} disabled={idx === 0}>
                                     ↑
                                   </button>
                                   <button
@@ -1165,7 +1660,7 @@ export default function AdminPage() {
         )}
 
         {/* PRIVACY */}
-        {activeTab === "privacy" && (
+        {activeTab === "privacy" && orgId && (
           <div style={ui.card}>
             <div style={ui.cardHeader}>
               <div>
@@ -1203,7 +1698,9 @@ export default function AdminPage() {
                     />
                     <div>
                       <div style={{ fontWeight: 950 }}>Allow patient identifiers on Census</div>
-                      <div style={{ color: "#9CA3AF", fontSize: 12 }}>Only initials / limited label. Never full name, DOB, MRN.</div>
+                      <div style={{ color: "#9CA3AF", fontSize: 12 }}>
+                        Only initials / limited label. Never full name, DOB, MRN.
+                      </div>
                     </div>
                   </label>
 
@@ -1232,14 +1729,13 @@ export default function AdminPage() {
               </>
             )}
 
-            {/* ACK MODAL */}
             {showAck ? (
               <div onMouseDown={() => setShowAck(false)} style={ui.modalOverlay}>
                 <div onMouseDown={(e) => e.stopPropagation()} style={ui.modal}>
                   <div style={ui.modalTitle}>Acknowledge Privacy Risk</div>
                   <div style={ui.modalBody}>
-                    You are enabling limited patient identifiers on the Census board. Only enable this if your facility policy allows it and access is restricted.
-                    Do not enter full names or MRNs. You are responsible for operating compliantly.
+                    You are enabling limited patient identifiers on the Census board. Only enable this if your facility policy allows it and access is
+                    restricted. Do not enter full names or MRNs. You are responsible for operating compliantly.
                   </div>
 
                   <div style={ui.modalActions}>
@@ -1281,7 +1777,57 @@ function TabButton({ active, onClick, label }) {
   );
 }
 
-// ✅ FIXED: display_order (not sort_order)
+function SuperAdminOrgSwitcher({ open, onClose, orgs, loading, onPick }) {
+  if (!open) return null;
+
+  const list = Array.isArray(orgs) ? orgs : [];
+
+  return (
+    <div style={ui.overlay} onMouseDown={() => onClose?.()} role="dialog" aria-modal="true">
+      <div style={ui.modal2} onMouseDown={(e) => e.stopPropagation()}>
+        <div style={ui.title2}>Choose Facility</div>
+        <div style={ui.sub2}>As SuperAdmin, you can pick any organization to manage.</div>
+
+        <div style={ui.list2}>
+          {loading ? (
+            <div style={ui.empty2}>Loading organizations…</div>
+          ) : (
+            list.map((o) => (
+              <button
+                key={o.id || o.org_code}
+                type="button"
+                style={ui.row2}
+                onClick={() => onPick?.(o.id)}
+                title={`orgId: ${o.id}`}
+              >
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0, textAlign: "left" }}>
+                  <div style={{ color: "white", fontWeight: 1000, fontSize: 14 }}>
+                    {o.name || "Unnamed Org"}
+                  </div>
+                  <div style={{ color: "#9CA3AF", fontSize: 12 }}>
+                    {o.org_code || "—"} • orgId:{" "}
+                    <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }}>
+                      {o.id}
+                    </span>
+                  </div>
+                </div>
+              </button>
+            ))
+          )}
+
+          {!loading && list.length === 0 ? <div style={ui.empty2}>No organizations found.</div> : null}
+        </div>
+
+        <div style={ui.actions2}>
+          <button style={ui.btnGhost} onClick={() => onClose?.()} type="button">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function sortByOrderThenName(a, b) {
   const ao = a?.display_order ?? 999999;
   const bo = b?.display_order ?? 999999;
@@ -1289,7 +1835,6 @@ function sortByOrderThenName(a, b) {
   return String(a?.name ?? "").localeCompare(String(b?.name ?? ""), undefined, { numeric: true, sensitivity: "base" });
 }
 
-// ✅ FIXED: display_order (not sort_order)
 function sortByOrderThenLabel(a, b) {
   const ao = a?.display_order ?? 999999;
   const bo = b?.display_order ?? 999999;
@@ -1317,7 +1862,6 @@ const ui = {
   },
 
   brand: { display: "flex", gap: 12, alignItems: "center", minWidth: 0 },
-  logo: { height: 52, width: 52, borderRadius: 14, objectFit: "cover", border: "1px solid rgba(255,255,255,0.10)" },
 
   h1: { fontSize: 18, fontWeight: 1000, letterSpacing: "-0.02em", lineHeight: 1.1 },
   sub: {
@@ -1502,6 +2046,52 @@ const ui = {
     lineHeight: 1.45,
   },
 
+  roleBubbleWrap: {
+    display: "flex",
+    gap: 10,
+    flexWrap: "wrap",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+
+  roleBubble: (active) => ({
+    height: 38,
+    borderRadius: 999,
+    padding: "8px 12px",
+    border: active ? "1px solid rgba(255,255,255,0.30)" : "1px solid rgba(255,255,255,0.12)",
+    background: active ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.05)",
+    color: "white",
+    fontWeight: 950,
+    cursor: "pointer",
+    boxShadow: active ? "0 12px 34px rgba(0,0,0,0.35)" : "0 10px 28px rgba(0,0,0,0.22)",
+  }),
+
+  roleLockedPill: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 10,
+    height: 40,
+    padding: "10px 12px",
+    borderRadius: 14,
+    border: "1px solid rgba(255,255,255,0.12)",
+    background: "rgba(255,255,255,0.04)",
+    color: "white",
+    fontWeight: 900,
+    minWidth: 200,
+  },
+
+  roleUnlockBtn: {
+    height: 28,
+    borderRadius: 999,
+    padding: "6px 10px",
+    background: "rgba(255,255,255,0.08)",
+    color: "white",
+    border: "1px solid rgba(255,255,255,0.14)",
+    cursor: "pointer",
+    fontWeight: 900,
+    fontSize: 12,
+  },
+
   privacyRow: { display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginTop: 12 },
 
   checkRow: {
@@ -1539,7 +2129,6 @@ const ui = {
   modalBody: { color: "#E5E7EB", lineHeight: 1.55, fontSize: 13 },
   modalActions: { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 14, flexWrap: "wrap" },
 
-  // Rooms & Beds layout
   rbGrid: {
     display: "grid",
     gridTemplateColumns: "minmax(260px, 360px) 1fr",
@@ -1665,4 +2254,46 @@ const ui = {
     fontSize: 12,
     userSelect: "none",
   },
+
+  label: {
+    color: "#9CA3AF",
+    fontSize: 11,
+    letterSpacing: "0.08em",
+    textTransform: "uppercase",
+    marginBottom: 6,
+  },
+
+  // superadmin org picker styles (re-using some names, separate to avoid collisions)
+  overlay: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0,0,0,0.65)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 16,
+    zIndex: 9999,
+  },
+  modal2: {
+    width: "min(860px, 100%)",
+    borderRadius: 18,
+    border: "1px solid rgba(255,255,255,0.12)",
+    background: "rgba(0,0,0,0.9)",
+    boxShadow: "0 30px 120px rgba(0,0,0,0.75)",
+    padding: 16,
+  },
+  title2: { color: "white", fontWeight: 1000, fontSize: 18 },
+  sub2: { color: "#9CA3AF", marginTop: 6, fontSize: 13, lineHeight: 1.35 },
+  list2: { display: "grid", gap: 10, marginTop: 14, maxHeight: "60vh", overflow: "auto" },
+  row2: {
+    width: "100%",
+    textAlign: "left",
+    borderRadius: 16,
+    padding: 12,
+    border: "1px solid rgba(255,255,255,0.10)",
+    background: "rgba(255,255,255,0.04)",
+    cursor: "pointer",
+  },
+  empty2: { color: "#9CA3AF", padding: 14, textAlign: "center" },
+  actions2: { display: "flex", justifyContent: "flex-end", marginTop: 14 },
 };

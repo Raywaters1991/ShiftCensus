@@ -1,5 +1,5 @@
 // src/contexts/UserContext.jsx
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import supabase from "../services/supabaseClient";
 import api from "../services/api";
 
@@ -9,26 +9,39 @@ export const useUser = () => useContext(UserContext);
 function safeSet(storage, key, value) {
   try {
     if (!storage) return;
-    if (value === null || value === undefined) storage.removeItem(key);
+    if (value === null || value === undefined || value === "") storage.removeItem(key);
     else storage.setItem(key, String(value));
   } catch {
     // ignore
   }
 }
 
-function persistOrgContext({ orgId, orgCode }) {
+function readFirst(...keys) {
+  for (const k of keys) {
+    const v =
+      (typeof sessionStorage !== "undefined" && sessionStorage.getItem(k)) ||
+      (typeof localStorage !== "undefined" && localStorage.getItem(k)) ||
+      "";
+    if (v) return v;
+  }
+  return "";
+}
+
+function persistOrgContext({ orgId, orgCode, orgName }) {
   // Session (primary)
   safeSet(sessionStorage, "active_org_id", orgId);
-  safeSet(sessionStorage, "org_id", orgId); // legacy
-  safeSet(sessionStorage, "orgId", orgId); // legacy
-  safeSet(sessionStorage, "activeOrgId", orgId); // legacy
+  safeSet(sessionStorage, "org_id", orgId);
+  safeSet(sessionStorage, "orgId", orgId);
+  safeSet(sessionStorage, "activeOrgId", orgId);
 
   safeSet(sessionStorage, "org_code", orgCode);
   safeSet(sessionStorage, "active_org_code", orgCode);
-  safeSet(sessionStorage, "orgCode", orgCode); // legacy
-  safeSet(sessionStorage, "activeOrgCode", orgCode); // legacy
+  safeSet(sessionStorage, "orgCode", orgCode);
+  safeSet(sessionStorage, "activeOrgCode", orgCode);
 
-  // LocalStorage (fallback / hard refresh persistence)
+  safeSet(sessionStorage, "active_org_name", orgName);
+
+  // LocalStorage (fallback / hard refresh)
   safeSet(localStorage, "active_org_id", orgId);
   safeSet(localStorage, "org_id", orgId);
   safeSet(localStorage, "orgId", orgId);
@@ -38,6 +51,20 @@ function persistOrgContext({ orgId, orgCode }) {
   safeSet(localStorage, "active_org_code", orgCode);
   safeSet(localStorage, "orgCode", orgCode);
   safeSet(localStorage, "activeOrgCode", orgCode);
+
+  safeSet(localStorage, "active_org_name", orgName);
+}
+
+function getRoleFromProfileOrAuth(profile, user) {
+  const r =
+    profile?.role ||
+    user?.app_metadata?.role ||
+    user?.user_metadata?.role ||
+    null;
+
+  // Supabase default role is "authenticated" — not an app role
+  if (!r || String(r).toLowerCase() === "authenticated") return null;
+  return String(r).toLowerCase();
 }
 
 export function UserProvider({ children }) {
@@ -45,7 +72,8 @@ export function UserProvider({ children }) {
   const [profile, setProfile] = useState(null);
 
   const [orgMemberships, setOrgMemberships] = useState([]);
-  const [activeMembership, setActiveMembership] = useState(null);
+  const [activeOrg, setActiveOrg] = useState(null); // org object
+  const [activeMembershipRole, setActiveMembershipRole] = useState(null);
 
   const [loading, setLoading] = useState(true);
 
@@ -74,6 +102,35 @@ export function UserProvider({ children }) {
     return (data || []).filter((m) => m.orgs && m.orgs.id);
   }
 
+  async function loadOrgByStoredSelection() {
+    const storedOrgId = readFirst("active_org_id", "org_id", "orgId", "activeOrgId");
+    const storedOrgCode = readFirst("org_code", "active_org_code", "orgCode", "activeOrgCode");
+
+    // Prefer orgId (strong)
+    if (storedOrgId) {
+      const { data: org, error } = await supabase
+        .from("orgs")
+        .select("id, org_code, name, logo_url")
+        .eq("id", storedOrgId)
+        .maybeSingle();
+
+      if (!error && org?.id) return org;
+    }
+
+    // Fallback orgCode (weak)
+    if (storedOrgCode) {
+      const { data: org, error } = await supabase
+        .from("orgs")
+        .select("id, org_code, name, logo_url")
+        .eq("org_code", storedOrgCode)
+        .maybeSingle();
+
+      if (!error && org?.id) return org;
+    }
+
+    return null;
+  }
+
   async function loadUser() {
     setLoading(true);
 
@@ -84,41 +141,66 @@ export function UserProvider({ children }) {
     if (!authUser) {
       setProfile(null);
       setOrgMemberships([]);
-      setActiveMembership(null);
-      persistOrgContext({ orgId: null, orgCode: null });
+      setActiveOrg(null);
+      setActiveMembershipRole(null);
+      persistOrgContext({ orgId: null, orgCode: null, orgName: null });
       setLoading(false);
       return;
     }
 
     try {
+      // your backend profile endpoint
       const p = await api.get("/admin/profile");
       setProfile(p);
 
+      const appRole = getRoleFromProfileOrAuth(p, authUser);
+
+      // ✅ SUPERADMIN BYPASS:
+      // If superadmin, do NOT require org_memberships. Use stored selection.
+      if (appRole === "superadmin") {
+        const org = await loadOrgByStoredSelection();
+
+        setOrgMemberships([]); // optional; you can also load all orgs elsewhere
+        setActiveMembershipRole("superadmin");
+
+        if (org?.id) {
+          setActiveOrg(org);
+          persistOrgContext({ orgId: org.id, orgCode: org.org_code, orgName: org.name });
+        } else {
+          // No facility selected yet
+          setActiveOrg(null);
+          persistOrgContext({ orgId: null, orgCode: null, orgName: null });
+        }
+
+        setLoading(false);
+        return;
+      }
+
+      // ✅ Normal users (membership-driven)
       const memberships = await loadOrgMemberships(authUser.id);
       setOrgMemberships(memberships);
 
       if (memberships.length === 0) {
         console.warn("User has no org memberships");
-        setActiveMembership(null);
-        persistOrgContext({ orgId: null, orgCode: null });
+        setActiveOrg(null);
+        setActiveMembershipRole(null);
+        persistOrgContext({ orgId: null, orgCode: null, orgName: null });
         setLoading(false);
         return;
       }
 
-      // Prefer stored org id if valid, else default to first membership
-      const storedOrgId =
-        (typeof sessionStorage !== "undefined" && sessionStorage.getItem("active_org_id")) ||
-        (typeof sessionStorage !== "undefined" && sessionStorage.getItem("org_id")) ||
-        (typeof localStorage !== "undefined" && localStorage.getItem("active_org_id")) ||
-        (typeof localStorage !== "undefined" && localStorage.getItem("org_id")) ||
-        "";
+      const storedOrgId = readFirst("active_org_id", "org_id");
+      const selected =
+        memberships.find((m) => String(m.orgs.id) === String(storedOrgId)) || memberships[0];
 
-      const selected = memberships.find((m) => String(m.orgs.id) === String(storedOrgId)) || memberships[0];
+      setActiveOrg(selected.orgs);
+      setActiveMembershipRole(selected.role || null);
 
-      setActiveMembership(selected);
-
-      // ✅ Persist BOTH org id + org code in session + local storage
-      persistOrgContext({ orgId: selected.orgs.id, orgCode: selected.orgs.org_code });
+      persistOrgContext({
+        orgId: selected.orgs.id,
+        orgCode: selected.orgs.org_code,
+        orgName: selected.orgs.name,
+      });
     } catch (e) {
       console.error("USER LOAD ERROR:", e);
     }
@@ -129,7 +211,6 @@ export function UserProvider({ children }) {
   useEffect(() => {
     loadUser();
 
-    // Optional: react to auth changes (keeps org context in sync after login/logout)
     const { data: sub } = supabase.auth.onAuthStateChange((_event, _session) => {
       loadUser();
     });
@@ -145,47 +226,62 @@ export function UserProvider({ children }) {
   }, []);
 
   function switchOrg(orgId) {
-    const currentId = activeMembership?.orgs?.id || null;
-    if (String(currentId) === String(orgId)) return; // ✅ prevents loops
+    // For superadmin, you might switch orgs from SuperAdmin page; we just persist
+    if (!orgId) return;
 
-    const selected = orgMemberships.find((m) => String(m.orgs.id) === String(orgId));
-    if (!selected) return;
+    // Normal users can only switch among memberships they have
+    const selectedMembership = orgMemberships.find((m) => String(m.orgs.id) === String(orgId));
+    if (selectedMembership) {
+      setActiveOrg(selectedMembership.orgs);
+      setActiveMembershipRole(selectedMembership.role || null);
+      persistOrgContext({
+        orgId: selectedMembership.orgs.id,
+        orgCode: selectedMembership.orgs.org_code,
+        orgName: selectedMembership.orgs.name,
+      });
+      return;
+    }
 
-    setActiveMembership(selected);
+    // If not in memberships, we still allow superadmin (or future behavior) by direct lookup
+    (async () => {
+      const { data: org } = await supabase
+        .from("orgs")
+        .select("id, org_code, name, logo_url")
+        .eq("id", orgId)
+        .maybeSingle();
 
-    // ✅ Persist BOTH org id + org code in session + local storage
-    persistOrgContext({ orgId: selected.orgs.id, orgCode: selected.orgs.org_code });
+      if (org?.id) {
+        setActiveOrg(org);
+        setActiveMembershipRole("superadmin");
+        persistOrgContext({ orgId: org.id, orgCode: org.org_code, orgName: org.name });
+      }
+    })();
   }
 
-  async function refreshUser() {
-    await loadUser();
-  }
+  const org = activeOrg;
 
-  const org = activeMembership?.orgs ?? null;
+  const value = useMemo(
+    () => ({
+      user,
+      profile,
 
-  return (
-    <UserContext.Provider
-      value={{
-        user,
-        profile,
+      orgMemberships,
+      activeOrg: org,
+      switchOrg,
 
-        orgMemberships,
-        activeOrg: org,
-        switchOrg,
+      role: activeMembershipRole,
 
-        role: activeMembership?.role ?? null,
+      orgId: org?.id ?? null,
+      orgCode: org?.org_code ?? null,
 
-        orgId: org?.id ?? null,
-        orgCode: org?.org_code ?? null,
+      orgName: org?.name ?? null,
+      orgLogo: org?.logo_url ?? null,
 
-        orgName: org?.name ?? null,
-        orgLogo: org?.logo_url ?? null,
-
-        loading,
-        refreshUser,
-      }}
-    >
-      {children}
-    </UserContext.Provider>
+      loading,
+      refreshUser: loadUser,
+    }),
+    [user, profile, orgMemberships, org, activeMembershipRole, loading]
   );
+
+  return <UserContext.Provider value={value}>{children}</UserContext.Provider>;
 }

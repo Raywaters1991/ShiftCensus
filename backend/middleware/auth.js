@@ -13,7 +13,9 @@ function getRoleFromUser(user) {
 async function requireAuth(req, res, next) {
   try {
     const authHeader = req.headers.authorization || "";
-    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    const token = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : null;
 
     if (!token) {
       return res.status(401).json({ error: "Missing Bearer token" });
@@ -25,11 +27,29 @@ async function requireAuth(req, res, next) {
       return res.status(401).json({ error: "Invalid token" });
     }
 
-    req.user = data.user;
+    const user = data.user;
 
-    // ✅ NEW: normalize role onto req.role
-    const role = getRoleFromUser(data.user);
+    // Try metadata first
+    let role = getRoleFromUser(user);
+
+    // 🔥 Ignore Supabase default "authenticated" role
+    if (!role || role === "authenticated") {
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", user.id)
+        .single();
+
+      if (!profileError && profile?.role) {
+        role = profile.role;
+      }
+    }
+
+    req.user = user;
     req.role = role ? String(role).toLowerCase() : null;
+
+    console.log("AUTH DEBUG → user.id:", user.id);
+    console.log("AUTH DEBUG → final req.role:", req.role);
 
     next();
   } catch (err) {
@@ -39,10 +59,12 @@ async function requireAuth(req, res, next) {
 }
 
 function requireSuperAdmin(req, res, next) {
-  // ✅ use normalized req.role (and tolerate uppercase in stored metadata)
+  console.log("SUPERADMIN CHECK → req.role:", req.role);
+
   if (String(req.role || "").toLowerCase() !== "superadmin") {
     return res.status(403).json({ error: "SuperAdmin only" });
   }
+
   next();
 }
 

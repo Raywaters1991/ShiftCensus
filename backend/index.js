@@ -1,18 +1,24 @@
 // backend/index.js
 require("dotenv").config();
 const express = require("express");
-const app = express();
 const cors = require("cors");
 
-app.use(express.json());
+const app = express();
 
-app.use(
-  cors({
-    origin: "*",
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "x-org-id", "x-org-code"],
-  })
-);
+// ✅ CORS must run BEFORE routes
+const corsOptions = {
+  origin: "http://localhost:5173",
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "x-org-id", "x-org-code"],
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
+
+// ✅ Express 5: "*" route crashes — use regex instead
+app.options(/.*/, cors(corsOptions));
+
+app.use(express.json());
 
 // ROUTES
 app.use("/api/units", require("./routes/units"));
@@ -24,16 +30,12 @@ app.use("/api/organizations", require("./routes/organizations"));
 app.use("/api/assignments", require("./routes/assignments"));
 app.use("/api/templates", require("./routes/templates"));
 app.use("/api/shift-settings", require("./routes/shiftSettings"));
-
-// ✅ ORG SETTINGS
+app.use("/api/invites", require("./routes/invites"));
+app.use("/api/departments", require("./routes/departments"));
 app.use("/api/org-settings", require("./routes/orgSettings"));
-
-// ✅ FACILITY (rooms/beds)
 app.use("/api/facility", require("./routes/facility"));
 
-app.get("/", (req, res) => {
-  res.send("ShiftCensus backend running.");
-});
+app.get("/", (_req, res) => res.send("ShiftCensus backend running."));
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`Backend running on port ${PORT}`));

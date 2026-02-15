@@ -1,6 +1,6 @@
 // src/App.jsx
 import { useEffect, useMemo, useState } from "react";
-import { Routes, Route, useNavigate, Link, useLocation } from "react-router-dom";
+import { Routes, Route, useNavigate, Link, useLocation, Navigate } from "react-router-dom";
 import { useUser } from "./contexts/UserContext.jsx";
 import supabase from "./services/supabaseClient";
 
@@ -10,6 +10,10 @@ import ShiftsPage from "./pages/ShiftsPage.jsx";
 import CensusPage from "./pages/CensusPage.jsx";
 import AdminPage from "./pages/AdminPage.jsx";
 import SuperAdminPage from "./pages/SuperAdminPage.jsx";
+import AcceptInvitePage from "./pages/AcceptInvitePage.jsx";
+
+// ✅ You will build this (your “Schedule Management” home)
+import HomePage from "./pages/HomePage.jsx";
 
 import OrgSwitcher from "./components/OrgSwitcher.jsx";
 import ThemeToggle from "./components/ThemeToggle.jsx";
@@ -154,14 +158,41 @@ function MenuOverlay({ open, onClose, links, role, onLogout, onOrgChanged }) {
   );
 }
 
+/**
+ * ✅ Role-based landing
+ * - admissions -> /census
+ * - scheduler  -> /shifts
+ * - ed/don/admin/superadmin -> /dashboard
+ * - "wallboard" (if you add) -> /dashboard
+ * - default -> /home
+ */
+function RoleLanding({ role }) {
+  const r = String(role || "").toLowerCase();
+
+  // If role isn't loaded yet (rare), just go home-ish
+  if (!r) return <Navigate to="/home" replace />;
+
+  if (r === "admissions") return <Navigate to="/census" replace />;
+  if (r === "scheduler") return <Navigate to="/shifts" replace />;
+
+  if (["ed", "don", "admin", "superadmin", "wallboard"].includes(r)) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  return <Navigate to="/home" replace />;
+}
+
 export default function App() {
   const { user, loading, role } = useUser();
   const navigate = useNavigate();
   const location = useLocation();
 
+  // ✅ Allow invite acceptance without being logged-in yet
+  const isInviteRoute = location.pathname.startsWith("/accept-invite");
+
   useEffect(() => {
-    if (!loading && !user) navigate("/login");
-  }, [loading, user, navigate]);
+    if (!loading && !user && !isInviteRoute) navigate("/login");
+  }, [loading, user, navigate, isInviteRoute]);
 
   const isSuperAdmin = role === "superadmin";
   const canSeeShifts = ["superadmin", "admin", "scheduler", "don"].includes(role);
@@ -183,12 +214,21 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [menuOpen]);
 
+  // ✅ Menu links (home is for most users)
   const navLinks = useMemo(() => {
-    const links = [{ to: "/", label: "Dashboard" }];
+    const links = [];
+
+    // Most staff home
+    links.push({ to: "/home", label: "Home" });
+
+    // Always allow dashboard link (if you want to hide from basic users later, we can)
+    links.push({ to: "/dashboard", label: "Dashboard" });
+
     if (canSeeShifts) links.push({ to: "/shifts", label: "Shifts" });
     if (canSeeCensus) links.push({ to: "/census", label: "Census" });
     if (canSeeAdmin) links.push({ to: "/admin", label: "Admin" });
     if (isSuperAdmin) links.push({ to: "/superadmin", label: "Super Admin" });
+
     return links;
   }, [canSeeShifts, canSeeCensus, canSeeAdmin, isSuperAdmin]);
 
@@ -206,11 +246,14 @@ export default function App() {
 
   if (loading) return <div style={{ padding: 40 }}>Loading...</div>;
 
+  // ✅ If not logged in, only show auth + invite routes
+  const showNav = !!user && !isInviteRoute;
+
   return (
     <div>
-      {user && (
+      {showNav && (
         <>
-          {/* ✅ GLOBAL HAMBURGER NAVBAR (ALL PAGES) */}
+          {/* ✅ GLOBAL HAMBURGER NAVBAR */}
           <div
             className="navbar"
             style={{
@@ -261,12 +304,24 @@ export default function App() {
       )}
 
       <Routes>
+        {/* Public-ish routes */}
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/" element={<DashboardPage />} />
+        <Route path="/accept-invite" element={<AcceptInvitePage />} />
+
+        {/* Landing: decides where to send user based on role */}
+        <Route path="/" element={<RoleLanding role={role} />} />
+
+        {/* Main app pages */}
+        <Route path="/home" element={<HomePage />} />
+        <Route path="/dashboard" element={<DashboardPage />} />
+
         {canSeeShifts && <Route path="/shifts" element={<ShiftsPage />} />}
         {canSeeCensus && <Route path="/census" element={<CensusPage />} />}
         {canSeeAdmin && <Route path="/admin" element={<AdminPage />} />}
         {isSuperAdmin && <Route path="/superadmin" element={<SuperAdminPage />} />}
+
+        {/* Fallback */}
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>
   );

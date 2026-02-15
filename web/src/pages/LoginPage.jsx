@@ -29,48 +29,41 @@ export default function LoginPage() {
   const styles = useMemo(() => makeStyles(isWide), [isWide]);
 
   const handleLogin = async (e) => {
-    e.preventDefault();
-    setErrorMsg("");
-    setInfoMsg("");
+  e.preventDefault();
+  setErrorMsg("");
+  setInfoMsg("");
 
-    if (!email.trim() || !password) {
-      setErrorMsg("Please enter your email and password.");
-      return;
-    }
+  if (!email.trim() || !password) {
+    setErrorMsg("Please enter your email and password.");
+    return;
+  }
 
-    setLoading(true);
+  setLoading(true);
 
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password,
-      });
-      if (error) throw error;
+  try {
+    const { error } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password,
+    });
+    if (error) throw error;
 
-      const token = data?.session?.access_token;
-      if (token) sessionStorage.setItem("token", token);
+  
+    sessionStorage.removeItem("token");
+    localStorage.removeItem("token");
 
-      const { data: authUser, error: userError } = await supabase.auth.getUser();
-      if (userError) throw userError;
+    await refreshUser();
+    navigate("/");
+  } catch (err) {
+    const msg =
+      String(err?.message || "").toLowerCase().includes("invalid login")
+        ? "Invalid email or password."
+        : "Login failed. Please try again.";
+    setErrorMsg(msg);
+  } finally {
+    setLoading(false);
+  }
+};
 
-      const role = authUser?.user?.user_metadata?.role || "";
-      const org_code = authUser?.user?.user_metadata?.org_code || "";
-
-      sessionStorage.setItem("role", role);
-      sessionStorage.setItem("org_code", org_code);
-
-      await refreshUser();
-      navigate("/");
-    } catch (err) {
-      const msg =
-        String(err?.message || "").toLowerCase().includes("invalid login")
-          ? "Invalid email or password."
-          : "Login failed. Please try again.";
-      setErrorMsg(msg);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleContact = () => {
     const subject = encodeURIComponent("ShiftCensus — Request Demo / Access");

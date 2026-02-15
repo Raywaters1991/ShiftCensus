@@ -1,4 +1,5 @@
 // src/services/api.js
+import supabase from "./supabaseClient";
 
 const API_BASE = "http://localhost:4000/api"; // DO NOT CHANGE
 
@@ -13,22 +14,24 @@ function readFirst(...keys) {
   return "";
 }
 
-function getToken() {
-  return readFirst("token");
-}
-
 function getOrgId() {
-  // support older/newer key names
   return readFirst("active_org_id", "org_id", "activeOrgId", "orgId");
 }
 
 function getOrgCode() {
-  // support older/newer key names
   return readFirst("org_code", "active_org_code", "orgCode", "activeOrgCode");
 }
 
 async function request(method, path, body) {
-  const token = getToken();
+  // ✅ Always use the current Supabase session token
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  const token = session?.access_token || null;
+  console.log("API session?", session ? "YES" : "NO", token ? token.slice(0, 12) + "..." : "NO TOKEN");
+
+
   const orgId = getOrgId();
   const orgCode = getOrgCode();
 
@@ -38,8 +41,7 @@ async function request(method, path, body) {
 
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  // ✅ IMPORTANT: Send BOTH headers when available.
-  // Some routes expect x-org-code, others expect x-org-id.
+  // ✅ Send BOTH headers when available
   if (orgId) headers["x-org-id"] = String(orgId);
   if (orgCode) headers["x-org-code"] = String(orgCode);
 

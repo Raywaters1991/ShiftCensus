@@ -374,9 +374,63 @@ export default function CensusPage() {
   // ✅ Report modal
   const [reportModal, setReportModal] = useState(null);
 
+  // ✅ Privacy (controls whether patient identifiers are shown)
+  const [privacyAllowIdentifiers, setPrivacyAllowIdentifiers] = useState(false);
+  const [privacyFormat, setPrivacyFormat] = useState("initials"); // optional, for later use
+
+  function coerceBool(v) {
+    return v === true || v === "true" || v === 1 || v === "1";
+  }
+
+  function parsePrivacyPayload(p) {
+    if (!p || typeof p !== "object") return { allow: false, format: "initials" };
+
+    const allow =
+      coerceBool(p.allow_patient_identifiers) ||
+      coerceBool(p.allow_patient_identifiers_on_census) ||
+      coerceBool(p.allow_identifiers) ||
+      coerceBool(p.show_identifiers) ||
+      coerceBool(p.show_patient_identifiers) ||
+      coerceBool(p.allowPatientIdentifiers) ||
+      coerceBool(p.allowPatientIdentifiersOnCensus) ||
+      false;
+
+    const format = p.identifier_format || p.patient_identifier_format || p.format || p.identifierFormat || "initials";
+
+    return { allow, format };
+  }
+
+  async function loadPrivacy() {
+  // ✅ Use the same endpoint your Admin page uses
+  const tries = ["/org-settings", "/org-settings/identifiers"];
+
+  for (const url of tries) {
+    try {
+      const data = await api.get(url);
+
+      // org-settings returns the object directly
+      const payload = data?.privacy ? data.privacy : data;
+
+      const parsed = parsePrivacyPayload(payload);
+
+      setPrivacyAllowIdentifiers(parsed.allow);
+      setPrivacyFormat(parsed.format);
+      return;
+    } catch (e) {
+      // keep trying
+    }
+  }
+
+  // safest default: OFF
+  setPrivacyAllowIdentifiers(false);
+  setPrivacyFormat("initials");
+}
+
+
   useEffect(() => {
     if (!orgCode) return;
     setRows([]);
+    loadPrivacy();
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgCode]);
@@ -390,7 +444,7 @@ export default function CensusPage() {
 
   async function load() {
     try {
-      const data = await api.get("/census/bed-board");
+      const [data] = await Promise.all([api.get("/census/bed-board"), loadPrivacy()]);
       const list = Array.isArray(data) ? data : [];
       setRows(list);
       if (!roomEditOpen) setNoteDrafts({});
@@ -405,10 +459,6 @@ export default function CensusPage() {
     const list = Array.isArray(data) ? data : [];
     setRows(list);
     return list;
-  }
-
-  function canShowIdentifiers() {
-    return rows.some((r) => r.patient_label !== null && r.patient_label !== undefined);
   }
 
   function buildPayloadFromRow(r) {
@@ -626,7 +676,8 @@ export default function CensusPage() {
     setSaving(false);
 
     if (result.ok) {
-      if (field === "care_type" && !careAllowsDischarge(nextValue)) clearEditedFor(bedRow.id, "expected_discharge");
+      if (field === "care_type" && !careAllowsDischarge(nextValue))
+        clearEditedFor(bedRow.id, "expected_discharge");
       markEdited(bedRow.id, field);
       pulseSaved(bedRow.id);
     } else {
@@ -841,7 +892,8 @@ export default function CensusPage() {
     return ordered.sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0));
   }, [stats.careMap]);
 
-  const showIdentifiers = canShowIdentifiers();
+  // ✅ Privacy drives this now (not whether labels exist in rows)
+  const showIdentifiers = !!privacyAllowIdentifiers;
 
   function toggleStatusFilter(next) {
     setStatusFilter((prev) => (prev === next ? "ALL" : next));
@@ -871,7 +923,7 @@ export default function CensusPage() {
       includeAdmit: true,
       includeDc: true,
       includeNote: true,
-      includeLabel: showIdentifiers,
+      includeLabel: !!privacyAllowIdentifiers,
     });
   }
 
@@ -1511,8 +1563,8 @@ export default function CensusPage() {
                   label="Name/Label"
                   checked={reportModal.includeLabel}
                   onChange={(v) => setReportModal((m) => ({ ...m, includeLabel: v }))}
-                  disabled={!showIdentifiers}
-                  hint={!showIdentifiers ? "No labels present" : ""}
+                  disabled={!privacyAllowIdentifiers}
+                  hint={!privacyAllowIdentifiers ? "Privacy is OFF" : ""}
                 />
               </div>
 
