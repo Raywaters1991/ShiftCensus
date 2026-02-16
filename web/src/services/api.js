@@ -1,7 +1,27 @@
-// src/services/api.js
+// web/src/services/api.js
+import axios from "axios";
 import supabase from "./supabaseClient";
 
-const API_BASE = "http://localhost:4000/api"; // DO NOT CHANGE
+const API_BASE =
+  import.meta.env.VITE_API_BASE_URL ||
+  import.meta.env.VITE_API_BASE ||
+  "http://localhost:4000";
+
+// Remove trailing slash
+const BASE = String(API_BASE || "").replace(/\/+$/, "");
+
+const api = axios.create({
+  baseURL: BASE,
+  headers: {
+    "Content-Type": "application/json",
+  },
+  timeout: 20000,
+});
+
+
+// ================================
+// Helpers for org headers
+// ================================
 
 function readFirst(...keys) {
   for (const k of keys) {
@@ -22,57 +42,63 @@ function getOrgCode() {
   return readFirst("org_code", "active_org_code", "orgCode", "activeOrgCode");
 }
 
-async function request(method, path, body) {
-  // ✅ Always use the current Supabase session token
+
+// ================================
+// REQUEST INTERCEPTOR
+// Adds auth + org headers automatically
+// ================================
+
+api.interceptors.request.use(async (config) => {
   const {
     data: { session },
   } = await supabase.auth.getSession();
 
   const token = session?.access_token || null;
-  console.log("API session?", session ? "YES" : "NO", token ? token.slice(0, 12) + "..." : "NO TOKEN");
 
+  // Debug (safe)
+  console.log(
+    "API base:",
+    BASE,
+    "| session?",
+    session ? "YES" : "NO",
+    "| token?",
+    token ? token.slice(0, 12) + "..." : "NO TOKEN"
+  );
+
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
 
   const orgId = getOrgId();
   const orgCode = getOrgCode();
 
-  const headers = {
-    "Content-Type": "application/json",
-  };
+  if (orgId) config.headers["x-org-id"] = String(orgId);
+  if (orgCode) config.headers["x-org-code"] = String(orgCode);
 
-  if (token) headers.Authorization = `Bearer ${token}`;
+  return config;
+});
 
-  // ✅ Send BOTH headers when available
-  if (orgId) headers["x-org-id"] = String(orgId);
-  if (orgCode) headers["x-org-code"] = String(orgCode);
 
-  const res = await fetch(API_BASE + path, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+// ================================
+// RESPONSE INTERCEPTOR
+// Cleaner errors
+// ================================
 
-  let parsedBody = null;
-  try {
-    const text = await res.text();
-    parsedBody = text ? JSON.parse(text) : null;
-  } catch {
-    parsedBody = null;
+api.interceptors.response.use(
+  (response) => response.data,
+  (error) => {
+    const message =
+      error?.response?.data?.error ||
+      error?.response?.data?.message ||
+      error.message ||
+      "Request failed";
+
+    const err = new Error(message);
+    err.status = error?.response?.status;
+    err.body = error?.response?.data;
+
+    return Promise.reject(err);
   }
+);
 
-  if (!res.ok) {
-    const err = new Error(parsedBody?.error || `Request failed (${res.status})`);
-    err.status = res.status;
-    err.body = parsedBody;
-    throw err;
-  }
-
-  return parsedBody;
-}
-
-export default {
-  get: (path) => request("GET", path),
-  post: (path, body) => request("POST", path, body),
-  put: (path, body) => request("PUT", path, body),
-  patch: (path, body) => request("PATCH", path, body),
-  delete: (path) => request("DELETE", path),
-};
+export default api;
