@@ -5,68 +5,47 @@ const cors = require("cors");
 
 const app = express();
 
-
-// ===============================
-// ✅ PRODUCTION-SAFE CORS
-// ===============================
-
-const ALLOWED_ORIGINS = [
-  "http://localhost:5173",     // local dev (Vite)
-  "https://app.shiftcensus.com", // your custom app domain (recommended)
-  "https://shiftcensus.com",     // if you ever use root domain
-];
+// -----------------------------
+// CORS
+// -----------------------------
+const allowedOrigins = new Set(
+  [
+    process.env.APP_PUBLIC_URL,          // e.g. https://shiftcensus.com
+    "http://localhost:5173",
+    "https://shiftcensus.com",
+    "https://www.shiftcensus.com",
+  ].filter(Boolean)
+);
 
 const corsOptions = {
-  origin: function (origin, callback) {
-    // Allow non-browser requests (curl, health checks, server-to-server)
-    if (!origin) return callback(null, true);
+  origin: (origin, cb) => {
+    // Allow server-to-server calls (no Origin header)
+    if (!origin) return cb(null, true);
 
-    // Allow explicit whitelist
-    if (ALLOWED_ORIGINS.includes(origin)) {
-      return callback(null, true);
-    }
+    // Allow known origins
+    if (allowedOrigins.has(origin)) return cb(null, true);
 
-    // Allow Vercel deployments (*.vercel.app)
-    try {
-      const host = new URL(origin).hostname;
-      if (host.endsWith(".vercel.app")) {
-        return callback(null, true);
-      }
-    } catch (err) {
-      // Ignore malformed origin
-    }
+    // Allow Vercel preview + prod domains
+    // (covers: https://something.vercel.app)
+    if (/\.vercel\.app$/.test(new URL(origin).hostname)) return cb(null, true);
 
-    return callback(new Error(`CORS blocked: ${origin}`));
+    return cb(new Error(`CORS blocked for origin: ${origin}`), false);
   },
-
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: [
-    "Content-Type",
-    "Authorization",
-    "x-org-id",
-    "x-org-code",
-  ],
-  credentials: true,
+  allowedHeaders: ["Content-Type", "Authorization", "x-org-id", "x-org-code"],
   optionsSuccessStatus: 204,
 };
 
-// IMPORTANT: CORS before routes
 app.use(cors(corsOptions));
 
-// Express 5 requires regex for wildcard OPTIONS
+// Express 5 safe preflight handler
 app.options(/.*/, cors(corsOptions));
 
-
-// ===============================
-// BODY PARSING
-// ===============================
 app.use(express.json());
 
-
-// ===============================
+// -----------------------------
 // ROUTES
-// ===============================
-
+// -----------------------------
 app.use("/api/units", require("./routes/units"));
 app.use("/api/admin", require("./routes/admin"));
 app.use("/api/census", require("./routes/census"));
@@ -81,26 +60,8 @@ app.use("/api/departments", require("./routes/departments"));
 app.use("/api/org-settings", require("./routes/orgSettings"));
 app.use("/api/facility", require("./routes/facility"));
 
-
-// ===============================
-// HEALTH + ROOT
-// ===============================
-
-app.get("/", (_req, res) => {
-  res.send("ShiftCensus backend running.");
-});
-
-app.get("/health", (_req, res) => {
-  res.json({ ok: true });
-});
-
-
-// ===============================
-// START SERVER
-// ===============================
+app.get("/", (_req, res) => res.send("ShiftCensus backend running."));
+app.get("/health", (_req, res) => res.json({ ok: true }));
 
 const PORT = process.env.PORT || 3001;
-
-app.listen(PORT, () => {
-  console.log(`Backend running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Backend running on port ${PORT}`));
