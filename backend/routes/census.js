@@ -3,8 +3,10 @@ const express = require("express");
 const router = express.Router();
 const supabase = require("../supabase");
 const { requireAuth } = require("../middleware/auth");
-const { requireOrg } = require("../middleware/orgGuard"); // ✅ x-org-id + membership gate
+const { requireOrg } = require("../middleware/orgGuard");
 
+router.use(requireAuth);
+router.use(requireOrg);
 // -------------------------
 // Helpers
 // -------------------------

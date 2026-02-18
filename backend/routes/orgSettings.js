@@ -6,7 +6,7 @@ const { requireAuth } = require("../middleware/auth");
 const { requireOrg } = require("../middleware/orgGuard");
 
 router.use(requireAuth);
-router.use( requireOrg);
+router.use(requireOrg);
 
 function isSuperAdmin(req) {
   return String(req.user?.app_metadata?.role || "").toLowerCase() === "superadmin";

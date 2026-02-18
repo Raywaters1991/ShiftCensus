@@ -1,11 +1,12 @@
 // backend/routes/shifts.js
 const express = require("express");
 const router = express.Router();
-const { createClient } = require("@supabase/supabase-js");
-require("dotenv").config();
-
+const supabase = require("../supabase");
 const { requireAuth } = require("../middleware/auth");
 const { requireOrg } = require("../middleware/orgGuard");
+
+router.use(requireAuth);
+router.use(requireOrg);
 
 const supabase = createClient(
   process.env.SUPABASE_URL,

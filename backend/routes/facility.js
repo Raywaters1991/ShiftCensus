@@ -3,7 +3,10 @@ const express = require("express");
 const router = express.Router();
 const supabase = require("../supabase");
 const { requireAuth } = require("../middleware/auth");
-const requireOrg = require("../middleware/requireOrg");
+const { requireOrg } = require("../middleware/orgGuard");
+
+router.use(requireAuth);
+router.use(requireOrg);
 
 // ✅ FIX: role detection (supports req.role, req.user.app_metadata.role, req.user.user_metadata.role)
 function getRole(req) {
