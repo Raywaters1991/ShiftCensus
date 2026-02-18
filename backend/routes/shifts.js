@@ -1,27 +1,31 @@
-// backend/routes/shifts.js
+ // backend/routes/shifts.js
 const express = require("express");
 const router = express.Router();
-const supabase = require("../supabase");
+
+const supabaseAdmin = require("../supabaseAdmin"); // ✅ service role client
 const { requireAuth } = require("../middleware/auth");
 const { requireOrg } = require("../middleware/orgGuard");
 
-router.use(requireAuth);
-router.use(requireOrg);
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
-
+/* ------------------------------------------------------------------
+   Build local → UTC timestamp
+------------------------------------------------------------------- */
 function buildDateTime(shift_date, timeStr, timezone) {
   const localString = `${shift_date}T${timeStr}`;
   const localDate = new Date(
     new Date(localString).toLocaleString("en-US", { timeZone: timezone })
   );
-  if (isNaN(localDate.getTime())) throw new Error("Invalid datetime conversion");
+
+  if (isNaN(localDate.getTime())) {
+    console.error("❌ buildDateTime INVALID:", { shift_date, timeStr, timezone });
+    throw new Error("Invalid datetime conversion");
+  }
+
   return localDate.toISOString();
 }
 
+/* ------------------------------------------------------------------
+   Convert start_local + end_local into UTC, including overnight wrap
+------------------------------------------------------------------- */
 function computeShiftTimes(shift_date, setting, timezone) {
   const startUtc = buildDateTime(shift_date, setting.start_local, timezone);
   let endUtc = buildDateTime(shift_date, setting.end_local, timezone);
@@ -31,33 +35,26 @@ function computeShiftTimes(shift_date, setting, timezone) {
     d.setUTCDate(d.getUTCDate() + 1);
     endUtc = d.toISOString();
   }
+
   return { startUtc, endUtc };
 }
 
 router.use(requireAuth);
 router.use(requireOrg);
 
-function getOrgCode(req) {
-  return req.orgCode || req.org_code || null;
-}
-
-// GET shifts (optionally by date)
+/* ------------------------------------------------------------------
+   GET — fetch all shifts for facility
+------------------------------------------------------------------- */
 router.get("/", async (req, res) => {
   try {
-    const orgCode = getOrgCode(req);
-    if (!orgCode) return res.status(400).json({ error: "Missing org_code" });
+    const orgCode = req.orgCode;
 
-    const { date } = req.query;
-
-    let q = supabase
+    const { data, error } = await supabaseAdmin
       .from("shifts")
       .select("*")
       .eq("org_code", orgCode)
       .order("start_time", { ascending: true });
 
-    if (date) q = q.eq("shift_date", String(date));
-
-    const { data, error } = await q;
     if (error) throw error;
 
     res.json(data || []);
@@ -67,11 +64,12 @@ router.get("/", async (req, res) => {
   }
 });
 
-// POST create shift
+/* ------------------------------------------------------------------
+   POST — create shift
+------------------------------------------------------------------- */
 router.post("/", async (req, res) => {
   try {
-    const orgCode = getOrgCode(req);
-    if (!orgCode) return res.status(400).json({ error: "Missing org_code" });
+    const orgCode = req.orgCode;
 
     const { staff_id, shift_date, shiftType, unit, assignment_number, timezone } =
       req.body;
@@ -84,8 +82,7 @@ router.post("/", async (req, res) => {
 
     const facilityTimezone = timezone || "America/Los_Angeles";
 
-    // lookup staff role
-    const { data: staffData, error: staffErr } = await supabase
+    const { data: staffData, error: staffErr } = await supabaseAdmin
       .from("staff")
       .select("role")
       .eq("id", staff_id)
@@ -96,22 +93,19 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ error: "Invalid staff_id" });
     }
 
-    // normalize role to lower for shift_settings lookup, but store original too if you want
-    const staffRole = String(staffData.role || "");
-    const roleKey = staffRole.toLowerCase();
+    const role = staffData.role;
 
-    // lookup shift settings by org + role + shift_type
-    const { data: setting, error: settingErr } = await supabase
+    const { data: setting, error: settingErr } = await supabaseAdmin
       .from("shift_settings")
       .select("*")
       .eq("org_code", orgCode)
-      .eq("role", roleKey)
+      .eq("role", role)
       .eq("shift_type", shiftType)
       .single();
 
     if (settingErr || !setting) {
       return res.status(400).json({
-        error: `No shift settings found for ${roleKey} ${shiftType}`,
+        error: `No shift settings found for ${role} ${shiftType}`,
       });
     }
 
@@ -121,15 +115,15 @@ router.post("/", async (req, res) => {
       facilityTimezone
     );
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from("shifts")
       .insert([
         {
           staff_id,
-          role: staffRole,          // keep display-friendly value (LPN)
-          shift_type: shiftType,    // ✅ THIS is what your dashboard needs
-          unit: unit || null,
-          assignment_number: assignment_number || null,
+          role,
+          shift_type: shiftType, // ✅ recommended (add column if missing)
+          unit,
+          assignment_number,
           shift_date,
           start_local: setting.start_local,
           end_local: setting.end_local,
@@ -151,13 +145,14 @@ router.post("/", async (req, res) => {
   }
 });
 
-// PUT update shift
+/* ------------------------------------------------------------------
+   PUT — update shift
+------------------------------------------------------------------- */
 router.put("/:id", async (req, res) => {
   try {
-    const orgCode = getOrgCode(req);
-    if (!orgCode) return res.status(400).json({ error: "Missing org_code" });
-
+    const orgCode = req.orgCode;
     const id = req.params.id;
+
     const { staff_id, shift_date, shiftType, unit, assignment_number, timezone } =
       req.body;
 
@@ -169,7 +164,7 @@ router.put("/:id", async (req, res) => {
 
     const facilityTimezone = timezone || "America/Los_Angeles";
 
-    const { data: staffData } = await supabase
+    const { data: staffData } = await supabaseAdmin
       .from("staff")
       .select("role")
       .eq("id", staff_id)
@@ -178,20 +173,19 @@ router.put("/:id", async (req, res) => {
 
     if (!staffData) return res.status(400).json({ error: "Invalid staff_id" });
 
-    const staffRole = String(staffData.role || "");
-    const roleKey = staffRole.toLowerCase();
+    const role = staffData.role;
 
-    const { data: setting } = await supabase
+    const { data: setting } = await supabaseAdmin
       .from("shift_settings")
       .select("*")
       .eq("org_code", orgCode)
-      .eq("role", roleKey)
+      .eq("role", role)
       .eq("shift_type", shiftType)
       .single();
 
     if (!setting) {
       return res.status(400).json({
-        error: `No shift settings found for ${roleKey} ${shiftType}`,
+        error: `No shift settings found for ${role} ${shiftType}`,
       });
     }
 
@@ -201,14 +195,14 @@ router.put("/:id", async (req, res) => {
       facilityTimezone
     );
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from("shifts")
       .update({
         staff_id,
-        role: staffRole,
-        shift_type: shiftType, // ✅
-        unit: unit || null,
-        assignment_number: assignment_number || null,
+        role,
+        shift_type: shiftType,
+        unit,
+        assignment_number,
         shift_date,
         start_local: setting.start_local,
         end_local: setting.end_local,
@@ -230,12 +224,14 @@ router.put("/:id", async (req, res) => {
   }
 });
 
+/* ------------------------------------------------------------------
+   DELETE — remove shift
+------------------------------------------------------------------- */
 router.delete("/:id", async (req, res) => {
   try {
-    const orgCode = getOrgCode(req);
-    if (!orgCode) return res.status(400).json({ error: "Missing org_code" });
+    const orgCode = req.orgCode;
 
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from("shifts")
       .delete()
       .eq("id", req.params.id)
