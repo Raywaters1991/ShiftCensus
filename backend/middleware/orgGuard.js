@@ -18,14 +18,16 @@ async function requireOrg(req, res, next) {
 
     if (!user) return res.status(401).json({ error: "Missing auth context" });
 
-    // Resolve orgId if only orgCode is provided
-    let orgId = headerOrgId ? String(headerOrgId) : "";
+    let orgId = headerOrgId ? String(headerOrgId).trim() : "";
     let orgCode = headerOrgCode ? String(headerOrgCode).trim() : "";
 
     if (!orgId && !orgCode) {
-      return res.status(400).json({ error: "Missing org context (x-org-id or x-org-code)" });
+      return res
+        .status(400)
+        .json({ error: "Missing org context (x-org-id or x-org-code)" });
     }
 
+    // Resolve orgId from orgCode if needed
     if (!orgId && orgCode) {
       const { data: org, error: orgErr } = await supabase
         .from("orgs")
@@ -44,15 +46,34 @@ async function requireOrg(req, res, next) {
       return res.status(400).json({ error: "Invalid org id" });
     }
 
-    // ✅ Superadmin bypass (use req.role, NOT app_metadata)
+    // Resolve orgCode from orgId if needed
+    if (orgId && !orgCode) {
+      const { data: org, error: orgErr } = await supabase
+        .from("orgs")
+        .select("org_code")
+        .eq("id", orgId)
+        .maybeSingle();
+
+      if (orgErr) return res.status(500).json({ error: "Failed to resolve org" });
+      if (!org?.org_code) return res.status(400).json({ error: "Invalid org (cannot resolve org_code)" });
+
+      orgCode = org.org_code;
+    }
+
+    // ✅ Superadmin bypass (global)
     if (role === "superadmin") {
       req.orgId = String(orgId);
       req.orgCode = orgCode || null;
       req.membershipRole = "superadmin";
+
+      // ✅ Back-compat aliases
+      req.org_id = req.orgId;
+      req.org_code = req.orgCode;
+
       return next();
     }
 
-    // Confirm membership + role
+    // ✅ Normal users: must be an active member of the org
     const { data: mem, error: memErr } = await supabase
       .from("org_memberships")
       .select("role, org_id")
@@ -61,27 +82,19 @@ async function requireOrg(req, res, next) {
       .eq("is_active", true)
       .single();
 
-    if (memErr || !mem) return res.status(403).json({ error: "No access to this org" });
-
-    // Resolve org_code if missing
-    if (!orgCode) {
-      const { data: org, error: orgErr } = await supabase
-        .from("orgs")
-        .select("org_code")
-        .eq("id", orgId)
-        .single();
-
-      if (orgErr || !org?.org_code) {
-        return res.status(400).json({ error: "Invalid org (cannot resolve org_code)" });
-      }
-      orgCode = org.org_code;
+    if (memErr || !mem) {
+      return res.status(403).json({ error: "No access to this org" });
     }
 
     req.orgId = String(orgId);
     req.orgCode = orgCode;
     req.membershipRole = mem.role;
 
-    next();
+    // ✅ Back-compat aliases
+    req.org_id = req.orgId;
+    req.org_code = req.orgCode;
+
+    return next();
   } catch (e) {
     console.error("requireOrg middleware error:", e);
     return res.status(500).json({ error: "Server error" });
