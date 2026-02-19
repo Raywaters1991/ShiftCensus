@@ -1,123 +1,57 @@
 // web/src/services/api.js
-import axios from "axios";
-import supabase from "./supabaseClient";
 
 const API_BASE =
-  import.meta.env.VITE_API_BASE_URL ||
-  import.meta.env.VITE_API_BASE ||
-  "http://localhost:4000";
+  import.meta.env.VITE_API_URL ||
+  "https://shiftcensus-backend.onrender.com";
 
-// Remove trailing slash
-const BASE = String(API_BASE || "").replace(/\/+$/, "");
+async function request(path, options = {}) {
+  const token = localStorage.getItem("sb-access-token");
 
-// -------------------------
-// Helpers
-// -------------------------
-function safeGet(storage, key) {
-  try {
-    return storage?.getItem?.(key) || "";
-  } catch {
-    return "";
-  }
-}
+  const orgId =
+    localStorage.getItem("activeOrgId") ||
+    localStorage.getItem("active_org_id") ||
+    localStorage.getItem("orgId") ||
+    localStorage.getItem("org_id");
 
-function isUuid(v) {
-  return (
-    typeof v === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v.trim())
-  );
-}
+  const orgCode =
+    localStorage.getItem("activeOrgCode") ||
+    localStorage.getItem("active_org_code") ||
+    localStorage.getItem("orgCode") ||
+    localStorage.getItem("org_code");
 
-function readFirst(...keys) {
-  // Prefer sessionStorage (active selection) then localStorage (fallback)
-  for (const k of keys) {
-    const v = safeGet(sessionStorage, k) || safeGet(localStorage, k);
-    if (v && String(v).trim()) return String(v).trim();
-  }
-  return "";
-}
+  const headers = {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(orgId ? { "x-org-id": orgId } : {}),
+    ...(orgCode ? { "x-org-code": orgCode } : {}),
+    ...options.headers,
+  };
 
-function getOrgId() {
-  // IMPORTANT: only accept UUIDs for x-org-id
-  const candidate = readFirst(
-    "active_org_id",
-    "activeOrgId",
-    "org_id",
-    "orgId",
-    "activeOrgID"
-  );
-  return isUuid(candidate) ? candidate : "";
-}
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers,
+  });
 
-function getOrgCode() {
-  // org_code can be "ADMIN", "NSPAC", etc.
-  return readFirst(
-    "active_org_code",
-    "activeOrgCode",
-    "org_code",
-    "orgCode",
-    "activeOrgCODE"
-  );
-}
-
-// -------------------------
-// Axios client
-// -------------------------
-const api = axios.create({
-  baseURL: BASE,
-  headers: { "Content-Type": "application/json" },
-  timeout: 20000,
-});
-
-// ================================
-// REQUEST INTERCEPTOR
-// Adds auth + org headers automatically
-// ================================
-api.interceptors.request.use(async (config) => {
-  // Auth token
-  let token = null;
-  try {
-    const { data } = await supabase.auth.getSession();
-    token = data?.session?.access_token || null;
-  } catch {
-    token = null;
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Request failed: ${res.status}`);
   }
 
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  else delete config.headers.Authorization;
+  return res.json();
+}
 
-  // Org context
-  const orgId = getOrgId();
-  const orgCode = getOrgCode();
-
-  if (orgId) config.headers["x-org-id"] = orgId;
-  else delete config.headers["x-org-id"];
-
-  if (orgCode) config.headers["x-org-code"] = orgCode;
-  else delete config.headers["x-org-code"];
-
-  return config;
-});
-
-// ================================
-// RESPONSE INTERCEPTOR
-// Cleaner errors
-// ================================
-api.interceptors.response.use(
-  (response) => response.data,
-  (error) => {
-    const message =
-      error?.response?.data?.error ||
-      error?.response?.data?.message ||
-      error?.message ||
-      "Request failed";
-
-    const err = new Error(message);
-    err.status = error?.response?.status;
-    err.body = error?.response?.data;
-
-    return Promise.reject(err);
-  }
-);
-
-export default api;
+export default {
+  get: (path) => request(path),
+  post: (path, body) =>
+    request(path, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  put: (path, body) =>
+    request(path, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  delete: (path) =>
+    request(path, { method: "DELETE" }),
+};
