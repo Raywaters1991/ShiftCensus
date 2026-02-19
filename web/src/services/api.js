@@ -10,18 +10,9 @@ const API_BASE =
 // Remove trailing slash
 const BASE = String(API_BASE || "").replace(/\/+$/, "");
 
-const api = axios.create({
-  baseURL: BASE,
-  headers: { "Content-Type": "application/json" },
-  timeout: 20000,
-});
-
-
-// =====================================================
-// Utilities
-// =====================================================
-
-// Safe storage getter
+// -------------------------
+// Helpers
+// -------------------------
 function safeGet(storage, key) {
   try {
     return storage?.getItem?.(key) || "";
@@ -30,8 +21,15 @@ function safeGet(storage, key) {
   }
 }
 
-// Read keys in priority order
+function isUuid(v) {
+  return (
+    typeof v === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v.trim())
+  );
+}
+
 function readFirst(...keys) {
+  // Prefer sessionStorage (active selection) then localStorage (fallback)
   for (const k of keys) {
     const v = safeGet(sessionStorage, k) || safeGet(localStorage, k);
     if (v && String(v).trim()) return String(v).trim();
@@ -39,58 +37,45 @@ function readFirst(...keys) {
   return "";
 }
 
-// UUID validator
-function isUuid(v) {
-  return (
-    typeof v === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v)
-  );
-}
-
-
-// =====================================================
-// Org context helpers
-// =====================================================
-
-// Returns ONLY a valid UUID or empty string
 function getOrgId() {
+  // IMPORTANT: only accept UUIDs for x-org-id
   const candidate = readFirst(
     "active_org_id",
+    "activeOrgId",
     "org_id",
     "orgId",
-    "activeOrgId",
     "activeOrgID"
   );
-
   return isUuid(candidate) ? candidate : "";
 }
 
-// Returns ONLY org_code (not UUID)
 function getOrgCode() {
-  const code = readFirst(
+  // org_code can be "ADMIN", "NSPAC", etc.
+  return readFirst(
     "active_org_code",
+    "activeOrgCode",
     "org_code",
     "orgCode",
-    "activeOrgCode",
     "activeOrgCODE"
   );
-
-  // Prevent UUID accidentally stored as code
-  if (isUuid(code)) return "";
-
-  return code || "";
 }
 
+// -------------------------
+// Axios client
+// -------------------------
+const api = axios.create({
+  baseURL: BASE,
+  headers: { "Content-Type": "application/json" },
+  timeout: 20000,
+});
 
-// =====================================================
+// ================================
 // REQUEST INTERCEPTOR
 // Adds auth + org headers automatically
-// =====================================================
-
+// ================================
 api.interceptors.request.use(async (config) => {
-  // ---------- AUTH TOKEN ----------
+  // Auth token
   let token = null;
-
   try {
     const { data } = await supabase.auth.getSession();
     token = data?.session?.access_token || null;
@@ -98,38 +83,26 @@ api.interceptors.request.use(async (config) => {
     token = null;
   }
 
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  } else {
-    delete config.headers.Authorization;
-  }
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  else delete config.headers.Authorization;
 
-  // ---------- ORG CONTEXT ----------
+  // Org context
   const orgId = getOrgId();
   const orgCode = getOrgCode();
 
-  // Only send valid headers
-  if (orgId) {
-    config.headers["x-org-id"] = orgId;
-  } else {
-    delete config.headers["x-org-id"];
-  }
+  if (orgId) config.headers["x-org-id"] = orgId;
+  else delete config.headers["x-org-id"];
 
-  if (orgCode) {
-    config.headers["x-org-code"] = orgCode;
-  } else {
-    delete config.headers["x-org-code"];
-  }
+  if (orgCode) config.headers["x-org-code"] = orgCode;
+  else delete config.headers["x-org-code"];
 
   return config;
 });
 
-
-// =====================================================
+// ================================
 // RESPONSE INTERCEPTOR
-// Clean error handling
-// =====================================================
-
+// Cleaner errors
+// ================================
 api.interceptors.response.use(
   (response) => response.data,
   (error) => {
@@ -146,6 +119,5 @@ api.interceptors.response.use(
     return Promise.reject(err);
   }
 );
-
 
 export default api;

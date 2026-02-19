@@ -1,63 +1,50 @@
 // backend/routes/templates.js
-
 const express = require("express");
 const router = express.Router();
-const supabase = require("../supabase");
+
+const supabaseAdmin = require("../supabaseAdmin");
 const { requireAuth } = require("../middleware/auth");
+const { requireOrg } = require("../middleware/orgGuard");
 
-// -----------------------------------------------------
-// ORG CONTEXT
-// -----------------------------------------------------
-function getOrg(req) {
-  return req.headers["x-org-code"] || null;
-}
+router.use(requireAuth);
+router.use(requireOrg);
 
-function isSuperAdmin(req) {
-  return req.user?.app_metadata?.role === "superadmin";
+function canManageTemplates(req) {
+  const r = String(req.role || "").toLowerCase();
+  return ["superadmin", "admin", "don", "ed"].includes(r);
 }
 
 // ---------------------------------------------------------------------------
 // GET ALL TEMPLATES (ORG SAFE)
 // ---------------------------------------------------------------------------
-router.get("/", requireAuth, async (req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const org = getOrg(req);
-    if (!org && !isSuperAdmin(req)) {
-      return res.status(400).json({ error: "Missing org context" });
-    }
+    const orgCode = req.orgCode || req.org_code;
 
     // Load templates for org
-    let templateQuery = supabase
+    const { data: templates, error: templateErr } = await supabaseAdmin
       .from("schedule_templates")
       .select("*")
+      .eq("org_code", orgCode)
       .order("id", { ascending: true });
 
-    if (!isSuperAdmin(req)) {
-      templateQuery = templateQuery.eq("org_code", org);
-    }
-
-    const { data: templates, error: templateErr } = await templateQuery;
     if (templateErr) throw templateErr;
 
-    if (!templates || templates.length === 0) {
-      return res.json([]);
-    }
+    if (!templates || templates.length === 0) return res.json([]);
 
-    const templateIds = templates.map(t => t.id);
+    const templateIds = templates.map((t) => t.id);
 
     // Load staff links ONLY for these templates
-    const { data: staffLinks, error: staffErr } = await supabase
+    const { data: staffLinks, error: staffErr } = await supabaseAdmin
       .from("schedule_template_staff")
       .select("template_id, staff_id")
       .in("template_id", templateIds);
 
     if (staffErr) throw staffErr;
 
-    const grouped = templates.map(t => ({
+    const grouped = templates.map((t) => ({
       ...t,
-      staff_ids: staffLinks
-        .filter(s => s.template_id === t.id)
-        .map(s => s.staff_id),
+      staff_ids: (staffLinks || []).filter((s) => s.template_id === t.id).map((s) => s.staff_id),
     }));
 
     res.json(grouped);
@@ -70,12 +57,11 @@ router.get("/", requireAuth, async (req, res) => {
 // ---------------------------------------------------------------------------
 // CREATE TEMPLATE (ORG SAFE)
 // ---------------------------------------------------------------------------
-router.post("/", requireAuth, async (req, res) => {
+router.post("/", async (req, res) => {
   try {
-    const org = getOrg(req);
-    if (!org && !isSuperAdmin(req)) {
-      return res.status(400).json({ error: "Missing org context" });
-    }
+    if (!canManageTemplates(req)) return res.status(403).json({ error: "Not allowed" });
+
+    const orgCode = req.orgCode || req.org_code;
 
     const {
       name,
@@ -85,9 +71,9 @@ router.post("/", requireAuth, async (req, res) => {
       assignment_number,
       days_of_week,
       staff_ids,
-    } = req.body;
+    } = req.body || {};
 
-    const { data: template, error } = await supabase
+    const { data: template, error } = await supabaseAdmin
       .from("schedule_templates")
       .insert([
         {
@@ -97,7 +83,7 @@ router.post("/", requireAuth, async (req, res) => {
           unit,
           assignment_number,
           days_of_week,
-          org_code: org,
+          org_code: orgCode,
         },
       ])
       .select()
@@ -105,14 +91,13 @@ router.post("/", requireAuth, async (req, res) => {
 
     if (error) throw error;
 
-    // Insert staff links (ORG SAFE — staff already org-scoped)
     if (Array.isArray(staff_ids) && staff_ids.length > 0) {
-      const rows = staff_ids.map(staff_id => ({
+      const rows = staff_ids.map((staff_id) => ({
         template_id: template.id,
         staff_id,
       }));
 
-      const { error: staffErr } = await supabase
+      const { error: staffErr } = await supabaseAdmin
         .from("schedule_template_staff")
         .insert(rows);
 
@@ -129,24 +114,23 @@ router.post("/", requireAuth, async (req, res) => {
 // ---------------------------------------------------------------------------
 // UPDATE TEMPLATE (ORG SAFE)
 // ---------------------------------------------------------------------------
-router.put("/:id", requireAuth, async (req, res) => {
+router.put("/:id", async (req, res) => {
   try {
-    const org = getOrg(req);
+    if (!canManageTemplates(req)) return res.status(403).json({ error: "Not allowed" });
+
+    const orgCode = req.orgCode || req.org_code;
     const id = req.params.id;
 
-    let ownershipCheck = supabase
+    // ownership check
+    const { data: owned, error: ownErr } = await supabaseAdmin
       .from("schedule_templates")
       .select("id")
-      .eq("id", id);
+      .eq("id", id)
+      .eq("org_code", orgCode)
+      .maybeSingle();
 
-    if (!isSuperAdmin(req)) {
-      ownershipCheck = ownershipCheck.eq("org_code", org);
-    }
-
-    const { data: owned } = await ownershipCheck.single();
-    if (!owned) {
-      return res.status(403).json({ error: "Not authorized" });
-    }
+    if (ownErr) throw ownErr;
+    if (!owned) return res.status(403).json({ error: "Not authorized" });
 
     const {
       name,
@@ -156,9 +140,9 @@ router.put("/:id", requireAuth, async (req, res) => {
       assignment_number,
       days_of_week,
       staff_ids,
-    } = req.body;
+    } = req.body || {};
 
-    const { data: updated, error } = await supabase
+    const { data: updated, error } = await supabaseAdmin
       .from("schedule_templates")
       .update({
         name,
@@ -169,24 +153,21 @@ router.put("/:id", requireAuth, async (req, res) => {
         days_of_week,
       })
       .eq("id", id)
+      .eq("org_code", orgCode)
       .select()
       .single();
 
     if (error) throw error;
 
     // Reset staff links
-    await supabase
-      .from("schedule_template_staff")
-      .delete()
-      .eq("template_id", id);
+    await supabaseAdmin.from("schedule_template_staff").delete().eq("template_id", id);
 
     if (Array.isArray(staff_ids) && staff_ids.length > 0) {
-      const rows = staff_ids.map(staff_id => ({
+      const rows = staff_ids.map((staff_id) => ({
         template_id: id,
         staff_id,
       }));
-
-      await supabase.from("schedule_template_staff").insert(rows);
+      await supabaseAdmin.from("schedule_template_staff").insert(rows);
     }
 
     res.json(updated);
@@ -199,34 +180,26 @@ router.put("/:id", requireAuth, async (req, res) => {
 // ---------------------------------------------------------------------------
 // DELETE TEMPLATE (ORG SAFE)
 // ---------------------------------------------------------------------------
-router.delete("/:id", requireAuth, async (req, res) => {
+router.delete("/:id", async (req, res) => {
   try {
-    const org = getOrg(req);
+    if (!canManageTemplates(req)) return res.status(403).json({ error: "Not allowed" });
+
+    const orgCode = req.orgCode || req.org_code;
     const id = req.params.id;
 
-    let ownershipCheck = supabase
+    // ownership check
+    const { data: owned, error: ownErr } = await supabaseAdmin
       .from("schedule_templates")
       .select("id")
-      .eq("id", id);
+      .eq("id", id)
+      .eq("org_code", orgCode)
+      .maybeSingle();
 
-    if (!isSuperAdmin(req)) {
-      ownershipCheck = ownershipCheck.eq("org_code", org);
-    }
+    if (ownErr) throw ownErr;
+    if (!owned) return res.status(403).json({ error: "Not authorized" });
 
-    const { data: owned } = await ownershipCheck.single();
-    if (!owned) {
-      return res.status(403).json({ error: "Not authorized" });
-    }
-
-    await supabase
-      .from("schedule_template_staff")
-      .delete()
-      .eq("template_id", id);
-
-    await supabase
-      .from("schedule_templates")
-      .delete()
-      .eq("id", id);
+    await supabaseAdmin.from("schedule_template_staff").delete().eq("template_id", id);
+    await supabaseAdmin.from("schedule_templates").delete().eq("id", id).eq("org_code", orgCode);
 
     res.json({ success: true });
   } catch (err) {

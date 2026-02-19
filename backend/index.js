@@ -5,12 +5,32 @@ const cors = require("cors");
 
 const app = express();
 
+// ----------------------------------------------------
+// DEBUG: verify your keys at boot (safe, no key printed)
+// ----------------------------------------------------
+function jwtRole(jwt) {
+  try {
+    const payload = JSON.parse(Buffer.from(jwt.split(".")[1], "base64").toString("utf8"));
+    return payload?.role || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+console.log("SUPABASE_URL set?", !!process.env.SUPABASE_URL);
+console.log("SUPABASE_ANON_KEY set?", !!process.env.SUPABASE_ANON_KEY);
+console.log("SUPABASE_SERVICE_ROLE_KEY set?", !!process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  console.log("SERVICE_ROLE_KEY role:", jwtRole(process.env.SUPABASE_SERVICE_ROLE_KEY));
+}
+
 // -----------------------------
 // CORS
 // -----------------------------
 const allowedOrigins = new Set(
   [
-    process.env.APP_PUBLIC_URL,          // e.g. https://shiftcensus.com
+    process.env.APP_PUBLIC_URL,
     "http://localhost:5173",
     "https://shiftcensus.com",
     "https://www.shiftcensus.com",
@@ -19,16 +39,9 @@ const allowedOrigins = new Set(
 
 const corsOptions = {
   origin: (origin, cb) => {
-    // Allow server-to-server calls (no Origin header)
     if (!origin) return cb(null, true);
-
-    // Allow known origins
     if (allowedOrigins.has(origin)) return cb(null, true);
-
-    // Allow Vercel preview + prod domains
-    // (covers: https://something.vercel.app)
     if (/\.vercel\.app$/.test(new URL(origin).hostname)) return cb(null, true);
-
     return cb(new Error(`CORS blocked for origin: ${origin}`), false);
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -37,10 +50,7 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-
-// Express 5 safe preflight handler
 app.options(/.*/, cors(corsOptions));
-
 app.use(express.json());
 
 // -----------------------------

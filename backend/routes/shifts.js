@@ -1,8 +1,9 @@
- // backend/routes/shifts.js
+// backend/routes/shifts.js
 const express = require("express");
 const router = express.Router();
+require("dotenv").config();
 
-const supabaseAdmin = require("../supabaseAdmin"); // ✅ service role client
+const supabaseAdmin = require("../supabaseAdmin");
 const { requireAuth } = require("../middleware/auth");
 const { requireOrg } = require("../middleware/orgGuard");
 
@@ -11,8 +12,11 @@ const { requireOrg } = require("../middleware/orgGuard");
 ------------------------------------------------------------------- */
 function buildDateTime(shift_date, timeStr, timezone) {
   const localString = `${shift_date}T${timeStr}`;
+
   const localDate = new Date(
-    new Date(localString).toLocaleString("en-US", { timeZone: timezone })
+    new Date(localString).toLocaleString("en-US", {
+      timeZone: timezone,
+    })
   );
 
   if (isNaN(localDate.getTime())) {
@@ -39,6 +43,7 @@ function computeShiftTimes(shift_date, setting, timezone) {
   return { startUtc, endUtc };
 }
 
+// enforce auth + org context
 router.use(requireAuth);
 router.use(requireOrg);
 
@@ -47,7 +52,7 @@ router.use(requireOrg);
 ------------------------------------------------------------------- */
 router.get("/", async (req, res) => {
   try {
-    const orgCode = req.orgCode;
+    const orgCode = req.orgCode || req.org_code;
 
     const { data, error } = await supabaseAdmin
       .from("shifts")
@@ -69,10 +74,9 @@ router.get("/", async (req, res) => {
 ------------------------------------------------------------------- */
 router.post("/", async (req, res) => {
   try {
-    const orgCode = req.orgCode;
+    const orgCode = req.orgCode || req.org_code;
 
-    const { staff_id, shift_date, shiftType, unit, assignment_number, timezone } =
-      req.body;
+    const { staff_id, shift_date, shiftType, unit, assignment_number, timezone } = req.body;
 
     if (!staff_id || !shift_date || !shiftType) {
       return res.status(400).json({
@@ -87,7 +91,7 @@ router.post("/", async (req, res) => {
       .select("role")
       .eq("id", staff_id)
       .eq("org_code", orgCode)
-      .single();
+      .maybeSingle();
 
     if (staffErr || !staffData) {
       return res.status(400).json({ error: "Invalid staff_id" });
@@ -101,7 +105,7 @@ router.post("/", async (req, res) => {
       .eq("org_code", orgCode)
       .eq("role", role)
       .eq("shift_type", shiftType)
-      .single();
+      .maybeSingle();
 
     if (settingErr || !setting) {
       return res.status(400).json({
@@ -109,11 +113,7 @@ router.post("/", async (req, res) => {
       });
     }
 
-    const { startUtc, endUtc } = computeShiftTimes(
-      shift_date,
-      setting,
-      facilityTimezone
-    );
+    const { startUtc, endUtc } = computeShiftTimes(shift_date, setting, facilityTimezone);
 
     const { data, error } = await supabaseAdmin
       .from("shifts")
@@ -121,7 +121,6 @@ router.post("/", async (req, res) => {
         {
           staff_id,
           role,
-          shift_type: shiftType, // ✅ recommended (add column if missing)
           unit,
           assignment_number,
           shift_date,
@@ -133,12 +132,11 @@ router.post("/", async (req, res) => {
           org_code: orgCode,
         },
       ])
-      .select()
-      .single();
+      .select();
 
     if (error) throw error;
 
-    res.json(data);
+    res.json(data?.[0] || null);
   } catch (err) {
     console.error("SHIFT POST ERROR:", err);
     res.status(500).json({ error: "Server error" });
@@ -150,11 +148,10 @@ router.post("/", async (req, res) => {
 ------------------------------------------------------------------- */
 router.put("/:id", async (req, res) => {
   try {
-    const orgCode = req.orgCode;
+    const orgCode = req.orgCode || req.org_code;
     const id = req.params.id;
 
-    const { staff_id, shift_date, shiftType, unit, assignment_number, timezone } =
-      req.body;
+    const { staff_id, shift_date, shiftType, unit, assignment_number, timezone } = req.body;
 
     if (!staff_id || !shift_date || !shiftType) {
       return res.status(400).json({
@@ -169,7 +166,7 @@ router.put("/:id", async (req, res) => {
       .select("role")
       .eq("id", staff_id)
       .eq("org_code", orgCode)
-      .single();
+      .maybeSingle();
 
     if (!staffData) return res.status(400).json({ error: "Invalid staff_id" });
 
@@ -181,7 +178,7 @@ router.put("/:id", async (req, res) => {
       .eq("org_code", orgCode)
       .eq("role", role)
       .eq("shift_type", shiftType)
-      .single();
+      .maybeSingle();
 
     if (!setting) {
       return res.status(400).json({
@@ -189,18 +186,13 @@ router.put("/:id", async (req, res) => {
       });
     }
 
-    const { startUtc, endUtc } = computeShiftTimes(
-      shift_date,
-      setting,
-      facilityTimezone
-    );
+    const { startUtc, endUtc } = computeShiftTimes(shift_date, setting, facilityTimezone);
 
     const { data, error } = await supabaseAdmin
       .from("shifts")
       .update({
         staff_id,
         role,
-        shift_type: shiftType,
         unit,
         assignment_number,
         shift_date,
@@ -212,12 +204,11 @@ router.put("/:id", async (req, res) => {
       })
       .eq("id", id)
       .eq("org_code", orgCode)
-      .select()
-      .single();
+      .select();
 
     if (error) throw error;
 
-    res.json(data);
+    res.json(data?.[0] || null);
   } catch (err) {
     console.error("SHIFT PUT ERROR:", err);
     res.status(500).json({ error: "Server error" });
@@ -229,7 +220,7 @@ router.put("/:id", async (req, res) => {
 ------------------------------------------------------------------- */
 router.delete("/:id", async (req, res) => {
   try {
-    const orgCode = req.orgCode;
+    const orgCode = req.orgCode || req.org_code;
 
     const { error } = await supabaseAdmin
       .from("shifts")

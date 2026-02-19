@@ -1,5 +1,5 @@
 // backend/middleware/orgGuard.js
-const supabase = require("../supabase");
+const supabaseAdmin = require("../supabaseAdmin");
 
 function isUuid(v) {
   return (
@@ -13,22 +13,21 @@ async function requireOrg(req, res, next) {
     const user = req.user;
     const role = String(req.role || "").toLowerCase();
 
+    const headerOrgId = req.headers["x-org-id"];
+    const headerOrgCode = req.headers["x-org-code"];
+
     if (!user) return res.status(401).json({ error: "Missing auth context" });
 
-    const headerOrgIdRaw = req.headers["x-org-id"];
-    const headerOrgCodeRaw = req.headers["x-org-code"];
-
-    // ✅ only trust orgId if it's a UUID
-    let orgId = headerOrgIdRaw && isUuid(String(headerOrgIdRaw)) ? String(headerOrgIdRaw) : "";
-    let orgCode = headerOrgCodeRaw ? String(headerOrgCodeRaw).trim() : "";
+    let orgId = headerOrgId ? String(headerOrgId).trim() : "";
+    let orgCode = headerOrgCode ? String(headerOrgCode).trim() : "";
 
     if (!orgId && !orgCode) {
       return res.status(400).json({ error: "Missing org context (x-org-id or x-org-code)" });
     }
 
-    // Resolve org from orgCode if orgId missing
+    // Resolve orgId from orgCode if needed
     if (!orgId && orgCode) {
-      const { data: org, error: orgErr } = await supabase
+      const { data: org, error: orgErr } = await supabaseAdmin
         .from("orgs")
         .select("id, org_code")
         .eq("org_code", orgCode)
@@ -37,16 +36,20 @@ async function requireOrg(req, res, next) {
       if (orgErr) return res.status(500).json({ error: "Failed to resolve org" });
       if (!org?.id) return res.status(400).json({ error: "Invalid org code" });
 
-      orgId = org.id;
+      orgId = String(org.id);
       orgCode = org.org_code || orgCode;
     }
 
-    // ✅ superadmin bypass
+    if (orgId && !isUuid(orgId)) {
+      return res.status(400).json({ error: "Invalid org id" });
+    }
+
+    // ✅ Superadmin bypass
     if (role === "superadmin") {
-      req.orgId = String(orgId);
+      req.orgId = orgId || null;
       req.orgCode = orgCode || null;
 
-      // compat
+      // legacy aliases (your older routes use these)
       req.org_id = req.orgId;
       req.org_code = req.orgCode;
 
@@ -54,22 +57,24 @@ async function requireOrg(req, res, next) {
       return next();
     }
 
-    const { data: mem, error: memErr } = await supabase
+    // Membership check (service role to avoid RLS recursion)
+    const { data: mem, error: memErr } = await supabaseAdmin
       .from("org_memberships")
       .select("role, org_id")
       .eq("user_id", user.id)
       .eq("org_id", orgId)
       .eq("is_active", true)
-      .single();
+      .maybeSingle();
 
     if (memErr || !mem) return res.status(403).json({ error: "No access to this org" });
 
+    // Resolve orgCode if missing
     if (!orgCode) {
-      const { data: org, error: orgErr } = await supabase
+      const { data: org, error: orgErr } = await supabaseAdmin
         .from("orgs")
         .select("org_code")
         .eq("id", orgId)
-        .single();
+        .maybeSingle();
 
       if (orgErr || !org?.org_code) {
         return res.status(400).json({ error: "Invalid org (cannot resolve org_code)" });
@@ -78,12 +83,13 @@ async function requireOrg(req, res, next) {
     }
 
     req.orgId = String(orgId);
-    req.orgCode = orgCode;
-    req.membershipRole = mem.role;
+    req.orgCode = String(orgCode);
 
-    // compat
+    // legacy aliases
     req.org_id = req.orgId;
     req.org_code = req.orgCode;
+
+    req.membershipRole = mem.role || null;
 
     next();
   } catch (e) {

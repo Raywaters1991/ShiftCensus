@@ -1,36 +1,30 @@
 // backend/routes/shiftSettings.js
-
 const express = require("express");
 const router = express.Router();
-const supabase = require("../supabase");
+const supabaseAdmin = require("../supabaseAdmin");
 const { requireAuth } = require("../middleware/auth");
+const { requireOrg } = require("../middleware/orgGuard");
 
-// -----------------------------------------------------
-// ORG CONTEXT (SOURCE OF TRUTH = HEADER)
-// -----------------------------------------------------
-function getOrg(req) {
-  return req.headers["x-org-code"] || null;
-}
+router.use(requireAuth);
+router.use(requireOrg);
 
-function isSuperAdmin(req) {
-  return req.user?.app_metadata?.role === "superadmin";
+// who can change shift settings
+function canManageShiftSettings(req) {
+  const r = String(req.role || "").toLowerCase();
+  return ["superadmin", "admin", "don", "ed"].includes(r);
 }
 
 // =====================================================
 // GET /shift-settings  (ORG SAFE)
 // =====================================================
-router.get("/", requireAuth, async (req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const org = getOrg(req);
+    const orgCode = req.orgCode || req.org_code;
 
-    if (!org) {
-      return res.status(400).json({ error: "Missing x-org-code header" });
-    }
-
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from("shift_settings")
       .select("*")
-      .eq("org_code", org) // 🔒 HARD ORG SCOPE
+      .eq("org_code", orgCode)
       .order("role", { ascending: true })
       .order("shift_type", { ascending: true });
 
@@ -47,27 +41,25 @@ router.get("/", requireAuth, async (req, res) => {
 // POST /shift-settings  (ORG SAFE)
 // body: { role, shift_type, start_local, end_local }
 // =====================================================
-router.post("/", requireAuth, async (req, res) => {
+router.post("/", async (req, res) => {
   try {
-    const org = getOrg(req);
-
-    if (!org) {
-      return res.status(400).json({ error: "Missing x-org-code header" });
+    if (!canManageShiftSettings(req)) {
+      return res.status(403).json({ error: "Not allowed" });
     }
 
-    const { role, shift_type, start_local, end_local } = req.body;
+    const orgCode = req.orgCode || req.org_code;
+    const { role, shift_type, start_local, end_local } = req.body || {};
 
     if (!role || !shift_type || !start_local || !end_local) {
       return res.status(400).json({
-        error:
-          "Missing required fields: role, shift_type, start_local, end_local",
+        error: "Missing required fields: role, shift_type, start_local, end_local",
       });
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from("shift_settings")
       .insert({
-        org_code: org, // 🔒 ORG ASSIGNED HERE
+        org_code: orgCode,
         role,
         shift_type,
         start_local,
@@ -86,45 +78,35 @@ router.post("/", requireAuth, async (req, res) => {
 });
 
 // =====================================================
-// PATCH /shift-settings/:id  (ORG SAFE — EDIT)
-// body: { role, shift_type, start_local, end_local }
+// PATCH /shift-settings/:id  (ORG SAFE)
 // =====================================================
-router.patch("/:id", requireAuth, async (req, res) => {
+router.patch("/:id", async (req, res) => {
   try {
-    const org = getOrg(req);
-    const { id } = req.params;
-
-    if (!org) {
-      return res.status(400).json({ error: "Missing x-org-code header" });
+    if (!canManageShiftSettings(req)) {
+      return res.status(403).json({ error: "Not allowed" });
     }
 
-    const { role, shift_type, start_local, end_local } = req.body;
+    const orgCode = req.orgCode || req.org_code;
+    const { id } = req.params;
+
+    const { role, shift_type, start_local, end_local } = req.body || {};
 
     if (!role || !shift_type || !start_local || !end_local) {
       return res.status(400).json({
-        error:
-          "Missing required fields: role, shift_type, start_local, end_local",
+        error: "Missing required fields: role, shift_type, start_local, end_local",
       });
     }
 
-    // 🔒 Update only if record belongs to org
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from("shift_settings")
-      .update({
-        role,
-        shift_type,
-        start_local,
-        end_local,
-      })
+      .update({ role, shift_type, start_local, end_local })
       .eq("id", id)
-      .eq("org_code", org)
+      .eq("org_code", orgCode)
       .select()
       .single();
 
     if (error) throw error;
-    if (!data) {
-      return res.status(403).json({ error: "Not authorized" });
-    }
+    if (!data) return res.status(404).json({ error: "Not found" });
 
     res.json(data);
   } catch (err) {
@@ -136,20 +118,20 @@ router.patch("/:id", requireAuth, async (req, res) => {
 // =====================================================
 // DELETE /shift-settings/:id  (ORG SAFE)
 // =====================================================
-router.delete("/:id", requireAuth, async (req, res) => {
+router.delete("/:id", async (req, res) => {
   try {
-    const org = getOrg(req);
-    const { id } = req.params;
-
-    if (!org) {
-      return res.status(400).json({ error: "Missing x-org-code header" });
+    if (!canManageShiftSettings(req)) {
+      return res.status(403).json({ error: "Not allowed" });
     }
 
-    const { error } = await supabase
+    const orgCode = req.orgCode || req.org_code;
+    const { id } = req.params;
+
+    const { error } = await supabaseAdmin
       .from("shift_settings")
       .delete()
       .eq("id", id)
-      .eq("org_code", org); // 🔒 HARD ORG CHECK
+      .eq("org_code", orgCode);
 
     if (error) throw error;
 
