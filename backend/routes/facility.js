@@ -1,14 +1,14 @@
 // backend/routes/facility.js
 const express = require("express");
 const router = express.Router();
-const supabase = require("../supabase");
+const supabaseAdmin = require("../supabaseAdmin");
 const { requireAuth } = require("../middleware/auth");
 const { requireOrg } = require("../middleware/orgGuard");
 
 router.use(requireAuth);
 router.use(requireOrg);
 
-// ✅ FIX: role detection (supports req.role, req.user.app_metadata.role, req.user.user_metadata.role)
+// ✅ role detection (supports req.role, req.user.app_metadata.role, req.user.user_metadata.role)
 function getRole(req) {
   return (
     req?.role ||
@@ -38,11 +38,11 @@ function cleanBool(v) {
 /* =========================================================
    GET /api/facility/rooms
 ========================================================= */
-router.get("/rooms", requireAuth, requireOrg, async (req, res) => {
+router.get("/rooms", async (req, res) => {
   try {
     const orgId = req.orgId;
 
-    const { data: rooms, error: roomErr } = await supabase
+    const { data: rooms, error: roomErr } = await supabaseAdmin
       .from("facility_rooms")
       .select("*")
       .eq("org_id", orgId)
@@ -51,7 +51,7 @@ router.get("/rooms", requireAuth, requireOrg, async (req, res) => {
 
     if (roomErr) throw roomErr;
 
-    const { data: beds, error: bedErr } = await supabase
+    const { data: beds, error: bedErr } = await supabaseAdmin
       .from("facility_beds")
       .select("*")
       .eq("org_id", orgId)
@@ -72,9 +72,9 @@ router.get("/rooms", requireAuth, requireOrg, async (req, res) => {
 
     const out = (rooms || []).map((r) => ({
       ...r,
-      name: r.room_label,       // frontend expects name
+      name: r.room_label, // frontend expects name
       room_type: r.unit || null,
-      is_active: true,          // rooms table has no is_active
+      is_active: true, // rooms table has no is_active
       beds: bedsByRoom.get(r.id) || [],
     }));
 
@@ -88,7 +88,7 @@ router.get("/rooms", requireAuth, requireOrg, async (req, res) => {
 /* =========================================================
    POST /api/facility/rooms
 ========================================================= */
-router.post("/rooms", requireAuth, requireOrg, async (req, res) => {
+router.post("/rooms", async (req, res) => {
   try {
     if (!canManage(req)) return res.status(403).json({ error: "Insufficient role" });
 
@@ -98,7 +98,7 @@ router.post("/rooms", requireAuth, requireOrg, async (req, res) => {
 
     if (!name) return res.status(400).json({ error: "Room name required" });
 
-    const { data: maxRow, error: maxErr } = await supabase
+    const { data: maxRow, error: maxErr } = await supabaseAdmin
       .from("facility_rooms")
       .select("display_order")
       .eq("org_id", orgId)
@@ -110,7 +110,7 @@ router.post("/rooms", requireAuth, requireOrg, async (req, res) => {
 
     const nextOrder = (maxRow?.display_order ?? 0) + 1;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from("facility_rooms")
       .insert({
         org_id: orgId,
@@ -139,7 +139,7 @@ router.post("/rooms", requireAuth, requireOrg, async (req, res) => {
 /* =========================================================
    PATCH /api/facility/rooms/:id
 ========================================================= */
-router.patch("/rooms/:id", requireAuth, requireOrg, async (req, res) => {
+router.patch("/rooms/:id", async (req, res) => {
   try {
     if (!canManage(req)) return res.status(403).json({ error: "Insufficient role" });
 
@@ -151,7 +151,7 @@ router.patch("/rooms/:id", requireAuth, requireOrg, async (req, res) => {
     if (req.body?.unit !== undefined) patch.unit = cleanText(req.body.unit, 80) || null;
     if (req.body?.display_order !== undefined) patch.display_order = Number(req.body.display_order) || 0;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from("facility_rooms")
       .update(patch)
       .eq("id", id)
@@ -177,14 +177,14 @@ router.patch("/rooms/:id", requireAuth, requireOrg, async (req, res) => {
 /* =========================================================
    DELETE /api/facility/rooms/:id
 ========================================================= */
-router.delete("/rooms/:id", requireAuth, requireOrg, async (req, res) => {
+router.delete("/rooms/:id", async (req, res) => {
   try {
     if (!canManage(req)) return res.status(403).json({ error: "Insufficient role" });
 
     const orgId = req.orgId;
     const id = req.params.id;
 
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from("facility_rooms")
       .delete()
       .eq("id", id)
@@ -202,7 +202,7 @@ router.delete("/rooms/:id", requireAuth, requireOrg, async (req, res) => {
 /* =========================================================
    POST /api/facility/rooms/:roomId/beds
 ========================================================= */
-router.post("/rooms/:roomId/beds", requireAuth, requireOrg, async (req, res) => {
+router.post("/rooms/:roomId/beds", async (req, res) => {
   try {
     if (!canManage(req)) return res.status(403).json({ error: "Insufficient role" });
 
@@ -213,7 +213,7 @@ router.post("/rooms/:roomId/beds", requireAuth, requireOrg, async (req, res) => 
 
     if (!label) return res.status(400).json({ error: "Bed label required" });
 
-    const { data: room, error: roomErr } = await supabase
+    const { data: room, error: roomErr } = await supabaseAdmin
       .from("facility_rooms")
       .select("id")
       .eq("id", roomId)
@@ -222,7 +222,7 @@ router.post("/rooms/:roomId/beds", requireAuth, requireOrg, async (req, res) => 
 
     if (roomErr || !room) return res.status(404).json({ error: "Room not found" });
 
-    const { data: maxBed, error: maxErr } = await supabase
+    const { data: maxBed, error: maxErr } = await supabaseAdmin
       .from("facility_beds")
       .select("display_order")
       .eq("org_id", orgId)
@@ -235,7 +235,7 @@ router.post("/rooms/:roomId/beds", requireAuth, requireOrg, async (req, res) => 
 
     const nextOrder = (maxBed?.display_order ?? 0) + 1;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from("facility_beds")
       .insert({
         org_id: orgId,
@@ -262,7 +262,7 @@ router.post("/rooms/:roomId/beds", requireAuth, requireOrg, async (req, res) => 
 /* =========================================================
    PATCH /api/facility/beds/:id
 ========================================================= */
-router.patch("/beds/:id", requireAuth, requireOrg, async (req, res) => {
+router.patch("/beds/:id", async (req, res) => {
   try {
     if (!canManage(req)) return res.status(403).json({ error: "Insufficient role" });
 
@@ -274,7 +274,7 @@ router.patch("/beds/:id", requireAuth, requireOrg, async (req, res) => {
     if (req.body?.is_active !== undefined) patch.is_active = cleanBool(req.body.is_active);
     if (req.body?.display_order !== undefined) patch.display_order = Number(req.body.display_order) || 0;
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from("facility_beds")
       .update(patch)
       .eq("id", id)
@@ -298,14 +298,14 @@ router.patch("/beds/:id", requireAuth, requireOrg, async (req, res) => {
 /* =========================================================
    DELETE /api/facility/beds/:id
 ========================================================= */
-router.delete("/beds/:id", requireAuth, requireOrg, async (req, res) => {
+router.delete("/beds/:id", async (req, res) => {
   try {
     if (!canManage(req)) return res.status(403).json({ error: "Insufficient role" });
 
     const orgId = req.orgId;
     const id = req.params.id;
 
-    const { error } = await supabase
+    const { error } = await supabaseAdmin
       .from("facility_beds")
       .delete()
       .eq("id", id)
@@ -323,7 +323,7 @@ router.delete("/beds/:id", requireAuth, requireOrg, async (req, res) => {
 /* =========================================================
    POST /api/facility/beds/reorder
 ========================================================= */
-router.post("/beds/reorder", requireAuth, requireOrg, async (req, res) => {
+router.post("/beds/reorder", async (req, res) => {
   try {
     if (!canManage(req)) return res.status(403).json({ error: "Insufficient role" });
 
@@ -335,7 +335,7 @@ router.post("/beds/reorder", requireAuth, requireOrg, async (req, res) => {
       return res.status(400).json({ error: "room_id and bed_ids[] required" });
     }
 
-    const { data: beds, error: bedErr } = await supabase
+    const { data: beds, error: bedErr } = await supabaseAdmin
       .from("facility_beds")
       .select("id")
       .eq("org_id", orgId)
@@ -354,7 +354,7 @@ router.post("/beds/reorder", requireAuth, requireOrg, async (req, res) => {
       display_order: idx + 1,
     }));
 
-    const { error } = await supabase.from("facility_beds").upsert(updates);
+    const { error } = await supabaseAdmin.from("facility_beds").upsert(updates);
     if (error) throw error;
 
     res.json({ success: true });

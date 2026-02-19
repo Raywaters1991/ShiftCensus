@@ -12,77 +12,123 @@ const BASE = String(API_BASE || "").replace(/\/+$/, "");
 
 const api = axios.create({
   baseURL: BASE,
-  headers: {
-    "Content-Type": "application/json",
-  },
+  headers: { "Content-Type": "application/json" },
   timeout: 20000,
 });
 
 
-// ================================
-// Helpers for org headers
-// ================================
+// =====================================================
+// Utilities
+// =====================================================
 
+// Safe storage getter
+function safeGet(storage, key) {
+  try {
+    return storage?.getItem?.(key) || "";
+  } catch {
+    return "";
+  }
+}
+
+// Read keys in priority order
 function readFirst(...keys) {
   for (const k of keys) {
-    const v =
-      (typeof sessionStorage !== "undefined" && sessionStorage.getItem(k)) ||
-      (typeof localStorage !== "undefined" && localStorage.getItem(k)) ||
-      "";
-    if (v) return v;
+    const v = safeGet(sessionStorage, k) || safeGet(localStorage, k);
+    if (v && String(v).trim()) return String(v).trim();
   }
   return "";
 }
 
+// UUID validator
+function isUuid(v) {
+  return (
+    typeof v === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v)
+  );
+}
+
+
+// =====================================================
+// Org context helpers
+// =====================================================
+
+// Returns ONLY a valid UUID or empty string
 function getOrgId() {
-  return readFirst("active_org_id", "org_id", "activeOrgId", "orgId");
+  const candidate = readFirst(
+    "active_org_id",
+    "org_id",
+    "orgId",
+    "activeOrgId",
+    "activeOrgID"
+  );
+
+  return isUuid(candidate) ? candidate : "";
 }
 
+// Returns ONLY org_code (not UUID)
 function getOrgCode() {
-  return readFirst("org_code", "active_org_code", "orgCode", "activeOrgCode");
+  const code = readFirst(
+    "active_org_code",
+    "org_code",
+    "orgCode",
+    "activeOrgCode",
+    "activeOrgCODE"
+  );
+
+  // Prevent UUID accidentally stored as code
+  if (isUuid(code)) return "";
+
+  return code || "";
 }
 
 
-// ================================
+// =====================================================
 // REQUEST INTERCEPTOR
 // Adds auth + org headers automatically
-// ================================
+// =====================================================
 
 api.interceptors.request.use(async (config) => {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
+  // ---------- AUTH TOKEN ----------
+  let token = null;
 
-  const token = session?.access_token || null;
-
-  // Debug (safe)
-  console.log(
-    "API base:",
-    BASE,
-    "| session?",
-    session ? "YES" : "NO",
-    "| token?",
-    token ? token.slice(0, 12) + "..." : "NO TOKEN"
-  );
+  try {
+    const { data } = await supabase.auth.getSession();
+    token = data?.session?.access_token || null;
+  } catch {
+    token = null;
+  }
 
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
+  } else {
+    delete config.headers.Authorization;
   }
 
+  // ---------- ORG CONTEXT ----------
   const orgId = getOrgId();
   const orgCode = getOrgCode();
 
-  if (orgId) config.headers["x-org-id"] = String(orgId);
-  if (orgCode) config.headers["x-org-code"] = String(orgCode);
+  // Only send valid headers
+  if (orgId) {
+    config.headers["x-org-id"] = orgId;
+  } else {
+    delete config.headers["x-org-id"];
+  }
+
+  if (orgCode) {
+    config.headers["x-org-code"] = orgCode;
+  } else {
+    delete config.headers["x-org-code"];
+  }
 
   return config;
 });
 
 
-// ================================
+// =====================================================
 // RESPONSE INTERCEPTOR
-// Cleaner errors
-// ================================
+// Clean error handling
+// =====================================================
 
 api.interceptors.response.use(
   (response) => response.data,
@@ -90,7 +136,7 @@ api.interceptors.response.use(
     const message =
       error?.response?.data?.error ||
       error?.response?.data?.message ||
-      error.message ||
+      error?.message ||
       "Request failed";
 
     const err = new Error(message);
@@ -100,5 +146,6 @@ api.interceptors.response.use(
     return Promise.reject(err);
   }
 );
+
 
 export default api;

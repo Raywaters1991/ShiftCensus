@@ -1,12 +1,13 @@
 // backend/routes/census.js
 const express = require("express");
 const router = express.Router();
-const supabase = require("../supabase");
+const supabaseAdmin = require("../supabaseAdmin");
 const { requireAuth } = require("../middleware/auth");
 const { requireOrg } = require("../middleware/orgGuard");
 
 router.use(requireAuth);
 router.use(requireOrg);
+
 // -------------------------
 // Helpers
 // -------------------------
@@ -62,7 +63,7 @@ function roomDerivedGender(activeBeds) {
 }
 
 function isSuperAdmin(req) {
-  return req.user?.app_metadata?.role === "superadmin";
+  return String(req.user?.app_metadata?.role || "").toLowerCase() === "superadmin";
 }
 
 /**
@@ -92,15 +93,16 @@ function getEffectiveOrgId(req) {
 // Builds bed-board from facility_rooms + facility_beds,
 // ensures a matching row exists in public.census for each active bed.
 //
-// ✅ Fix: Claim legacy census rows before inserting to avoid (org_id, room_number, bed) conflicts.
+// ✅ Uses supabaseAdmin to avoid RLS/policy recursion
+// ✅ Claims legacy census rows before inserting to avoid unique conflicts
 // -------------------------
-router.get("/bed-board", requireAuth, requireOrg, async (req, res) => {
+router.get("/bed-board", async (req, res) => {
   try {
     const effectiveOrgId = getEffectiveOrgId(req);
     if (!effectiveOrgId) return res.status(400).json({ error: "Missing org_id context" });
 
     // 1) rooms
-    const roomsRes = await supabase
+    const roomsRes = await supabaseAdmin
       .from("facility_rooms")
       .select("id, org_id, room_label, unit, display_order")
       .eq("org_id", effectiveOrgId)
@@ -113,7 +115,7 @@ router.get("/bed-board", requireAuth, requireOrg, async (req, res) => {
     if (roomIds.length === 0) return res.json([]);
 
     // 2) beds
-    const bedsRes = await supabase
+    const bedsRes = await supabaseAdmin
       .from("facility_beds")
       .select("id, org_id, room_id, bed_label, display_order, is_active")
       .eq("org_id", effectiveOrgId)
@@ -126,7 +128,7 @@ router.get("/bed-board", requireAuth, requireOrg, async (req, res) => {
     const beds = bedsRes.data || [];
 
     // 3) census rows for org
-    const censusRes = await supabase
+    const censusRes = await supabaseAdmin
       .from("census")
       .select(
         [
@@ -240,7 +242,7 @@ router.get("/bed-board", requireAuth, requireOrg, async (req, res) => {
 
     // apply claim updates
     for (const u of toClaimUpdates) {
-      const up = await supabase
+      const up = await supabaseAdmin
         .from("census")
         .update(u.patch)
         .eq("id", u.id)
@@ -269,12 +271,13 @@ router.get("/bed-board", requireAuth, requireOrg, async (req, res) => {
         .single();
 
       if (up.error) throw up.error;
-      if (up.data?.facility_bed_id) censusByFacilityBedId.set(String(up.data.facility_bed_id), up.data);
+      if (up.data?.facility_bed_id)
+        censusByFacilityBedId.set(String(up.data.facility_bed_id), up.data);
     }
 
     // insert missing
     if (toInsert.length > 0) {
-      const ins = await supabase
+      const ins = await supabaseAdmin
         .from("census")
         .insert(toInsert)
         .select(
@@ -335,10 +338,8 @@ router.get("/bed-board", requireAuth, requireOrg, async (req, res) => {
         });
       });
 
-    const roomById2 = roomById; // alias
-
     const final = sortedBeds.map((b) => {
-      const room = roomById2.get(String(b.room_id));
+      const room = roomById.get(String(b.room_id));
       const roomLabel = normRoomLabel(room?.room_label) || "—";
       const bedLabel = normBedLabel(b.bed_label) || "—";
 
@@ -387,8 +388,10 @@ router.get("/bed-board", requireAuth, requireOrg, async (req, res) => {
 // Enforces:
 // - Gender mismatch (409 GENDER_MISMATCH) unless couple_override true
 // - Couple lock (409 ROOM_LOCKED): if room is marked as couple/exception, max 2 active residents in room
+//
+// ✅ Uses supabaseAdmin to avoid RLS/policy recursion
 // -------------------------
-router.put("/:id", requireAuth, requireOrg, async (req, res) => {
+router.put("/:id", async (req, res) => {
   try {
     const effectiveOrgId = getEffectiveOrgId(req);
     if (!effectiveOrgId && !isSuperAdmin(req)) {
@@ -398,7 +401,7 @@ router.put("/:id", requireAuth, requireOrg, async (req, res) => {
     const id = String(req.params.id);
 
     // 1) Load current row (we need its room/room_number/bed)
-    const curRes = await supabase
+    const curRes = await supabaseAdmin
       .from("census")
       .select(
         [
@@ -418,7 +421,6 @@ router.put("/:id", requireAuth, requireOrg, async (req, res) => {
       .single();
 
     if (curRes.error) {
-      // Not found / RLS / etc
       console.error("CENSUS LOAD ERROR:", curRes.error);
       return res.status(404).json({ error: "Not found" });
     }
@@ -426,7 +428,7 @@ router.put("/:id", requireAuth, requireOrg, async (req, res) => {
     const current = curRes.data;
 
     // 2) Build patch (your original rules)
-    const patch = { ...req.body };
+    const patch = { ...(req.body || {}) };
 
     delete patch.org_id;
     delete patch.org_code;
@@ -439,54 +441,48 @@ router.put("/:id", requireAuth, requireOrg, async (req, res) => {
     const nextStatus = patch.status !== undefined ? patch.status : current.status;
     const nextIsActive = isActiveStatus(nextStatus);
 
-    const nextGender = patch.patient_gender !== undefined ? normGender(patch.patient_gender) : normGender(current.patient_gender);
+    const nextGender =
+      patch.patient_gender !== undefined
+        ? normGender(patch.patient_gender)
+        : normGender(current.patient_gender);
 
     const nextCoupleOverride =
       patch.couple_override !== undefined ? !!patch.couple_override : !!current.couple_override;
 
-    // 4) Only enforce gender/couple rules when this update would make the bed ACTIVE
-    // (occupied/on-leave). If it's empty, allow clearing without checks.
+    // 4) Only enforce when update would make bed ACTIVE
     if (nextIsActive) {
-      // Identify the "room key" (prefer room_number when available)
       const roomNumber = safeStr(current.room_number).trim();
       const roomText = normRoomLabel(current.room);
 
-      // Fetch other beds in same room (excluding this bed id)
-      let othersQuery = supabase.from("census").select(
-        [
-          "id",
-          "room",
-          "room_number",
-          "bed",
-          "status",
-          "patient_gender",
-          "couple_override",
-        ].join(",")
-      ).eq("org_id", effectiveOrgId);
+      let othersQuery = supabaseAdmin
+        .from("census")
+        .select(
+          [
+            "id",
+            "room",
+            "room_number",
+            "bed",
+            "status",
+            "patient_gender",
+            "couple_override",
+          ].join(",")
+        )
+        .eq("org_id", effectiveOrgId);
 
-      if (roomNumber) {
-        othersQuery = othersQuery.eq("room_number", roomNumber);
-      } else {
-        othersQuery = othersQuery.eq("room", roomText);
-      }
+      if (roomNumber) othersQuery = othersQuery.eq("room_number", roomNumber);
+      else othersQuery = othersQuery.eq("room", roomText);
 
       const othersRes = await othersQuery;
-
       if (othersRes.error) throw othersRes.error;
 
       const sameRoomAll = (othersRes.data || []).filter((r) => String(r.id) !== String(id));
       const sameRoomActive = sameRoomAll.filter((r) => isActiveStatus(r.status));
 
-      // -------------------------
-      // Couple lock rule:
-      // If ANY active bed in the room has couple_override true,
-      // OR this update is setting couple_override true,
-      // then the room is "locked" to a maximum of 2 active residents.
-      // -------------------------
+      // Couple lock
       const roomAlreadyCoupleLocked = sameRoomActive.some((r) => !!r.couple_override);
       const roomWillBeCoupleLocked = roomAlreadyCoupleLocked || nextCoupleOverride;
 
-      const activeCountAfter = sameRoomActive.length + 1; // + this bed becoming active (or staying active)
+      const activeCountAfter = sameRoomActive.length + 1;
       if (roomWillBeCoupleLocked && activeCountAfter > 2) {
         return res.status(409).json({
           error: "ROOM_LOCKED",
@@ -498,14 +494,15 @@ router.put("/:id", requireAuth, requireOrg, async (req, res) => {
         });
       }
 
-      // -------------------------
-      // Gender mismatch rule:
-      // Derive room gender from OTHER ACTIVE beds.
-      // If room is Male/Female, and incoming is opposite, block unless couple_override true.
-      // -------------------------
+      // Gender mismatch
       const roomGender = roomDerivedGender(sameRoomActive);
 
-      if (!nextCoupleOverride && roomGender !== "Neutral" && isMeaningfulGender(nextGender) && roomGender !== nextGender) {
+      if (
+        !nextCoupleOverride &&
+        roomGender !== "Neutral" &&
+        isMeaningfulGender(nextGender) &&
+        roomGender !== nextGender
+      ) {
         return res.status(409).json({
           error: "GENDER_MISMATCH",
           details: {
@@ -518,7 +515,7 @@ router.put("/:id", requireAuth, requireOrg, async (req, res) => {
     }
 
     // 5) Apply update
-    const up = await supabase
+    const up = await supabaseAdmin
       .from("census")
       .update(patch)
       .eq("id", id)
@@ -548,7 +545,6 @@ router.put("/:id", requireAuth, requireOrg, async (req, res) => {
 
     if (up.error) {
       console.error("CENSUS UPDATE ERROR:", up.error);
-      // keep true unexpected db errors as 500
       return res.status(500).json({ error: "Failed to update census row" });
     }
 
