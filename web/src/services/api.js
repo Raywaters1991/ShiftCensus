@@ -11,10 +11,7 @@ import axios from "axios";
 
 const RAW_BASE = (import.meta.env.VITE_BACKEND_URL || "").trim();
 
-// Accept either:
-//  - https://shiftcensus-backend.onrender.com
-//  - https://shiftcensus-backend.onrender.com/api
-// Normalize to always end up at .../api
+// Normalize: accept base or base/api, end as .../api
 const baseURL = RAW_BASE
   ? RAW_BASE.replace(/\/+$/, "").replace(/\/api$/, "") + "/api"
   : "/api";
@@ -28,8 +25,6 @@ function safeJsonParse(v) {
 }
 
 function getSupabaseAccessToken() {
-  // Supabase stores tokens under: sb-<project-ref>-auth-token
-  // We don’t know the exact project ref here, so scan for the key.
   try {
     for (let i = 0; i < window.localStorage.length; i++) {
       const k = window.localStorage.key(i);
@@ -50,8 +45,14 @@ function getSupabaseAccessToken() {
   return null;
 }
 
+function isUuid(v) {
+  return (
+    typeof v === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v)
+  );
+}
+
 function getActiveOrgContext() {
-  // Support multiple key variants (legacy + current)
   const orgId =
     window.localStorage.getItem("activeOrgId") ||
     window.localStorage.getItem("active_org_id") ||
@@ -72,13 +73,6 @@ function getActiveOrgContext() {
   };
 }
 
-function isUuid(v) {
-  return (
-    typeof v === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v)
-  );
-}
-
 const api = axios.create({
   baseURL,
   headers: { "Content-Type": "application/json" },
@@ -89,44 +83,23 @@ api.interceptors.request.use(
   (config) => {
     // Auth
     const token = getSupabaseAccessToken();
-    if (token) {
-      config.headers = config.headers || {};
-      config.headers.Authorization = `Bearer ${token}`;
-    }
+    config.headers = config.headers || {};
+    if (token) config.headers.Authorization = `Bearer ${token}`;
 
     // Org context
     const { orgId, orgCode } = getActiveOrgContext();
-    config.headers = config.headers || {};
 
-    // Only send x-org-id if it's a real UUID
+    // ✅ only send valid UUID
     if (orgId && isUuid(orgId)) config.headers["x-org-id"] = orgId;
+    else delete config.headers["x-org-id"];
 
-    // Always send org code if present (backend can resolve orgId from orgCode)
+    // ✅ always send org code if present (preferred)
     if (orgCode) config.headers["x-org-code"] = orgCode;
+    else delete config.headers["x-org-code"];
 
     return config;
   },
   (error) => Promise.reject(error)
-);
-
-api.interceptors.response.use(
-  (res) => res,
-  (err) => {
-    // Helpful logging for debugging bad requests
-    try {
-      const status = err?.response?.status;
-      const url = err?.config?.url;
-      const data = err?.response?.data;
-
-      if (status === 400 || status === 401 || status === 403) {
-        // eslint-disable-next-line no-console
-        console.warn("API error:", { status, url, data });
-      }
-    } catch {
-      // ignore
-    }
-    return Promise.reject(err);
-  }
 );
 
 export default api;
