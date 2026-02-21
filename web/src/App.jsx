@@ -13,7 +13,7 @@ import SuperAdminPage from "./pages/SuperAdminPage.jsx";
 import AcceptInvitePage from "./pages/AcceptInvitePage.jsx";
 
 // ✅ You will build this (your “Schedule Management” home)
-import HomePage from "./pages/HomePage.jsx";
+import UserHomePage from "./pages/UserHomePage.jsx";
 
 import OrgSwitcher from "./components/OrgSwitcher.jsx";
 import ThemeToggle from "./components/ThemeToggle.jsx";
@@ -312,7 +312,7 @@ export default function App() {
         <Route path="/" element={<RoleLanding role={role} />} />
 
         {/* Main app pages */}
-        <Route path="/home" element={<HomePage />} />
+        <Route path="/home" element={<UserHomePage />} />
         <Route path="/dashboard" element={<DashboardPage />} />
 
         {canSeeShifts && <Route path="/shifts" element={<ShiftsPage />} />}
