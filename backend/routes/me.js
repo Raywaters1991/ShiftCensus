@@ -45,14 +45,29 @@ function monthRange(monthKey) {
  */
 async function resolveActiveOrg({ userId, headerOrgCode }) {
   // 0) Header org_code (trusted if valid)
-  if (headerOrgCode) {
-    const { data: org, error } = await supabaseAdmin
-      .from("orgs")
-      .select("id, org_code, name, logo_url")
-      .eq("org_code", headerOrgCode)
+  // 0) Header org_code (trusted if valid)
+if (headerOrgCode) {
+  const { data: org, error } = await supabaseAdmin
+    .from("orgs")
+    .select("id, org_code, name, logo_url")
+    .eq("org_code", headerOrgCode)
+    .maybeSingle();
+
+  if (!error && org?.id) {
+    // ALSO fetch membership role for this org (if any)
+    const { data: mem, error: memErr } = await supabaseAdmin
+      .from("org_memberships")
+      .select("role")
+      .eq("user_id", userId)
+      .eq("org_id", org.id)
+      .eq("is_active", true)
       .maybeSingle();
-    if (!error && org?.id) return { org, source: "header", membershipRole: null };
+
+    const membershipRole = !memErr ? (mem?.role || null) : null;
+
+    return { org, source: "header", membershipRole };
   }
+}
 
   // 1) Memberships
   const { data: memberships, error: memErr } = await supabaseAdmin
