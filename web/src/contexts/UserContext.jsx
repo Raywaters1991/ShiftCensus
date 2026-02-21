@@ -1,5 +1,5 @@
 // web/src/contexts/UserContext.jsx
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import supabase from "../services/supabaseClient";
 import api from "../services/api";
 
@@ -28,13 +28,15 @@ function persistOrgContext({ orgId, orgCode, orgName }) {
 
 function readStoredOrg() {
   const orgId =
-    sessionStorage.getItem("active_org_id") ||
-    localStorage.getItem("active_org_id") ||
+    (typeof sessionStorage !== "undefined" && sessionStorage.getItem("active_org_id")) ||
+    (typeof localStorage !== "undefined" && localStorage.getItem("active_org_id")) ||
     "";
+
   const orgCode =
-    sessionStorage.getItem("active_org_code") ||
-    localStorage.getItem("active_org_code") ||
+    (typeof sessionStorage !== "undefined" && sessionStorage.getItem("active_org_code")) ||
+    (typeof localStorage !== "undefined" && localStorage.getItem("active_org_code")) ||
     "";
+
   return { orgId, orgCode };
 }
 
@@ -44,14 +46,26 @@ export function UserProvider({ children }) {
 
   const [orgMemberships, setOrgMemberships] = useState([]);
   const [activeOrg, setActiveOrg] = useState(null);
+
+  // This is the UI role you use throughout the app
   const [activeMembershipRole, setActiveMembershipRole] = useState(null);
+
+  // Helpful flags for routing/UI
+  const [appRole, setAppRole] = useState(null);
+  const [isSuperadmin, setIsSuperadmin] = useState(false);
 
   const [loading, setLoading] = useState(true);
 
+  // Prevent overlapping loads on rapid auth changes
+  const loadInFlight = useRef(false);
+
   async function loadUser() {
+    if (loadInFlight.current) return;
+    loadInFlight.current = true;
+
     setLoading(true);
 
-    // 1) Auth user (from supabase session)
+    // 1) Auth user
     const { data: auth } = await supabase.auth.getUser();
     const authUser = auth?.user ?? null;
     setUser(authUser);
@@ -61,26 +75,48 @@ export function UserProvider({ children }) {
       setOrgMemberships([]);
       setActiveOrg(null);
       setActiveMembershipRole(null);
+      setAppRole(null);
+      setIsSuperadmin(false);
       persistOrgContext({ orgId: null, orgCode: null, orgName: null });
       setLoading(false);
+      loadInFlight.current = false;
       return;
     }
 
     try {
-      // 2) Load backend profile (your existing endpoint)
+      // 2) Backend profile (your existing endpoint)
       const p = await api.get("/admin/profile");
       setProfile(p);
 
-      // 3) Resolve active org from backend (single source of truth)
-      // Send stored org_code if you have it (helps superadmin switching)
+      // 3) Bootstrap (backend is source of truth for org + role)
       const stored = readStoredOrg();
+
+      // If stored orgCode is ADMIN, don't send it; let backend pick default
+      const safeStoredOrgCode =
+        stored.orgCode && String(stored.orgCode).toUpperCase() !== "ADMIN"
+          ? stored.orgCode
+          : "";
+
       const bootstrap = await api.get("/me/bootstrap", {
-        headers: stored.orgCode ? { "X-Org-Code": stored.orgCode } : undefined,
+        headers: safeStoredOrgCode ? { "X-Org-Code": safeStoredOrgCode } : undefined,
       });
 
       const org = bootstrap?.activeOrg || null;
       setActiveOrg(org);
-      setActiveMembershipRole(bootstrap?.membershipRole || p?.role || null);
+
+      const bootAppRole = bootstrap?.appRole || p?.role || null;
+      setAppRole(bootAppRole);
+      setIsSuperadmin(!!bootstrap?.isSuperadmin || String(bootAppRole || "").toLowerCase() === "superadmin");
+
+      // Role for UI permissions:
+      // - If superadmin, force "superadmin"
+      // - Else use membershipRole from bootstrap (or profile role fallback)
+      const roleForUi =
+        (bootstrap?.isSuperadmin || String(bootAppRole || "").toLowerCase() === "superadmin")
+          ? "superadmin"
+          : (bootstrap?.membershipRole || p?.role || null);
+
+      setActiveMembershipRole(roleForUi);
 
       persistOrgContext({
         orgId: org?.id || null,
@@ -88,15 +124,29 @@ export function UserProvider({ children }) {
         orgName: org?.name || null,
       });
 
-      // 4) Fetch memberships through backend (avoids RLS headaches)
+      // 4) Memberships through backend (avoids RLS)
       const memRes = await api.get("/me/memberships");
       const memberships = Array.isArray(memRes?.memberships) ? memRes.memberships : [];
       setOrgMemberships(memberships);
+
+      // 5) If we have no active org but memberships exist, pick the first
+      if (!org?.id && memberships.length > 0) {
+        const firstOrg = memberships[0]?.orgs;
+        if (firstOrg?.id) {
+          setActiveOrg(firstOrg);
+          persistOrgContext({
+            orgId: firstOrg.id,
+            orgCode: firstOrg.org_code,
+            orgName: firstOrg.name,
+          });
+        }
+      }
     } catch (e) {
       console.error("USER LOAD ERROR:", e);
     }
 
     setLoading(false);
+    loadInFlight.current = false;
   }
 
   useEffect(() => {
@@ -117,20 +167,27 @@ export function UserProvider({ children }) {
   async function switchOrg(orgId) {
     if (!orgId) return;
 
-    // Find in memberships first
+    // find in loaded memberships (superadmin will have all orgs)
     const selected = orgMemberships.find((m) => String(m?.orgs?.id) === String(orgId));
     const org = selected?.orgs || null;
 
     if (org?.id) {
       setActiveOrg(org);
-      setActiveMembershipRole(selected?.role || activeMembershipRole || null);
-      persistOrgContext({ orgId: org.id, orgCode: org.org_code, orgName: org.name });
+
+      // if you're superadmin, stay superadmin regardless of selected.role
+      const nextRole = isSuperadmin ? "superadmin" : (selected?.role || activeMembershipRole || null);
+      setActiveMembershipRole(nextRole);
+
+      persistOrgContext({
+        orgId: org.id,
+        orgCode: org.org_code,
+        orgName: org.name,
+      });
+
       return;
     }
 
-    // If not in memberships, attempt lookup via backend bootstrap by setting org_code in storage
-    // (you can also create a dedicated backend endpoint later for org switching)
-    console.warn("switchOrg: org not found in memberships");
+    console.warn("switchOrg: org not found in memberships", orgId);
   }
 
   const value = useMemo(
@@ -143,6 +200,8 @@ export function UserProvider({ children }) {
       switchOrg,
 
       role: activeMembershipRole,
+      appRole,
+      isSuperadmin,
 
       orgId: activeOrg?.id ?? null,
       orgCode: activeOrg?.org_code ?? null,
@@ -152,7 +211,7 @@ export function UserProvider({ children }) {
       loading,
       refreshUser: loadUser,
     }),
-    [user, profile, orgMemberships, activeOrg, activeMembershipRole, loading]
+    [user, profile, orgMemberships, activeOrg, activeMembershipRole, appRole, isSuperadmin, loading]
   );
 
   return <UserContext.Provider value={value}>{children}</UserContext.Provider>;

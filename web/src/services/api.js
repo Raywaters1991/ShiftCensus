@@ -45,7 +45,6 @@ function readSupabaseAccessTokenFromStore(store) {
   const session = safeJsonParse(raw || "null");
   if (!session) return null;
 
-  // Supabase can store session in different shapes depending on version/config
   return (
     session?.access_token ||
     session?.currentSession?.access_token ||
@@ -55,8 +54,7 @@ function readSupabaseAccessTokenFromStore(store) {
 }
 
 function getSupabaseAccessToken() {
-  // Prefer sessionStorage first (good for kiosk-ish sessions),
-  // then fall back to localStorage (default Supabase behavior).
+  // Prefer sessionStorage first, then localStorage
   return (
     readSupabaseAccessTokenFromStore(sessionStorage) ||
     readSupabaseAccessTokenFromStore(localStorage) ||
@@ -76,7 +74,6 @@ function getOrgContext() {
     }
   };
 
-  // Include all variants you’ve used across the app
   const orgId =
     read(sessionStorage, "active_org_id") ||
     read(sessionStorage, "activeOrgId") ||
@@ -110,7 +107,6 @@ api.interceptors.request.use((config) => {
 
   const setHeader = (k, v) => {
     if (!v) return;
-    // Axios v1 uses AxiosHeaders which has .set()
     if (typeof headers.set === "function") headers.set(k, v);
     else headers[k] = v;
   };
@@ -122,9 +118,13 @@ api.interceptors.request.use((config) => {
   // 2) Org context
   const { orgId, orgCode } = getOrgContext();
 
-  // Keep both; backend primarily needs X-Org-Code, but X-Org-Id can be useful later
   if (orgId) setHeader("X-Org-Id", orgId);
-  if (orgCode) setHeader("X-Org-Code", orgCode);
+
+  // ✅ IMPORTANT:
+  // Do NOT blindly send ADMIN org_code (it hijacks superadmin context).
+  if (orgCode && String(orgCode).toUpperCase() !== "ADMIN") {
+    setHeader("X-Org-Code", orgCode);
+  }
 
   config.headers = headers;
   return config;
