@@ -56,13 +56,7 @@ function persistOrgContext({ orgId, orgCode, orgName }) {
 }
 
 function getRoleFromProfileOrAuth(profile, user) {
-  const r =
-    profile?.role ||
-    user?.app_metadata?.role ||
-    user?.user_metadata?.role ||
-    null;
-
-  // Supabase default role is "authenticated" — not an app role
+  const r = profile?.role || user?.app_metadata?.role || user?.user_metadata?.role || null;
   if (!r || String(r).toLowerCase() === "authenticated") return null;
   return String(r).toLowerCase();
 }
@@ -131,6 +125,73 @@ export function UserProvider({ children }) {
     return null;
   }
 
+  async function inferOrgFromStaff(userId) {
+    // If a user is linked to a staff row but has no org_memberships yet,
+    // we can still infer their org and keep the app working.
+    const { data: staffRows, error } = await supabase
+      .from("staff")
+      .select("id, org_code, org_id")
+      .eq("user_id", userId);
+
+    if (error) {
+      console.warn("STAFF ORG INFER ERROR:", error);
+      return null;
+    }
+
+    const rows = staffRows || [];
+    if (rows.length !== 1) return null;
+
+    const orgCode = rows[0]?.org_code || null;
+    const orgId = rows[0]?.org_id || null;
+
+    if (orgId) {
+      const { data: org } = await supabase
+        .from("orgs")
+        .select("id, org_code, name, logo_url")
+        .eq("id", orgId)
+        .maybeSingle();
+      return org?.id ? org : null;
+    }
+
+    if (orgCode) {
+      const { data: org } = await supabase
+        .from("orgs")
+        .select("id, org_code, name, logo_url")
+        .eq("org_code", orgCode)
+        .maybeSingle();
+      return org?.id ? org : null;
+    }
+
+    return null;
+  }
+
+  async function tryBackendBootstrapIfNoOrgSelected() {
+    const storedOrgCode = readFirst("active_org_code", "org_code", "activeOrgCode", "orgCode");
+    if (storedOrgCode) return null; // already have org context
+
+    try {
+      // This only works if your backend has /api/me/bootstrap (recommended)
+      const boot = await api.get("/me/bootstrap");
+      const active = boot?.activeOrg;
+
+      if (active?.org_code) {
+        // Load org row from supabase (source of truth for orgName/logo)
+        const { data: org } = await supabase
+          .from("orgs")
+          .select("id, org_code, name, logo_url")
+          .eq("org_code", active.org_code)
+          .maybeSingle();
+
+        if (org?.id) return org;
+      }
+    } catch (e) {
+      // fail soft
+      console.warn("BOOTSTRAP (backend) skipped/failed:", e?.message || e);
+    }
+
+    return null;
+  }
+
   async function loadUser() {
     setLoading(true);
 
@@ -149,7 +210,7 @@ export function UserProvider({ children }) {
     }
 
     try {
-      // your backend profile endpoint
+      // backend profile endpoint (keep as-is)
       const p = await api.get("/admin/profile");
       setProfile(p);
 
@@ -160,14 +221,13 @@ export function UserProvider({ children }) {
       if (appRole === "superadmin") {
         const org = await loadOrgByStoredSelection();
 
-        setOrgMemberships([]); // optional; you can also load all orgs elsewhere
+        setOrgMemberships([]);
         setActiveMembershipRole("superadmin");
 
         if (org?.id) {
           setActiveOrg(org);
           persistOrgContext({ orgId: org.id, orgCode: org.org_code, orgName: org.name });
         } else {
-          // No facility selected yet
           setActiveOrg(null);
           persistOrgContext({ orgId: null, orgCode: null, orgName: null });
         }
@@ -180,27 +240,62 @@ export function UserProvider({ children }) {
       const memberships = await loadOrgMemberships(authUser.id);
       setOrgMemberships(memberships);
 
-      if (memberships.length === 0) {
-        console.warn("User has no org memberships");
-        setActiveOrg(null);
-        setActiveMembershipRole(null);
-        persistOrgContext({ orgId: null, orgCode: null, orgName: null });
+      // 1) If they have memberships, pick stored org if possible else first
+      if (memberships.length > 0) {
+        const storedOrgId = readFirst("active_org_id", "org_id");
+        const selected =
+          memberships.find((m) => String(m.orgs.id) === String(storedOrgId)) || memberships[0];
+
+        setActiveOrg(selected.orgs);
+        setActiveMembershipRole(selected.role || null);
+
+        persistOrgContext({
+          orgId: selected.orgs.id,
+          orgCode: selected.orgs.org_code,
+          orgName: selected.orgs.name,
+        });
+
         setLoading(false);
         return;
       }
 
-      const storedOrgId = readFirst("active_org_id", "org_id");
-      const selected =
-        memberships.find((m) => String(m.orgs.id) === String(storedOrgId)) || memberships[0];
+      // 2) No memberships: try backend bootstrap (if available) to auto-select org
+      const bootOrg = await tryBackendBootstrapIfNoOrgSelected();
+      if (bootOrg?.id) {
+        setActiveOrg(bootOrg);
+        setActiveMembershipRole(null);
 
-      setActiveOrg(selected.orgs);
-      setActiveMembershipRole(selected.role || null);
+        persistOrgContext({
+          orgId: bootOrg.id,
+          orgCode: bootOrg.org_code,
+          orgName: bootOrg.name,
+        });
 
-      persistOrgContext({
-        orgId: selected.orgs.id,
-        orgCode: selected.orgs.org_code,
-        orgName: selected.orgs.name,
-      });
+        setLoading(false);
+        return;
+      }
+
+      // 3) Still nothing: infer from staff table (best long-term “no-maintenance” fallback)
+      const staffOrg = await inferOrgFromStaff(authUser.id);
+      if (staffOrg?.id) {
+        setActiveOrg(staffOrg);
+        setActiveMembershipRole(null);
+
+        persistOrgContext({
+          orgId: staffOrg.id,
+          orgCode: staffOrg.org_code,
+          orgName: staffOrg.name,
+        });
+
+        setLoading(false);
+        return;
+      }
+
+      // 4) Truly no org link exists (expected for brand new accounts)
+      console.warn("User has no org memberships and no staff org link");
+      setActiveOrg(null);
+      setActiveMembershipRole(null);
+      persistOrgContext({ orgId: null, orgCode: null, orgName: null });
     } catch (e) {
       console.error("USER LOAD ERROR:", e);
     }
@@ -226,7 +321,6 @@ export function UserProvider({ children }) {
   }, []);
 
   function switchOrg(orgId) {
-    // For superadmin, you might switch orgs from SuperAdmin page; we just persist
     if (!orgId) return;
 
     // Normal users can only switch among memberships they have
@@ -242,7 +336,7 @@ export function UserProvider({ children }) {
       return;
     }
 
-    // If not in memberships, we still allow superadmin (or future behavior) by direct lookup
+    // If not in memberships, still allow superadmin (or future behavior) by direct lookup
     (async () => {
       const { data: org } = await supabase
         .from("orgs")

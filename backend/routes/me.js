@@ -5,9 +5,6 @@ const router = express.Router();
 const supabase = require("../supabase"); // anon client (auth verification)
 const supabaseAdmin = require("../supabaseAdmin"); // service role (DB)
 
-// -------------------------
-// Auth helper
-// -------------------------
 function getBearerToken(req) {
   const h = req.get("Authorization") || "";
   const m = h.match(/^Bearer\s+(.+)$/i);
@@ -29,9 +26,6 @@ async function requireAuth(req, res, next) {
   }
 }
 
-// -------------------------
-// Date helper
-// -------------------------
 function monthRange(monthKey) {
   const [yStr, mStr] = String(monthKey || "").split("-");
   const y = Number(yStr);
@@ -43,31 +37,137 @@ function monthRange(monthKey) {
   return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
 }
 
-// -------------------------
-// GET /api/me/home-summary
-// -------------------------
+/**
+ * Resolve org context in this priority order:
+ * 1) Explicit header (X-Org-Code)
+ * 2) Explicit query (org_code)
+ * 3) If user has exactly one org_membership -> use it
+ * Otherwise: return null (caller can 400 with helpful message)
+ */
+async function resolveOrg(req) {
+  let orgCode =
+    req.get("X-Org-Code") ||
+    req.get("x-org-code") ||
+    req.query.org_code ||
+    null;
+
+  // If provided, try to also grab org_id (nice to have)
+  let orgId =
+    req.get("X-Org-Id") ||
+    req.get("x-org-id") ||
+    req.query.org_id ||
+    null;
+
+  if (orgCode && orgId) return { orgCode, orgId, source: "explicit" };
+
+  // infer from org_memberships if orgCode missing
+  if (!orgCode) {
+    const { data: mems, error } = await supabaseAdmin
+      .from("org_memberships")
+      .select("org_id, org_code")
+      .eq("user_id", req.user.id);
+
+    if (error) throw error;
+
+    if (Array.isArray(mems) && mems.length === 1) {
+      orgCode = mems[0].org_code || null;
+      orgId = mems[0].org_id || null;
+      return { orgCode, orgId, source: "membership_single" };
+    }
+
+    return { orgCode: null, orgId: null, source: "missing_or_multi" };
+  }
+
+  // orgCode provided but orgId missing — try lookup
+  if (orgCode && !orgId) {
+    const { data: org, error } = await supabaseAdmin
+      .from("organizations")
+      .select("id, org_code")
+      .eq("org_code", orgCode)
+      .maybeSingle();
+
+    if (!error && org?.id) orgId = org.id;
+  }
+
+  return { orgCode, orgId, source: "explicit_partial" };
+}
+
+/**
+ * Bootstrap endpoint:
+ * - returns memberships
+ * - returns inferred "active" org if only one
+ * - returns staff row for that org (if resolvable)
+ *
+ * Frontend calls this right after login if no org is stored yet.
+ */
+router.get("/bootstrap", requireAuth, async (req, res) => {
+  try {
+    const { data: memberships, error: memErr } = await supabaseAdmin
+      .from("org_memberships")
+      .select("org_id, org_code, role")
+      .eq("user_id", req.user.id)
+      .order("org_code", { ascending: true });
+
+    if (memErr) throw memErr;
+
+    // infer active org if exactly one
+    const active =
+      Array.isArray(memberships) && memberships.length === 1
+        ? { org_id: memberships[0].org_id, org_code: memberships[0].org_code }
+        : null;
+
+    let staff = null;
+    if (active?.org_code) {
+      const { data: staffRow, error: staffErr } = await supabaseAdmin
+        .from("staff")
+        .select("id, name, role, email, phone, org_code, user_id")
+        .eq("org_code", active.org_code)
+        .eq("user_id", req.user.id)
+        .maybeSingle();
+
+      if (staffErr) throw staffErr;
+      staff = staffRow || null;
+    }
+
+    res.json({
+      user: { id: req.user.id, email: req.user.email },
+      memberships: memberships || [],
+      activeOrg: active,
+      staff,
+    });
+  } catch (e) {
+    console.error("ME BOOTSTRAP ERROR:", e);
+    res.status(500).json({ error: e?.message || "Server error" });
+  }
+});
+
 router.get("/home-summary", requireAuth, async (req, res) => {
   try {
-    const orgCode = req.get("X-Org-Code") || req.get("x-org-code") || null;
-    if (!orgCode) return res.status(400).json({ error: "Missing X-Org-Code" });
-
     const range = monthRange(req.query.month);
     if (!range) return res.status(400).json({ error: "Invalid month. Use YYYY-MM" });
 
-    const userId = req.user.id;
+    const { orgCode } = await resolveOrg(req);
 
-    // Find staff row linked to user_id in this org
+    if (!orgCode) {
+      return res.status(400).json({
+        error:
+          "Missing org context. Set X-Org-Code (or choose an org). If user has exactly one org_membership, it will auto-select.",
+      });
+    }
+
+    // Link user -> staff row (per org)
     const { data: staff, error: staffErr } = await supabaseAdmin
       .from("staff")
       .select("id, user_id, org_code")
       .eq("org_code", orgCode)
-      .eq("user_id", userId)
+      .eq("user_id", req.user.id)
       .maybeSingle();
+
     if (staffErr) throw staffErr;
 
     const staffId = staff?.id ? String(staff.id) : null;
 
-    // My shifts (assigned)
+    // My shifts
     let myShifts = [];
     if (staffId) {
       const { data, error } = await supabaseAdmin
@@ -83,8 +183,8 @@ router.get("/home-summary", requireAuth, async (req, res) => {
       myShifts = data || [];
     }
 
-    // Open shifts (unassigned)
-    const { data: openShifts, error: openErr } = await supabaseAdmin
+    // Open shifts
+    const { data: open, error: openErr } = await supabaseAdmin
       .from("shifts")
       .select("id, org_code, staff_id, shift_date, start_local, end_local, role, unit_name, status")
       .eq("org_code", orgCode)
@@ -95,16 +195,17 @@ router.get("/home-summary", requireAuth, async (req, res) => {
 
     if (openErr) throw openErr;
 
-    return res.json({
+    res.json({
       myShifts,
-      openShifts: openShifts || [],
+      openShifts: open || [],
       pending: [],
       timeOff: [],
-      staffId,
+      staffId: staffId || null,
+      orgCode,
     });
   } catch (e) {
     console.error("ME HOME SUMMARY ERROR:", e);
-    return res.status(500).json({ error: e?.message || "Server error" });
+    res.status(500).json({ error: e?.message || "Server error" });
   }
 });
 
