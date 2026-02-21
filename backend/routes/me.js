@@ -3,7 +3,7 @@ const express = require("express");
 const router = express.Router();
 
 const supabase = require("../supabase"); // anon client (auth verification)
-const supabaseAdmin = require("../supabaseAdmin"); // service role (DB)
+const supabaseAdmin = require("../supabaseAdmin"); // service role (DB reads)
 
 function getBearerToken(req) {
   const h = req.get("Authorization") || "";
@@ -37,31 +37,36 @@ function monthRange(monthKey) {
   return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
 }
 
+/**
+ * Resolve active org in this priority:
+ * 0) X-Org-Code header (if client already selected org)
+ * 1) org_memberships (service role)
+ * 2) staff.user_id -> staff.org_code fallback (service role)
+ */
 async function resolveActiveOrg({ userId, headerOrgCode }) {
-  // 0) If client explicitly provides orgCode, prefer it
+  // 0) Header org_code (trusted if valid)
   if (headerOrgCode) {
     const { data: org, error } = await supabaseAdmin
       .from("orgs")
       .select("id, org_code, name, logo_url")
       .eq("org_code", headerOrgCode)
       .maybeSingle();
-
     if (!error && org?.id) return { org, source: "header", membershipRole: null };
   }
 
-  // 1) Try org_memberships (join orgs)
+  // 1) Memberships
   const { data: memberships, error: memErr } = await supabaseAdmin
     .from("org_memberships")
     .select(
       `
-      role,
-      orgs:orgs!org_memberships_org_id_fkey (
-        id,
-        org_code,
-        name,
-        logo_url
-      )
-    `
+        role,
+        orgs:orgs!org_memberships_org_id_fkey (
+          id,
+          org_code,
+          name,
+          logo_url
+        )
+      `
     )
     .eq("user_id", userId)
     .eq("is_active", true);
@@ -71,7 +76,7 @@ async function resolveActiveOrg({ userId, headerOrgCode }) {
     if (m?.orgs?.id) return { org: m.orgs, source: "membership", membershipRole: m.role || null };
   }
 
-  // 2) Fallback: staff.user_id link
+  // 2) Staff link fallback
   const { data: staff, error: staffErr } = await supabaseAdmin
     .from("staff")
     .select("id, org_code, user_id")
@@ -91,7 +96,12 @@ async function resolveActiveOrg({ userId, headerOrgCode }) {
   return { org: null, source: "none", membershipRole: null };
 }
 
-// Frontend uses this once after login to determine active org
+/**
+ * Frontend calls this on login to learn:
+ * - user identity
+ * - active org (resolved)
+ * - membershipRole (if any)
+ */
 router.get("/bootstrap", requireAuth, async (req, res) => {
   try {
     const headerOrgCode = req.get("X-Org-Code") || req.get("x-org-code") || null;
@@ -109,6 +119,40 @@ router.get("/bootstrap", requireAuth, async (req, res) => {
   }
 });
 
+/**
+ * Optional but recommended: let frontend fetch memberships via backend
+ * so you never fight RLS on org_memberships.
+ */
+router.get("/memberships", requireAuth, async (req, res) => {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("org_memberships")
+      .select(
+        `
+        role,
+        orgs:orgs!org_memberships_org_id_fkey (
+          id, org_code, name, logo_url
+        )
+      `
+      )
+      .eq("user_id", req.user.id)
+      .eq("is_active", true);
+
+    if (error) throw error;
+
+    const memberships = (data || []).filter((m) => m?.orgs?.id);
+    return res.json({ memberships });
+  } catch (e) {
+    console.error("ME MEMBERSHIPS ERROR:", e);
+    return res.status(500).json({ error: e?.message || "Server error" });
+  }
+});
+
+/**
+ * Home summary for UserHomePage
+ * IMPORTANT: Your shifts table has `unit` (text) and does NOT have `unit_name` or `status`.
+ * So we select columns that exist and map `unit` -> `unit_name` for the UI.
+ */
 router.get("/home-summary", requireAuth, async (req, res) => {
   try {
     const range = monthRange(req.query.month);
@@ -119,13 +163,12 @@ router.get("/home-summary", requireAuth, async (req, res) => {
     const org = resolved.org;
 
     if (!org?.org_code) return res.status(400).json({ error: "No active org found for user" });
-
     const orgCode = org.org_code;
 
-    // Find staff row linked to logged-in user in this org
+    // Find staff row linked to logged-in user (in this org)
     const { data: staff, error: staffErr } = await supabaseAdmin
       .from("staff")
-      .select("id, user_id, org_code")
+      .select("id, user_id, org_code, employee_no, staff_uuid")
       .eq("org_code", orgCode)
       .eq("user_id", req.user.id)
       .maybeSingle();
@@ -133,12 +176,25 @@ router.get("/home-summary", requireAuth, async (req, res) => {
 
     const staffId = staff?.id ? String(staff.id) : null;
 
-    // My shifts (assigned) — NOTE: your shifts table uses `unit` (text)
+    // My shifts (assigned)
     let myShifts = [];
     if (staffId) {
       const { data, error } = await supabaseAdmin
         .from("shifts")
-        .select("id, org_code, staff_id, shift_date, start_local, end_local, role, status, unit")
+        .select(
+          `
+            id,
+            org_code,
+            staff_id,
+            staff_uuid,
+            role,
+            shift_date,
+            start_local,
+            end_local,
+            shift_type,
+            unit
+          `
+        )
         .eq("org_code", orgCode)
         .eq("staff_id", staffId)
         .gte("shift_date", range.start)
@@ -146,13 +202,30 @@ router.get("/home-summary", requireAuth, async (req, res) => {
         .order("shift_date", { ascending: true });
 
       if (error) throw error;
-      myShifts = (data || []).map((s) => ({ ...s, unit_name: s.unit || null }));
+
+      myShifts = (data || []).map((s) => ({
+        ...s,
+        unit_name: s.unit || null, // <-- UI expects unit_name
+      }));
     }
 
     // Open shifts (unassigned)
     const { data: open, error: openErr } = await supabaseAdmin
       .from("shifts")
-      .select("id, org_code, staff_id, shift_date, start_local, end_local, role, status, unit")
+      .select(
+        `
+          id,
+          org_code,
+          staff_id,
+          staff_uuid,
+          role,
+          shift_date,
+          start_local,
+          end_local,
+          shift_type,
+          unit
+        `
+      )
       .eq("org_code", orgCode)
       .is("staff_id", null)
       .gte("shift_date", range.start)
@@ -161,7 +234,10 @@ router.get("/home-summary", requireAuth, async (req, res) => {
 
     if (openErr) throw openErr;
 
-    const openShifts = (open || []).map((s) => ({ ...s, unit_name: s.unit || null }));
+    const openShifts = (open || []).map((s) => ({
+      ...s,
+      unit_name: s.unit || null,
+    }));
 
     return res.json({
       myShifts,
