@@ -23,20 +23,26 @@ function getSupabaseAccessToken() {
 }
 
 function getOrgContext() {
+  const read = (store, k) => {
+    try { return store?.getItem(k) || ""; } catch { return ""; }
+  };
+
   const orgId =
-    localStorage.getItem("active_org_id") ||
-    localStorage.getItem("activeOrgId") ||
-    localStorage.getItem("active_orgId") ||
-    localStorage.getItem("org_id") ||
-    localStorage.getItem("orgId") ||
+    read(sessionStorage, "active_org_id") ||
+    read(sessionStorage, "org_id") ||
+    read(sessionStorage, "orgId") ||
+    read(localStorage, "active_org_id") ||
+    read(localStorage, "org_id") ||
+    read(localStorage, "orgId") ||
     "";
 
   const orgCode =
-    localStorage.getItem("active_org_code") ||
-    localStorage.getItem("activeOrgCode") ||
-    localStorage.getItem("active_orgCode") ||
-    localStorage.getItem("org_code") ||
-    localStorage.getItem("orgCode") ||
+    read(sessionStorage, "active_org_code") ||
+    read(sessionStorage, "org_code") ||
+    read(sessionStorage, "orgCode") ||
+    read(localStorage, "active_org_code") ||
+    read(localStorage, "org_code") ||
+    read(localStorage, "orgCode") ||
     "";
 
   return { orgId, orgCode };
