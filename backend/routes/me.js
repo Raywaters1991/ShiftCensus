@@ -38,13 +38,14 @@ function monthRange(monthKey) {
 }
 
 async function resolveActiveOrg({ userId, headerOrgCode }) {
-  // 0) If client explicitly provides org, trust it (for superadmin switching orgs, etc.)
+  // 0) If client explicitly provides org, trust it (superadmin switching orgs, etc.)
   if (headerOrgCode) {
     const { data: org, error } = await supabaseAdmin
       .from("orgs")
       .select("id, org_code, name, logo_url")
       .eq("org_code", headerOrgCode)
       .maybeSingle();
+
     if (!error && org?.id) return { org, source: "header", membershipRole: null };
   }
 
@@ -70,7 +71,7 @@ async function resolveActiveOrg({ userId, headerOrgCode }) {
     if (m?.orgs?.id) return { org: m.orgs, source: "membership", membershipRole: m.role || null };
   }
 
-  // 2) Fallback: staff link (for your test user Ray)
+  // 2) Fallback: staff link
   const { data: staff, error: staffErr } = await supabaseAdmin
     .from("staff")
     .select("id, org_code, user_id")
@@ -90,7 +91,7 @@ async function resolveActiveOrg({ userId, headerOrgCode }) {
   return { org: null, source: "none", membershipRole: null };
 }
 
-// ✅ Use this for frontend to auto-set org context without storage hacks
+// Frontend can call this to learn org context (and then your UserContext can store it)
 router.get("/bootstrap", requireAuth, async (req, res) => {
   try {
     const headerOrgCode = req.get("X-Org-Code") || req.get("x-org-code") || null;
@@ -139,7 +140,20 @@ router.get("/home-summary", requireAuth, async (req, res) => {
     if (staffId) {
       const { data, error } = await supabaseAdmin
         .from("shifts")
-        .select("id, org_code, staff_id, shift_date, start_local, end_local, role, unit_name, status")
+        .select(
+          `
+          id,
+          org_code,
+          staff_id,
+          shift_date,
+          start_local,
+          end_local,
+          role,
+          status,
+          unit_id,
+          units:units ( name )
+        `
+        )
         .eq("org_code", orgCode)
         .eq("staff_id", staffId)
         .gte("shift_date", range.start)
@@ -147,13 +161,31 @@ router.get("/home-summary", requireAuth, async (req, res) => {
         .order("shift_date", { ascending: true });
 
       if (error) throw error;
-      myShifts = data || [];
+
+      myShifts = (data || []).map((s) => ({
+        ...s,
+        unit_name: s?.units?.name || null,
+        units: undefined,
+      }));
     }
 
-    // Open shifts
+    // Open shifts (unassigned)
     const { data: open, error: openErr } = await supabaseAdmin
       .from("shifts")
-      .select("id, org_code, staff_id, shift_date, start_local, end_local, role, unit_name, status")
+      .select(
+        `
+        id,
+        org_code,
+        staff_id,
+        shift_date,
+        start_local,
+        end_local,
+        role,
+        status,
+        unit_id,
+        units:units ( name )
+      `
+      )
       .eq("org_code", orgCode)
       .is("staff_id", null)
       .gte("shift_date", range.start)
@@ -162,9 +194,15 @@ router.get("/home-summary", requireAuth, async (req, res) => {
 
     if (openErr) throw openErr;
 
+    const openShifts = (open || []).map((s) => ({
+      ...s,
+      unit_name: s?.units?.name || null,
+      units: undefined,
+    }));
+
     return res.json({
       myShifts,
-      openShifts: open || [],
+      openShifts,
       pending: [],
       timeOff: [],
       staffId,
