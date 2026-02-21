@@ -191,6 +191,7 @@ router.get("/home-summary", requireAuth, async (req, res) => {
             shift_date,
             start_local,
             end_local,
+            timezone,
             shift_type,
             unit
           `
@@ -203,10 +204,11 @@ router.get("/home-summary", requireAuth, async (req, res) => {
 
       if (error) throw error;
 
-      myShifts = (data || []).map((s) => ({
-        ...s,
-        unit_name: s.unit || null, // <-- UI expects unit_name
-      }));
+     myShifts = (data || []).map((s) => ({
+  ...s,
+  date: s.shift_date,            // ✅ calendar uses this first
+  unit_name: s.unit || null,      // ✅ UI expects unit_name
+}));
     }
 
     // Open shifts (unassigned)
@@ -222,6 +224,7 @@ router.get("/home-summary", requireAuth, async (req, res) => {
           shift_date,
           start_local,
           end_local,
+          timezone,
           shift_type,
           unit
         `
@@ -235,9 +238,10 @@ router.get("/home-summary", requireAuth, async (req, res) => {
     if (openErr) throw openErr;
 
     const openShifts = (open || []).map((s) => ({
-      ...s,
-      unit_name: s.unit || null,
-    }));
+  ...s,
+  date: s.shift_date,
+  unit_name: s.unit || null,
+}));
 
     return res.json({
       myShifts,
