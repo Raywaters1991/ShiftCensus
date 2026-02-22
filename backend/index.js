@@ -70,6 +70,7 @@ app.use("/api/departments", require("./routes/departments"));
 app.use("/api/org-settings", require("./routes/orgSettings"));
 app.use("/api/facility", require("./routes/facility"));
 app.use("/api/me", require("./routes/me"));
+app.use("/api/schedules", require("./routes/schedules"));
 
 app.get("/", (_req, res) => res.send("ShiftCensus backend running."));
 app.get("/health", (_req, res) => res.json({ ok: true }));
