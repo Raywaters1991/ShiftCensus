@@ -54,6 +54,12 @@ export function UserProvider({ children }) {
   const [appRole, setAppRole] = useState(null);
   const [isSuperadmin, setIsSuperadmin] = useState(false);
 
+  // ✅ NEW: org-scoped permissions
+  const [permissions, setPermissions] = useState(null);
+  const [isOrgAdmin, setIsOrgAdmin] = useState(false);
+  const [canManageAdmins, setCanManageAdmins] = useState(false);
+  const [canScheduleWrite, setCanScheduleWrite] = useState(false);
+
   const [loading, setLoading] = useState(true);
 
   // Prevent overlapping loads on rapid auth changes
@@ -77,6 +83,13 @@ export function UserProvider({ children }) {
       setActiveMembershipRole(null);
       setAppRole(null);
       setIsSuperadmin(false);
+
+      // ✅ perms reset
+      setPermissions(null);
+      setIsOrgAdmin(false);
+      setCanManageAdmins(false);
+      setCanScheduleWrite(false);
+
       persistOrgContext({ orgId: null, orgCode: null, orgName: null });
       setLoading(false);
       loadInFlight.current = false;
@@ -88,7 +101,7 @@ export function UserProvider({ children }) {
       const p = await api.get("/admin/profile");
       setProfile(p);
 
-      // 3) Bootstrap (backend is source of truth for org + role)
+      // 3) Bootstrap (backend is source of truth for org + role + perms)
       const stored = readStoredOrg();
 
       // If stored orgCode is ADMIN, don't send it; let backend pick default
@@ -106,17 +119,27 @@ export function UserProvider({ children }) {
 
       const bootAppRole = bootstrap?.appRole || p?.role || null;
       setAppRole(bootAppRole);
-      setIsSuperadmin(!!bootstrap?.isSuperadmin || String(bootAppRole || "").toLowerCase() === "superadmin");
+
+      const superFlag =
+        !!bootstrap?.isSuperadmin || String(bootAppRole || "").toLowerCase() === "superadmin";
+      setIsSuperadmin(superFlag);
 
       // Role for UI permissions:
       // - If superadmin, force "superadmin"
       // - Else use membershipRole from bootstrap (or profile role fallback)
-      const roleForUi =
-        (bootstrap?.isSuperadmin || String(bootAppRole || "").toLowerCase() === "superadmin")
-          ? "superadmin"
-          : (bootstrap?.membershipRole || p?.role || null);
+      const roleForUi = superFlag
+        ? "superadmin"
+        : (bootstrap?.membershipRole || p?.role || null);
 
       setActiveMembershipRole(roleForUi);
+
+      // ✅ NEW: org scoped perms
+      const perms = bootstrap?.permissions || null;
+      setPermissions(perms);
+
+      setIsOrgAdmin(superFlag || !!perms?.is_admin);
+      setCanManageAdmins(superFlag || !!perms?.can_manage_admins);
+      setCanScheduleWrite(superFlag || !!perms?.can_schedule_write);
 
       persistOrgContext({
         orgId: org?.id || null,
@@ -134,6 +157,14 @@ export function UserProvider({ children }) {
         const firstOrg = memberships[0]?.orgs;
         if (firstOrg?.id) {
           setActiveOrg(firstOrg);
+
+          // update perms from membership list if present
+          const firstPerms = memberships[0]?.permissions || null;
+          setPermissions(firstPerms);
+          setIsOrgAdmin(superFlag || !!firstPerms?.is_admin);
+          setCanManageAdmins(superFlag || !!firstPerms?.can_manage_admins);
+          setCanScheduleWrite(superFlag || !!firstPerms?.can_schedule_write);
+
           persistOrgContext({
             orgId: firstOrg.id,
             orgCode: firstOrg.org_code,
@@ -178,6 +209,30 @@ export function UserProvider({ children }) {
       const nextRole = isSuperadmin ? "superadmin" : (selected?.role || activeMembershipRole || null);
       setActiveMembershipRole(nextRole);
 
+      // ✅ update permissions from membership record (or infer)
+      const nextPerms = isSuperadmin
+        ? {
+            role: "superadmin",
+            is_admin: true,
+            can_manage_admins: true,
+            can_schedule_write: true,
+            department_id: null,
+            is_active: true,
+          }
+        : (selected?.permissions || {
+            role: selected?.role || null,
+            is_admin: !!selected?.is_admin,
+            can_manage_admins: !!selected?.can_manage_admins,
+            can_schedule_write: !!selected?.can_schedule_write,
+            department_id: selected?.department_id || null,
+            is_active: true,
+          });
+
+      setPermissions(nextPerms);
+      setIsOrgAdmin(isSuperadmin || !!nextPerms?.is_admin);
+      setCanManageAdmins(isSuperadmin || !!nextPerms?.can_manage_admins);
+      setCanScheduleWrite(isSuperadmin || !!nextPerms?.can_schedule_write);
+
       persistOrgContext({
         orgId: org.id,
         orgCode: org.org_code,
@@ -203,6 +258,12 @@ export function UserProvider({ children }) {
       appRole,
       isSuperadmin,
 
+      // ✅ permissions
+      permissions,
+      isOrgAdmin,
+      canManageAdmins,
+      canScheduleWrite,
+
       orgId: activeOrg?.id ?? null,
       orgCode: activeOrg?.org_code ?? null,
       orgName: activeOrg?.name ?? null,
@@ -211,7 +272,20 @@ export function UserProvider({ children }) {
       loading,
       refreshUser: loadUser,
     }),
-    [user, profile, orgMemberships, activeOrg, activeMembershipRole, appRole, isSuperadmin, loading]
+    [
+      user,
+      profile,
+      orgMemberships,
+      activeOrg,
+      activeMembershipRole,
+      appRole,
+      isSuperadmin,
+      permissions,
+      isOrgAdmin,
+      canManageAdmins,
+      canScheduleWrite,
+      loading,
+    ]
   );
 
   return <UserContext.Provider value={value}>{children}</UserContext.Provider>;

@@ -39,7 +39,6 @@ function monthRange(monthKey) {
 
 /** Read your app-role from public.users (NOT Supabase auth role) */
 async function getAppRole(userId) {
-  // your table: public.users has id + uid; in your inserts they match.
   const { data, error } = await supabaseAdmin
     .from("users")
     .select("role")
@@ -86,6 +85,29 @@ async function getFirstNonAdminOrg() {
 }
 
 /**
+ * ✅ NEW: Org-scoped membership permissions for a user in an org
+ * Requires columns on org_memberships:
+ * - is_admin boolean
+ * - can_manage_admins boolean
+ * - can_schedule_write boolean
+ * - department_id uuid nullable
+ */
+async function getMembershipPerms(userId, orgId) {
+  if (!userId || !orgId) return null;
+
+  const { data, error } = await supabaseAdmin
+    .from("org_memberships")
+    .select("role, is_admin, can_manage_admins, can_schedule_write, department_id, is_active")
+    .eq("user_id", userId)
+    .eq("org_id", orgId)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (error) return null;
+  return data?.role ? data : null;
+}
+
+/**
  * Resolve active org:
  * - Superadmin: header org_code wins; else first non-ADMIN org (or null)
  * - Normal: membership org; else staff fallback; else null
@@ -102,8 +124,7 @@ async function resolveActiveOrg({ userId, headerOrgCode, isSuperadmin }) {
     return { org: null, source: "none", membershipRole: "superadmin" };
   }
 
-  // NORMAL USERS: header org_code is allowed only if they actually have membership (optional)
-  // For simplicity, we ignore header for normal users and use memberships.
+  // NORMAL USERS: use memberships.
   const { data: memberships, error: memErr } = await supabaseAdmin
     .from("org_memberships")
     .select(
@@ -142,6 +163,7 @@ async function resolveActiveOrg({ userId, headerOrgCode, isSuperadmin }) {
 
 /**
  * Bootstrap: frontend calls this on login/refresh
+ * ✅ NOW RETURNS permissions for active org
  */
 router.get("/bootstrap", requireAuth, async (req, res) => {
   try {
@@ -151,12 +173,30 @@ router.get("/bootstrap", requireAuth, async (req, res) => {
     const headerOrgCode = req.get("X-Org-Code") || req.get("x-org-code") || null;
     const r = await resolveActiveOrg({ userId: req.user.id, headerOrgCode, isSuperadmin });
 
+    let permissions = null;
+
+    if (r?.org?.id) {
+      if (isSuperadmin) {
+        permissions = {
+          role: "superadmin",
+          is_admin: true,
+          can_manage_admins: true,
+          can_schedule_write: true,
+          department_id: null,
+          is_active: true,
+        };
+      } else {
+        permissions = await getMembershipPerms(req.user.id, r.org.id);
+      }
+    }
+
     return res.json({
       user: { id: req.user.id, email: req.user.email },
       appRole: appRole || null,
       activeOrg: r.org,
       activeOrgSource: r.source,
       membershipRole: r.membershipRole,
+      permissions, // ✅ NEW
       isSuperadmin,
     });
   } catch (e) {
@@ -168,7 +208,7 @@ router.get("/bootstrap", requireAuth, async (req, res) => {
 /**
  * Memberships:
  * - Superadmin: return ALL orgs as selectable list (no membership rows needed)
- * - Normal: return real memberships
+ * - Normal: return real memberships (with permissions)
  */
 router.get("/memberships", requireAuth, async (req, res) => {
   try {
@@ -188,6 +228,14 @@ router.get("/memberships", requireAuth, async (req, res) => {
         .map((o) => ({
           role: "superadmin",
           orgs: o,
+          permissions: {
+            role: "superadmin",
+            is_admin: true,
+            can_manage_admins: true,
+            can_schedule_write: true,
+            department_id: null,
+            is_active: true,
+          },
         }));
 
       return res.json({ memberships });
@@ -197,18 +245,36 @@ router.get("/memberships", requireAuth, async (req, res) => {
       .from("org_memberships")
       .select(
         `
-        role,
-        orgs:orgs!org_memberships_org_id_fkey (
-          id, org_code, name, logo_url
-        )
-      `
+          role,
+          is_admin,
+          can_manage_admins,
+          can_schedule_write,
+          department_id,
+          orgs:orgs!org_memberships_org_id_fkey (
+            id, org_code, name, logo_url
+          )
+        `
       )
       .eq("user_id", req.user.id)
       .eq("is_active", true);
 
     if (error) throw error;
 
-    const memberships = (data || []).filter((m) => m?.orgs?.id);
+    const memberships = (data || [])
+      .filter((m) => m?.orgs?.id)
+      .map((m) => ({
+        role: m.role,
+        orgs: m.orgs,
+        permissions: {
+          role: m.role,
+          is_admin: !!m.is_admin,
+          can_manage_admins: !!m.can_manage_admins,
+          can_schedule_write: !!m.can_schedule_write,
+          department_id: m.department_id || null,
+          is_active: true,
+        },
+      }));
+
     return res.json({ memberships });
   } catch (e) {
     console.error("ME MEMBERSHIPS ERROR:", e);
@@ -236,6 +302,7 @@ router.get("/home-summary", requireAuth, async (req, res) => {
     if (!org?.org_code) return res.status(400).json({ error: "No active org found for user" });
     const orgCode = org.org_code;
 
+    // Get staff row for this user in this org
     const { data: staff, error: staffErr } = await supabaseAdmin
       .from("staff")
       .select("id, user_id, org_code, employee_no, staff_uuid")
@@ -280,6 +347,7 @@ router.get("/home-summary", requireAuth, async (req, res) => {
       }));
     }
 
+    // Open shifts (unassigned)
     const { data: open, error: openErr } = await supabaseAdmin
       .from("shifts")
       .select(

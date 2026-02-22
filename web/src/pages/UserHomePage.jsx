@@ -13,7 +13,16 @@ const DOTS = {
 };
 
 function ymd(d) {
+  // If already a YYYY-MM-DD string, return as-is (no timezone conversion)
+  if (typeof d === "string") {
+    const s = d.slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  }
+
+  // Otherwise, treat as Date or datetime string
   const dt = new Date(d);
+  if (isNaN(dt.getTime())) return "";
+
   const y = dt.getFullYear();
   const m = String(dt.getMonth() + 1).padStart(2, "0");
   const day = String(dt.getDate()).padStart(2, "0");
@@ -57,16 +66,17 @@ function buildCalendarDays(monthDate) {
 }
 
 function formatShiftLine(s) {
-  const date = s?.date || s?.shift_date || s?.start_date || null;
+  const dateStr = (s?.date || s?.shift_date || s?.start_date || "").slice(0, 10);
   const start = s?.start_local || s?.start || s?.start_time || "";
   const end = s?.end_local || s?.end || s?.end_time || "";
   const unit = s?.unit_name || s?.unit || "";
   const role = s?.role || "";
+
   const labelParts = [
-    date ? ymd(date) : "",
+    /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr : (dateStr ? ymd(dateStr) : ""),
     start && end ? `${start}-${end}` : "",
-    role ? role : "",
-    unit ? unit : "",
+    role || "",
+    unit || "",
   ].filter(Boolean);
 
   return labelParts.join(" • ");

@@ -12,7 +12,7 @@ import AdminPage from "./pages/AdminPage.jsx";
 import SuperAdminPage from "./pages/SuperAdminPage.jsx";
 import AcceptInvitePage from "./pages/AcceptInvitePage.jsx";
 
-// ✅ You will build this (your “Schedule Management” home)
+// User homepage (non-admin staff)
 import UserHomePage from "./pages/UserHomePage.jsx";
 
 import OrgSwitcher from "./components/OrgSwitcher.jsx";
@@ -162,22 +162,24 @@ function MenuOverlay({ open, onClose, links, role, onLogout, onOrgChanged }) {
  * ✅ Role-based landing
  * - admissions -> /census
  * - scheduler  -> /shifts
- * - ed/don/admin/superadmin -> /dashboard
- * - "wallboard" (if you add) -> /dashboard
+ * - superadmin/admin/don/ed -> /admin   ✅ you requested this
+ * - wallboard -> /dashboard
  * - default -> /home
  */
 function RoleLanding({ role }) {
   const r = String(role || "").toLowerCase();
 
-  // If role isn't loaded yet (rare), just go home-ish
   if (!r) return <Navigate to="/home" replace />;
 
   if (r === "admissions") return <Navigate to="/census" replace />;
   if (r === "scheduler") return <Navigate to="/shifts" replace />;
 
-  if (["ed", "don", "admin", "superadmin", "wallboard"].includes(r)) {
-    return <Navigate to="/dashboard" replace />;
+  // ✅ ALL admin-capable roles land on Admin page
+  if (["superadmin", "admin", "don", "ed"].includes(r)) {
+    return <Navigate to="/admin" replace />;
   }
+
+  if (r === "wallboard") return <Navigate to="/dashboard" replace />;
 
   return <Navigate to="/home" replace />;
 }
@@ -195,8 +197,13 @@ export default function App() {
   }, [loading, user, navigate, isInviteRoute]);
 
   const isSuperAdmin = role === "superadmin";
-  const canSeeShifts = ["superadmin", "admin", "scheduler", "don"].includes(role);
+
+  // ✅ Schedule tools visible to scheduler + admins
+  const canSeeShifts = ["superadmin", "admin", "scheduler", "don", "ed"].includes(role);
+
   const canSeeCensus = ["superadmin", "admin", "admissions", "don", "ed"].includes(role);
+
+  // ✅ Admin page visible to all admin-capable roles
   const canSeeAdmin = ["superadmin", "admin", "don", "ed"].includes(role);
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -214,17 +221,14 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [menuOpen]);
 
-  // ✅ Menu links (home is for most users)
+  // ✅ Menu links
   const navLinks = useMemo(() => {
     const links = [];
 
-    // Most staff home
     links.push({ to: "/home", label: "Home" });
-
-    // Always allow dashboard link (if you want to hide from basic users later, we can)
     links.push({ to: "/dashboard", label: "Dashboard" });
 
-    if (canSeeShifts) links.push({ to: "/shifts", label: "Shifts" });
+    if (canSeeShifts) links.push({ to: "/shifts", label: "Schedule" });
     if (canSeeCensus) links.push({ to: "/census", label: "Census" });
     if (canSeeAdmin) links.push({ to: "/admin", label: "Admin" });
     if (isSuperAdmin) links.push({ to: "/superadmin", label: "Super Admin" });

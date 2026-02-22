@@ -1,5 +1,4 @@
 // src/pages/AdminPage.jsx
-
 import { useEffect, useMemo, useRef, useState } from "react";
 import api from "../services/api";
 import { useUser } from "../contexts/UserContext";
@@ -8,7 +7,19 @@ import OrgSwitcher from "../components/OrgSwitcher";
 const SHIFT_TYPES = ["Day", "Evening", "Night"];
 
 export default function AdminPage() {
-  const { orgName, orgId, orgCode, role, switchOrg } = useUser();
+  const {
+    orgName,
+    orgId,
+    orgCode,
+    role,
+    switchOrg,
+
+    // ✅ org-scoped perms from your updated UserContext
+    isSuperadmin,
+    isOrgAdmin,
+    canManageAdmins,
+    canScheduleWrite,
+  } = useUser();
 
   const [activeTab, setActiveTab] = useState(() => {
     if (typeof window === "undefined") return "staff";
@@ -27,10 +38,9 @@ export default function AdminPage() {
   const [orgSwitcherOpen, setOrgSwitcherOpen] = useState(false);
   const [superOrgs, setSuperOrgs] = useState([]);
   const [superOrgsLoading, setSuperOrgsLoading] = useState(false);
-  const isSuperAdmin = String(role || "").toLowerCase() === "superadmin";
 
   async function loadSuperOrgs() {
-    if (!isSuperAdmin) return;
+    if (!isSuperadmin) return;
     setSuperOrgsLoading(true);
     try {
       const data = await api.get("/organizations"); // assumes GET /organizations exists for superadmin
@@ -133,12 +143,15 @@ export default function AdminPage() {
 
   const dragBedIdRef = useRef(null);
 
-  const canManagePrivacy = ["superadmin", "admin", "don", "ed"].includes(
-    String(role || "").toLowerCase()
-  );
-  const canManageFacility = ["superadmin", "admin", "don", "ed"].includes(
-    String(role || "").toLowerCase()
-  );
+  // ✅ Admin management
+  const [adminMembers, setAdminMembers] = useState([]);
+  const [adminMembersLoading, setAdminMembersLoading] = useState(false);
+  const [adminSearch, setAdminSearch] = useState("");
+  const [savingMemberUserId, setSavingMemberUserId] = useState(null);
+
+  // ✅ Permissions derived from ORG SCOPED flags
+  const canManagePrivacy = !!isOrgAdmin;   // you can tighten later if you want separate flag
+  const canManageFacility = !!isOrgAdmin; // you can tighten later if you want separate flag
 
   // ✅ IMPORTANT: reload org-scoped data whenever orgId changes
   useEffect(() => {
@@ -146,14 +159,15 @@ export default function AdminPage() {
     loadAll();
     loadOrgSettings();
     if (activeTab === "rooms_beds") loadRooms();
+    if (activeTab === "admin_access" && canManageAdmins) loadAdminMembers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgId]);
 
   // initial load for superadmin org list (for Change Facility)
   useEffect(() => {
-    if (isSuperAdmin) loadSuperOrgs();
+    if (isSuperadmin) loadSuperOrgs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSuperAdmin]);
+  }, [isSuperadmin]);
 
   async function loadAll() {
     setLoading(true);
@@ -187,6 +201,52 @@ export default function AdminPage() {
   }
 
   // ---------------------------
+  // Admin memberships load
+  // ---------------------------
+  async function loadAdminMembers() {
+    if (!orgId || !orgCode) return;
+    if (!canManageAdmins && !isSuperadmin) return;
+
+    setAdminMembersLoading(true);
+    try {
+      // api service should already include X-Org-Code header; but we also pass explicitly
+      const data = await api.get("/admin/memberships", {
+        headers: { "X-Org-Code": orgCode },
+      });
+
+      const list = Array.isArray(data?.memberships) ? data.memberships : [];
+      setAdminMembers(list);
+    } catch (e) {
+      console.error("LOAD ADMIN MEMBERS ERROR:", e);
+      alert(e?.message || "Failed to load admin memberships.");
+      setAdminMembers([]);
+    } finally {
+      setAdminMembersLoading(false);
+    }
+  }
+
+  async function saveMemberPerms(userId, patch) {
+    if (!orgCode) return;
+    setSavingMemberUserId(userId);
+    try {
+      const data = await api.patch(`/admin/memberships/${userId}`, patch, {
+        headers: { "X-Org-Code": orgCode },
+      });
+
+      const updated = data?.membership || null;
+      if (!updated?.user_id) return;
+
+      setAdminMembers((prev) =>
+        prev.map((m) => (String(m.user_id) === String(updated.user_id) ? { ...m, ...updated } : m))
+      );
+    } catch (e) {
+      alert(e?.message || "Failed to update member permissions.");
+    } finally {
+      setSavingMemberUserId(null);
+    }
+  }
+
+  // ---------------------------
   // Rooms/Beds load
   // ---------------------------
   async function loadRooms() {
@@ -206,8 +266,7 @@ export default function AdminPage() {
         return firstActive?.id ?? null;
       });
 
-      const currentRoomId =
-        (selectedRoomId ?? firstActive?.id) || null;
+      const currentRoomId = (selectedRoomId ?? firstActive?.id) || null;
 
       if (currentRoomId) {
         const room = sorted.find((r) => r.id === currentRoomId);
@@ -246,6 +305,14 @@ export default function AdminPage() {
     loadRooms();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, orgId]);
+
+  useEffect(() => {
+    if (activeTab !== "admin_access") return;
+    if (!orgId) return;
+    if (!canManageAdmins && !isSuperadmin) return;
+    loadAdminMembers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, orgId, canManageAdmins, isSuperadmin]);
 
   useEffect(() => {
     if (activeTab !== "rooms_beds") return;
@@ -742,10 +809,7 @@ export default function AdminPage() {
       });
     } catch (e) {
       console.error("REORDER SAVE ERROR:", e);
-      alert(
-        e?.message ||
-          "Failed to save bed order. (Tell me if you need the backend reorder route.)"
-      );
+      alert(e?.message || "Failed to save bed order.");
     }
   }
 
@@ -786,6 +850,26 @@ export default function AdminPage() {
     return `${roomLabel}${suffix}${roomCount !== null ? ` • ${roomCount} rooms total` : ""}`;
   }, [activeTab, rooms, beds, selectedRoomId]);
 
+  const filteredAdminMembers = useMemo(() => {
+    const q = String(adminSearch || "").trim().toLowerCase();
+    if (!q) return adminMembers;
+
+    return (adminMembers || []).filter((m) => {
+      const hay = [
+        m.display_name,
+        m.email,
+        m.phone,
+        m.role,
+        m.user_id,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return hay.includes(q);
+    });
+  }, [adminMembers, adminSearch]);
+
   // ==================================================
   // RENDER
   // ==================================================
@@ -799,11 +883,9 @@ export default function AdminPage() {
             <div style={ui.sub}>
               <span style={{ color: "#E5E7EB", fontWeight: 900 }}>
                 {orgName || "No facility selected"}
-
                 {orgCode ? (
                   <>
-
-                     • 
+                    {" "} •{" "}
                     <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }}>
                       {orgCode}
                     </span>
@@ -826,7 +908,7 @@ export default function AdminPage() {
           <button
             style={ui.btnGhost}
             onClick={() => setOrgSwitcherOpen(true)}
-            disabled={isSuperAdmin ? superOrgsLoading : false}
+            disabled={isSuperadmin ? superOrgsLoading : false}
           >
             Change Facility
           </button>
@@ -834,7 +916,7 @@ export default function AdminPage() {
       </div>
 
       {/* ✅ ORG SWITCHERS */}
-      {!isSuperAdmin ? (
+      {!isSuperadmin ? (
         <OrgSwitcher open={orgSwitcherOpen} onClose={() => setOrgSwitcherOpen(false)} />
       ) : (
         <SuperAdminOrgSwitcher
@@ -843,7 +925,6 @@ export default function AdminPage() {
           orgs={superOrgs}
           loading={superOrgsLoading}
           onPick={(pickedOrgId) => {
-            // ✅ this updates storage/context via UserContext, then AdminPage reloads because orgId changes
             switchOrg(pickedOrgId);
             setOrgSwitcherOpen(false);
           }}
@@ -857,6 +938,15 @@ export default function AdminPage() {
         <TabButton active={activeTab === "shifts"} onClick={() => setActiveTab("shifts")} label="Shift Settings" />
         <TabButton active={activeTab === "rooms_beds"} onClick={() => setActiveTab("rooms_beds")} label="Rooms & Beds" />
         <TabButton active={activeTab === "privacy"} onClick={() => setActiveTab("privacy")} label="Privacy" />
+
+        {/* ✅ Only show if can_manage_admins */}
+        {(canManageAdmins || isSuperadmin) ? (
+          <TabButton
+            active={activeTab === "admin_access"}
+            onClick={() => setActiveTab("admin_access")}
+            label="Admin Access"
+          />
+        ) : null}
       </div>
 
       {/* CONTENT */}
@@ -868,6 +958,172 @@ export default function AdminPage() {
             </div>
           </div>
         ) : null}
+
+        {/* ✅ ADMIN ACCESS */}
+        {activeTab === "admin_access" && orgId && (
+          <div style={ui.card}>
+            <div style={ui.cardHeader}>
+              <div>
+                <div style={ui.cardTitle}>Admin Access</div>
+                <div style={ui.cardSub}>
+                  Toggle admin permissions for users in this organization. Only users with <b>can_manage_admins</b> can change these.
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <input
+                  style={{ ...ui.input, minWidth: 220 }}
+                  placeholder="Search name, email, role…"
+                  value={adminSearch}
+                  onChange={(e) => setAdminSearch(e.target.value)}
+                />
+                <button
+                  style={ui.btnGhost}
+                  onClick={loadAdminMembers}
+                  disabled={adminMembersLoading}
+                >
+                  {adminMembersLoading ? "Loading…" : "Refresh"}
+                </button>
+              </div>
+            </div>
+
+            {(!canManageAdmins && !isSuperadmin) ? (
+              <div style={ui.notice}>
+                You don’t have permission to manage admins for this organization.
+              </div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={ui.table}>
+                  <thead>
+                    <tr>
+                      <th style={ui.th}>User</th>
+                      <th style={ui.th}>Role</th>
+                      <th style={ui.th}>Active</th>
+                      <th style={ui.th}>Is Admin</th>
+                      <th style={ui.th}>Can Manage Admins</th>
+                      <th style={ui.th}>Can Schedule Write</th>
+                      <th style={{ ...ui.th, textAlign: "right" }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredAdminMembers.map((m) => {
+                      const isSaving = savingMemberUserId === m.user_id;
+
+                      // basic UI lockout prevention:
+                      // we cannot safely detect "self" here without auth id,
+                      // but backend already prevents self removal. This is just UX.
+                      const isAdmin = !!m.is_admin;
+                      const canMgr = !!m.can_manage_admins;
+                      const canSch = !!m.can_schedule_write;
+                      const isActive = m.is_active !== false;
+
+                      return (
+                        <tr key={m.user_id} style={ui.tr}>
+                          <td style={ui.td}>
+                            <div style={{ display: "grid", gap: 4 }}>
+                              <div style={ui.cellStrong}>
+                                {m.display_name || m.email || "Unknown User"}
+                              </div>
+                              <div style={{ color: "#9CA3AF", fontSize: 12 }}>
+                                {m.email ? m.email : null}
+                                {m.email && m.phone ? " • " : null}
+                                {m.phone ? m.phone : null}
+                                <span style={{ marginLeft: 8 }}>
+                                  user_id:{" "}
+                                  <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }}>
+                                    {m.user_id}
+                                  </span>
+                                </span>
+                              </div>
+                            </div>
+                          </td>
+
+                          <td style={ui.td}>
+                            <span style={ui.pill}>{m.role || "—"}</span>
+                          </td>
+
+                          <td style={ui.td}>
+                            <label style={ui.smallCheck}>
+                              <input
+                                type="checkbox"
+                                checked={isActive}
+                                disabled={isSaving}
+                                onChange={(e) =>
+                                  saveMemberPerms(m.user_id, { is_active: e.target.checked })
+                                }
+                              />
+                              Active
+                            </label>
+                          </td>
+
+                          <td style={ui.td}>
+                            <label style={ui.smallCheck}>
+                              <input
+                                type="checkbox"
+                                checked={isAdmin}
+                                disabled={isSaving}
+                                onChange={(e) =>
+                                  saveMemberPerms(m.user_id, { is_admin: e.target.checked })
+                                }
+                              />
+                              Admin
+                            </label>
+                          </td>
+
+                          <td style={ui.td}>
+                            <label style={ui.smallCheck}>
+                              <input
+                                type="checkbox"
+                                checked={canMgr}
+                                disabled={isSaving}
+                                onChange={(e) =>
+                                  saveMemberPerms(m.user_id, { can_manage_admins: e.target.checked })
+                                }
+                              />
+                              Manage Admins
+                            </label>
+                          </td>
+
+                          <td style={ui.td}>
+                            <label style={ui.smallCheck}>
+                              <input
+                                type="checkbox"
+                                checked={canSch}
+                                disabled={isSaving}
+                                onChange={(e) =>
+                                  saveMemberPerms(m.user_id, { can_schedule_write: e.target.checked })
+                                }
+                              />
+                              Schedule Write
+                            </label>
+                          </td>
+
+                          <td style={{ ...ui.td, textAlign: "right" }}>
+                            {isSaving ? (
+                              <span style={{ color: "#9CA3AF", fontWeight: 900 }}>Saving…</span>
+                            ) : (
+                              <span style={{ color: "#9CA3AF", fontSize: 12 }}>
+                                Changes save instantly
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+
+                    {!adminMembersLoading && filteredAdminMembers.length === 0 ? (
+                      <tr>
+                        <td style={ui.emptyRow} colSpan={7}>
+                          No members found.
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* STAFF */}
         {activeTab === "staff" && orgId && (
@@ -2257,7 +2513,7 @@ const ui = {
     marginBottom: 6,
   },
 
-  // superadmin org picker styles (re-using some names, separate to avoid collisions)
+  // superadmin org picker styles
   overlay: {
     position: "fixed",
     inset: 0,
