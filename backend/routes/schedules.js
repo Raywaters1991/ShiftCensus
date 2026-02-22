@@ -367,4 +367,4 @@ router.get("/batch/:batchId", requireAuth, async (req, res) => {
   }
 });
 
-module.exports = router;gi
+module.exports = router;
