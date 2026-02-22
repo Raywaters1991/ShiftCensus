@@ -803,7 +803,7 @@ export default function AdminPage() {
                 {orgCode ? (
                   <>
 
-                    - • -
+                     • 
                     <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }}>
                       {orgCode}
                     </span>
