@@ -799,17 +799,11 @@ export default function AdminPage() {
             <div style={ui.sub}>
               <span style={{ color: "#E5E7EB", fontWeight: 900 }}>
                 {orgName || "No facility selected"}
-              </span>
 
-              <span style={{ marginLeft: 10, color: "#9CA3AF" }}>
-                orgId:{" "}
-                <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }}>
-                  {orgId || "—"}
-                </span>
                 {orgCode ? (
                   <>
-                    {" "}
-                    • orgCode:{" "}
+
+                    • 
                     <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }}>
                       {orgCode}
                     </span>

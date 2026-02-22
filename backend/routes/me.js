@@ -37,39 +37,73 @@ function monthRange(monthKey) {
   return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
 }
 
-/**
- * Resolve active org in this priority:
- * 0) X-Org-Code header (if client already selected org)
- * 1) org_memberships (service role)
- * 2) staff.user_id -> staff.org_code fallback (service role)
- */
-async function resolveActiveOrg({ userId, headerOrgCode }) {
-  // 0) Header org_code (trusted if valid)
-  // 0) Header org_code (trusted if valid)
-if (headerOrgCode) {
-  const { data: org, error } = await supabaseAdmin
-    .from("orgs")
-    .select("id, org_code, name, logo_url")
-    .eq("org_code", headerOrgCode)
+/** Read your app-role from public.users (NOT Supabase auth role) */
+async function getAppRole(userId) {
+  // your table: public.users has id + uid; in your inserts they match.
+  const { data, error } = await supabaseAdmin
+    .from("users")
+    .select("role")
+    .eq("id", userId)
     .maybeSingle();
 
-  if (!error && org?.id) {
-    // ALSO fetch membership role for this org (if any)
-    const { data: mem, error: memErr } = await supabaseAdmin
-      .from("org_memberships")
-      .select("role")
-      .eq("user_id", userId)
-      .eq("org_id", org.id)
-      .eq("is_active", true)
-      .maybeSingle();
-
-    const membershipRole = !memErr ? (mem?.role || null) : null;
-
-    return { org, source: "header", membershipRole };
-  }
+  if (error) return null;
+  const r = String(data?.role || "").toLowerCase();
+  return r || null;
 }
 
-  // 1) Memberships
+async function getOrgByCode(orgCode) {
+  if (!orgCode) return null;
+  const { data, error } = await supabaseAdmin
+    .from("orgs")
+    .select("id, org_code, name, logo_url")
+    .eq("org_code", orgCode)
+    .maybeSingle();
+  if (error) return null;
+  return data?.id ? data : null;
+}
+
+async function getOrgById(orgId) {
+  if (!orgId) return null;
+  const { data, error } = await supabaseAdmin
+    .from("orgs")
+    .select("id, org_code, name, logo_url")
+    .eq("id", orgId)
+    .maybeSingle();
+  if (error) return null;
+  return data?.id ? data : null;
+}
+
+async function getFirstNonAdminOrg() {
+  const { data, error } = await supabaseAdmin
+    .from("orgs")
+    .select("id, org_code, name, logo_url")
+    .neq("org_code", "ADMIN")
+    .order("created_at", { ascending: true })
+    .limit(1);
+
+  if (error) return null;
+  return data?.[0]?.id ? data[0] : null;
+}
+
+/**
+ * Resolve active org:
+ * - Superadmin: header org_code wins; else first non-ADMIN org (or null)
+ * - Normal: membership org; else staff fallback; else null
+ */
+async function resolveActiveOrg({ userId, headerOrgCode, isSuperadmin }) {
+  // SUPERADMIN: can enter ANY org, no membership required
+  if (isSuperadmin) {
+    if (headerOrgCode) {
+      const org = await getOrgByCode(headerOrgCode);
+      if (org) return { org, source: "header", membershipRole: "superadmin" };
+    }
+    const fallback = await getFirstNonAdminOrg();
+    if (fallback) return { org: fallback, source: "default", membershipRole: "superadmin" };
+    return { org: null, source: "none", membershipRole: "superadmin" };
+  }
+
+  // NORMAL USERS: header org_code is allowed only if they actually have membership (optional)
+  // For simplicity, we ignore header for normal users and use memberships.
   const { data: memberships, error: memErr } = await supabaseAdmin
     .from("org_memberships")
     .select(
@@ -91,42 +125,39 @@ if (headerOrgCode) {
     if (m?.orgs?.id) return { org: m.orgs, source: "membership", membershipRole: m.role || null };
   }
 
-  // 2) Staff link fallback
+  // staff fallback
   const { data: staff, error: staffErr } = await supabaseAdmin
     .from("staff")
-    .select("id, org_code, user_id")
+    .select("org_code")
     .eq("user_id", userId)
     .maybeSingle();
 
   if (!staffErr && staff?.org_code) {
-    const { data: org, error: orgErr } = await supabaseAdmin
-      .from("orgs")
-      .select("id, org_code, name, logo_url")
-      .eq("org_code", staff.org_code)
-      .maybeSingle();
-
-    if (!orgErr && org?.id) return { org, source: "staff", membershipRole: null };
+    const org = await getOrgByCode(staff.org_code);
+    if (org) return { org, source: "staff", membershipRole: null };
   }
 
   return { org: null, source: "none", membershipRole: null };
 }
 
 /**
- * Frontend calls this on login to learn:
- * - user identity
- * - active org (resolved)
- * - membershipRole (if any)
+ * Bootstrap: frontend calls this on login/refresh
  */
 router.get("/bootstrap", requireAuth, async (req, res) => {
   try {
+    const appRole = await getAppRole(req.user.id);
+    const isSuperadmin = String(appRole || "").toLowerCase() === "superadmin";
+
     const headerOrgCode = req.get("X-Org-Code") || req.get("x-org-code") || null;
-    const r = await resolveActiveOrg({ userId: req.user.id, headerOrgCode });
+    const r = await resolveActiveOrg({ userId: req.user.id, headerOrgCode, isSuperadmin });
 
     return res.json({
       user: { id: req.user.id, email: req.user.email },
+      appRole: appRole || null,
       activeOrg: r.org,
       activeOrgSource: r.source,
       membershipRole: r.membershipRole,
+      isSuperadmin,
     });
   } catch (e) {
     console.error("ME BOOTSTRAP ERROR:", e);
@@ -135,11 +166,33 @@ router.get("/bootstrap", requireAuth, async (req, res) => {
 });
 
 /**
- * Optional but recommended: let frontend fetch memberships via backend
- * so you never fight RLS on org_memberships.
+ * Memberships:
+ * - Superadmin: return ALL orgs as selectable list (no membership rows needed)
+ * - Normal: return real memberships
  */
 router.get("/memberships", requireAuth, async (req, res) => {
   try {
+    const appRole = await getAppRole(req.user.id);
+    const isSuperadmin = String(appRole || "").toLowerCase() === "superadmin";
+
+    if (isSuperadmin) {
+      const { data, error } = await supabaseAdmin
+        .from("orgs")
+        .select("id, org_code, name, logo_url")
+        .order("name", { ascending: true });
+
+      if (error) throw error;
+
+      const memberships = (data || [])
+        .filter((o) => o?.id && String(o.org_code || "").toUpperCase() !== "ADMIN")
+        .map((o) => ({
+          role: "superadmin",
+          orgs: o,
+        }));
+
+      return res.json({ memberships });
+    }
+
     const { data, error } = await supabaseAdmin
       .from("org_memberships")
       .select(
@@ -164,23 +217,25 @@ router.get("/memberships", requireAuth, async (req, res) => {
 });
 
 /**
- * Home summary for UserHomePage
- * IMPORTANT: Your shifts table has `unit` (text) and does NOT have `unit_name` or `status`.
- * So we select columns that exist and map `unit` -> `unit_name` for the UI.
+ * Home summary:
+ * Your shifts table columns: unit (text), no status/unit_name.
+ * Map unit -> unit_name and shift_date -> date for UI.
  */
 router.get("/home-summary", requireAuth, async (req, res) => {
   try {
     const range = monthRange(req.query.month);
     if (!range) return res.status(400).json({ error: "Invalid month. Use YYYY-MM" });
 
+    const appRole = await getAppRole(req.user.id);
+    const isSuperadmin = String(appRole || "").toLowerCase() === "superadmin";
+
     const headerOrgCode = req.get("X-Org-Code") || req.get("x-org-code") || null;
-    const resolved = await resolveActiveOrg({ userId: req.user.id, headerOrgCode });
+    const resolved = await resolveActiveOrg({ userId: req.user.id, headerOrgCode, isSuperadmin });
     const org = resolved.org;
 
     if (!org?.org_code) return res.status(400).json({ error: "No active org found for user" });
     const orgCode = org.org_code;
 
-    // Find staff row linked to logged-in user (in this org)
     const { data: staff, error: staffErr } = await supabaseAdmin
       .from("staff")
       .select("id, user_id, org_code, employee_no, staff_uuid")
@@ -191,7 +246,6 @@ router.get("/home-summary", requireAuth, async (req, res) => {
 
     const staffId = staff?.id ? String(staff.id) : null;
 
-    // My shifts (assigned)
     let myShifts = [];
     if (staffId) {
       const { data, error } = await supabaseAdmin
@@ -219,14 +273,13 @@ router.get("/home-summary", requireAuth, async (req, res) => {
 
       if (error) throw error;
 
-     myShifts = (data || []).map((s) => ({
-  ...s,
-  date: s.shift_date,            // ✅ calendar uses this first
-  unit_name: s.unit || null,      // ✅ UI expects unit_name
-}));
+      myShifts = (data || []).map((s) => ({
+        ...s,
+        date: s.shift_date,
+        unit_name: s.unit || null,
+      }));
     }
 
-    // Open shifts (unassigned)
     const { data: open, error: openErr } = await supabaseAdmin
       .from("shifts")
       .select(
@@ -253,10 +306,10 @@ router.get("/home-summary", requireAuth, async (req, res) => {
     if (openErr) throw openErr;
 
     const openShifts = (open || []).map((s) => ({
-  ...s,
-  date: s.shift_date,
-  unit_name: s.unit || null,
-}));
+      ...s,
+      date: s.shift_date,
+      unit_name: s.unit || null,
+    }));
 
     return res.json({
       myShifts,
@@ -266,6 +319,8 @@ router.get("/home-summary", requireAuth, async (req, res) => {
       staffId,
       activeOrg: org,
       activeOrgSource: resolved.source,
+      appRole: appRole || null,
+      isSuperadmin,
     });
   } catch (e) {
     console.error("ME HOME SUMMARY ERROR:", e);
