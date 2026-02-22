@@ -117,6 +117,14 @@ export default function AdminPage() {
   const [csvError, setCsvError] = useState("");
   const csvInputRef = useRef(null);
 
+  // ✅ Departments
+const [departments, setDepartments] = useState([]);
+const [departmentsLoading, setDepartmentsLoading] = useState(false);
+
+const [deptForm, setDeptForm] = useState({ name: "", is_active: true });
+const [editingDeptId, setEditingDeptId] = useState(null);
+const [deptSaving, setDeptSaving] = useState(false);
+
   // ---------------------------
   // PRIVACY SETTINGS
   // ---------------------------
