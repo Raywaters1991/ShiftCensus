@@ -117,13 +117,96 @@ export default function AdminPage() {
   const [csvError, setCsvError] = useState("");
   const csvInputRef = useRef(null);
 
+  // ---------------------------
   // ✅ Departments
-const [departments, setDepartments] = useState([]);
-const [departmentsLoading, setDepartmentsLoading] = useState(false);
+  // ---------------------------
+  const [departments, setDepartments] = useState([]);
+  const [departmentsLoading, setDepartmentsLoading] = useState(false);
 
-const [deptForm, setDeptForm] = useState({ name: "", is_active: true });
-const [editingDeptId, setEditingDeptId] = useState(null);
-const [deptSaving, setDeptSaving] = useState(false);
+  const [deptForm, setDeptForm] = useState({ name: "", is_active: true });
+  const [editingDeptId, setEditingDeptId] = useState(null);
+  const [deptSaving, setDeptSaving] = useState(false);
+
+  async function loadDepartments() {
+    if (!orgId) return;
+    setDepartmentsLoading(true);
+    try {
+      const data = await api.get("/departments"); // org-scoped by X-Org-Code from api interceptor
+      setDepartments(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error("LOAD DEPARTMENTS ERROR:", e);
+      setDepartments([]);
+    } finally {
+      setDepartmentsLoading(false);
+    }
+  }
+
+  async function addDepartment() {
+    const name = String(deptForm.name || "").trim();
+    if (!name) return alert("Department name is required.");
+    setDeptSaving(true);
+    try {
+      const created = await api.post("/departments", {
+        name,
+        is_active: !!deptForm.is_active,
+      });
+      setDepartments((prev) =>
+        [...prev, created].sort((a, b) =>
+          String(a?.name || "").localeCompare(String(b?.name || ""), undefined, {
+            numeric: true,
+            sensitivity: "base",
+          })
+        )
+      );
+      setDeptForm({ name: "", is_active: true });
+    } catch (e) {
+      alert(e?.response?.data?.error || e?.message || "Failed to add department.");
+    } finally {
+      setDeptSaving(false);
+    }
+  }
+
+  async function saveDepartment(id) {
+    const name = String(deptForm.name || "").trim();
+    if (!name) return alert("Department name is required.");
+    setDeptSaving(true);
+    try {
+      const updated = await api.patch(`/departments/${id}`, {
+        name,
+        is_active: !!deptForm.is_active,
+      });
+      setDepartments((prev) =>
+        prev
+          .map((d) => (d.id === id ? { ...d, ...updated } : d))
+          .sort((a, b) =>
+            String(a?.name || "").localeCompare(String(b?.name || ""), undefined, {
+              numeric: true,
+              sensitivity: "base",
+            })
+          )
+      );
+      setEditingDeptId(null);
+      setDeptForm({ name: "", is_active: true });
+    } catch (e) {
+      alert(e?.response?.data?.error || e?.message || "Failed to save department.");
+    } finally {
+      setDeptSaving(false);
+    }
+  }
+
+  async function toggleDepartmentActive(d) {
+    setDeptSaving(true);
+    try {
+      const updated = await api.patch(`/departments/${d.id}`, {
+        is_active: !(d.is_active !== false),
+      });
+      setDepartments((prev) => prev.map((x) => (x.id === d.id ? { ...x, ...updated } : x)));
+    } catch (e) {
+      alert(e?.response?.data?.error || e?.message || "Failed to update department.");
+    } finally {
+      setDeptSaving(false);
+    }
+  }
 
   // ---------------------------
   // PRIVACY SETTINGS
@@ -158,7 +241,7 @@ const [deptSaving, setDeptSaving] = useState(false);
   const [savingMemberUserId, setSavingMemberUserId] = useState(null);
 
   // ✅ Permissions derived from ORG SCOPED flags
-  const canManagePrivacy = !!isOrgAdmin;   // you can tighten later if you want separate flag
+  const canManagePrivacy = !!isOrgAdmin; // you can tighten later if you want separate flag
   const canManageFacility = !!isOrgAdmin; // you can tighten later if you want separate flag
 
   // ✅ IMPORTANT: reload org-scoped data whenever orgId changes
@@ -166,8 +249,9 @@ const [deptSaving, setDeptSaving] = useState(false);
     if (!orgId) return;
     loadAll();
     loadOrgSettings();
+    loadDepartments();
     if (activeTab === "rooms_beds") loadRooms();
-    if (activeTab === "admin_access" && canManageAdmins) loadAdminMembers();
+    if (activeTab === "admin_access" && (canManageAdmins || isSuperadmin)) loadAdminMembers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgId]);
 
@@ -180,11 +264,7 @@ const [deptSaving, setDeptSaving] = useState(false);
   async function loadAll() {
     setLoading(true);
     try {
-      const [s, u, ss] = await Promise.all([
-        api.get("/staff"),
-        api.get("/units"),
-        api.get("/shift-settings"),
-      ]);
+      const [s, u, ss] = await Promise.all([api.get("/staff"), api.get("/units"), api.get("/shift-settings")]);
       setStaff(Array.isArray(s) ? s : []);
       setUnits(Array.isArray(u) ? u : []);
       setShiftSettings(Array.isArray(ss) ? ss : []);
@@ -209,7 +289,7 @@ const [deptSaving, setDeptSaving] = useState(false);
   }
 
   // ---------------------------
-  // Admin memberships load
+  // Admin memberships load (✅ correct endpoints + use membership.id)
   // ---------------------------
   async function loadAdminMembers() {
     if (!orgId || !orgCode) return;
@@ -217,8 +297,7 @@ const [deptSaving, setDeptSaving] = useState(false);
 
     setAdminMembersLoading(true);
     try {
-      // api service should already include X-Org-Code header; but we also pass explicitly
-      const data = await api.get("/admin/memberships", {
+      const data = await api.get("/adminmanagement/list", {
         headers: { "X-Org-Code": orgCode },
       });
 
@@ -226,29 +305,29 @@ const [deptSaving, setDeptSaving] = useState(false);
       setAdminMembers(list);
     } catch (e) {
       console.error("LOAD ADMIN MEMBERS ERROR:", e);
-      alert(e?.message || "Failed to load admin memberships.");
+      alert(e?.response?.data?.error || e?.message || "Failed to load admin memberships.");
       setAdminMembers([]);
     } finally {
       setAdminMembersLoading(false);
     }
   }
 
-  async function saveMemberPerms(userId, patch) {
+  async function saveMemberPerms(membershipId, patch) {
     if (!orgCode) return;
-    setSavingMemberUserId(userId);
+    setSavingMemberUserId(membershipId);
     try {
-      const data = await api.patch(`/admin/memberships/${userId}`, patch, {
+      const data = await api.patch(`/adminmanagement/${membershipId}`, patch, {
         headers: { "X-Org-Code": orgCode },
       });
 
       const updated = data?.membership || null;
-      if (!updated?.user_id) return;
+      if (!updated?.id) return;
 
       setAdminMembers((prev) =>
-        prev.map((m) => (String(m.user_id) === String(updated.user_id) ? { ...m, ...updated } : m))
+        prev.map((m) => (String(m.id) === String(updated.id) ? { ...m, ...updated } : m))
       );
     } catch (e) {
-      alert(e?.message || "Failed to update member permissions.");
+      alert(e?.response?.data?.error || e?.message || "Failed to update member permissions.");
     } finally {
       setSavingMemberUserId(null);
     }
@@ -266,8 +345,7 @@ const [deptSaving, setDeptSaving] = useState(false);
 
       setRooms(sorted);
 
-      const firstActive =
-        sorted.find((r) => r.is_active !== false) || sorted[0] || null;
+      const firstActive = sorted.find((r) => r.is_active !== false) || sorted[0] || null;
 
       setSelectedRoomId((prev) => {
         if (prev) return prev;
@@ -278,11 +356,7 @@ const [deptSaving, setDeptSaving] = useState(false);
 
       if (currentRoomId) {
         const room = sorted.find((r) => r.id === currentRoomId);
-        setBeds(
-          Array.isArray(room?.beds)
-            ? room.beds.slice().sort(sortByOrderThenLabel)
-            : []
-        );
+        setBeds(Array.isArray(room?.beds) ? room.beds.slice().sort(sortByOrderThenLabel) : []);
       } else {
         setBeds([]);
       }
@@ -301,9 +375,7 @@ const [deptSaving, setDeptSaving] = useState(false);
   function syncBedsFromRooms(roomId, roomsList) {
     const list = Array.isArray(roomsList) ? roomsList : rooms;
     const room = list.find((r) => r.id === roomId);
-    const nextBeds = Array.isArray(room?.beds)
-      ? room.beds.slice().sort(sortByOrderThenLabel)
-      : [];
+    const nextBeds = Array.isArray(room?.beds) ? room.beds.slice().sort(sortByOrderThenLabel) : [];
     setBeds(nextBeds);
   }
 
@@ -321,6 +393,13 @@ const [deptSaving, setDeptSaving] = useState(false);
     loadAdminMembers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, orgId, canManageAdmins, isSuperadmin]);
+
+  useEffect(() => {
+    if (activeTab !== "departments") return;
+    if (!orgId) return;
+    loadDepartments();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, orgId]);
 
   useEffect(() => {
     if (activeTab !== "rooms_beds") return;
@@ -511,8 +590,7 @@ const [deptSaving, setDeptSaving] = useState(false);
       staffRows.push(item);
     }
 
-    if (staffRows.length === 0 && errors.length === 0)
-      errors.push("No valid rows found.");
+    if (staffRows.length === 0 && errors.length === 0) errors.push("No valid rows found.");
     return { staffRows, errors };
   }
 
@@ -743,16 +821,12 @@ const [deptSaving, setDeptSaving] = useState(false);
         is_active: !!bedForm.is_active,
       });
 
-      setBeds((prev) =>
-        prev.map((b) => (b.id === id ? updated : b)).sort(sortByOrderThenLabel)
-      );
+      setBeds((prev) => prev.map((b) => (b.id === id ? updated : b)).sort(sortByOrderThenLabel));
 
       setRooms((prev) =>
         prev.map((r) => {
           if (r.id !== selectedRoomId) return r;
-          const nextBeds = (Array.isArray(r.beds) ? r.beds : []).map((b) =>
-            b.id === id ? updated : b
-          );
+          const nextBeds = (Array.isArray(r.beds) ? r.beds : []).map((b) => (b.id === id ? updated : b));
           return { ...r, beds: nextBeds };
         })
       );
@@ -774,18 +848,12 @@ const [deptSaving, setDeptSaving] = useState(false);
         is_active: !(bed.is_active !== false),
       });
 
-      setBeds((prev) =>
-        prev
-          .map((b) => (b.id === bed.id ? updated : b))
-          .sort(sortByOrderThenLabel)
-      );
+      setBeds((prev) => prev.map((b) => (b.id === bed.id ? updated : b)).sort(sortByOrderThenLabel));
 
       setRooms((prev) =>
         prev.map((r) => {
           if (r.id !== selectedRoomId) return r;
-          const nextBeds = (Array.isArray(r.beds) ? r.beds : []).map((b) =>
-            b.id === bed.id ? updated : b
-          );
+          const nextBeds = (Array.isArray(r.beds) ? r.beds : []).map((b) => (b.id === bed.id ? updated : b));
           return { ...r, beds: nextBeds };
         })
       );
@@ -864,11 +932,15 @@ const [deptSaving, setDeptSaving] = useState(false);
 
     return (adminMembers || []).filter((m) => {
       const hay = [
+        m.staff_name,
         m.display_name,
         m.email,
         m.phone,
+        m.staff_role,
         m.role,
         m.user_id,
+        m.id,
+        m.department_id,
       ]
         .filter(Boolean)
         .join(" ")
@@ -877,6 +949,17 @@ const [deptSaving, setDeptSaving] = useState(false);
       return hay.includes(q);
     });
   }, [adminMembers, adminSearch]);
+
+  const deptOptions = useMemo(() => {
+    return (departments || [])
+      .slice()
+      .sort((a, b) =>
+        String(a?.name || "").localeCompare(String(b?.name || ""), undefined, {
+          numeric: true,
+          sensitivity: "base",
+        })
+      );
+  }, [departments]);
 
   // ==================================================
   // RENDER
@@ -893,8 +976,14 @@ const [deptSaving, setDeptSaving] = useState(false);
                 {orgName || "No facility selected"}
                 {orgCode ? (
                   <>
-                    {" "} •{" "}
-                    <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }}>
+                    {" "}
+                    •{" "}
+                    <span
+                      style={{
+                        fontFamily:
+                          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+                      }}
+                    >
                       {orgCode}
                     </span>
                   </>
@@ -904,7 +993,9 @@ const [deptSaving, setDeptSaving] = useState(false);
               {headerSubtitle ? (
                 <span style={{ marginLeft: 10, color: "#9CA3AF" }}>{headerSubtitle}</span>
               ) : null}
-              {loading ? <span style={{ marginLeft: 10, color: "#9CA3AF" }}>Loading…</span> : null}
+              {loading ? (
+                <span style={{ marginLeft: 10, color: "#9CA3AF" }}>Loading…</span>
+              ) : null}
             </div>
           </div>
         </div>
@@ -943,12 +1034,28 @@ const [deptSaving, setDeptSaving] = useState(false);
       <div style={ui.tabs}>
         <TabButton active={activeTab === "staff"} onClick={() => setActiveTab("staff")} label="Staff" />
         <TabButton active={activeTab === "units"} onClick={() => setActiveTab("units")} label="Units" />
-        <TabButton active={activeTab === "shifts"} onClick={() => setActiveTab("shifts")} label="Shift Settings" />
-        <TabButton active={activeTab === "rooms_beds"} onClick={() => setActiveTab("rooms_beds")} label="Rooms & Beds" />
+        <TabButton
+          active={activeTab === "shifts"}
+          onClick={() => setActiveTab("shifts")}
+          label="Shift Settings"
+        />
+        <TabButton
+          active={activeTab === "rooms_beds"}
+          onClick={() => setActiveTab("rooms_beds")}
+          label="Rooms & Beds"
+        />
         <TabButton active={activeTab === "privacy"} onClick={() => setActiveTab("privacy")} label="Privacy" />
 
+       {(isOrgAdmin || canManageAdmins || isSuperadmin) ? (
+  <TabButton
+    active={activeTab === "departments"}
+    onClick={() => setActiveTab("departments")}
+    label="Departments"
+  />
+) : null}
+
         {/* ✅ Only show if can_manage_admins */}
-        {(canManageAdmins || isSuperadmin) ? (
+        {canManageAdmins || isSuperadmin ? (
           <TabButton
             active={activeTab === "admin_access"}
             onClick={() => setActiveTab("admin_access")}
@@ -967,6 +1074,132 @@ const [deptSaving, setDeptSaving] = useState(false);
           </div>
         ) : null}
 
+        {/* ✅ DEPARTMENTS */}
+        {activeTab === "departments" && orgId && (
+          <div style={ui.card}>
+            <div style={ui.cardHeader}>
+              <div>
+                <div style={ui.cardTitle}>Departments</div>
+                <div style={ui.cardSub}>
+                  Create departments (Nursing, Therapy, Dietary, etc.). Assign members to departments in <b>Admin Access</b>.
+                </div>
+              </div>
+
+              <button style={ui.btnGhost} onClick={loadDepartments} disabled={departmentsLoading}>
+                {departmentsLoading ? "Loading…" : "Refresh"}
+              </button>
+            </div>
+
+            {!isOrgAdmin && !canManageAdmins && !isSuperadmin ? (
+              <div style={ui.notice}>You don’t have permission to manage departments for this organization.</div>
+            ) : (
+              <>
+                <div style={ui.inlineForm}>
+                  <input
+                    style={ui.input}
+                    placeholder="Department name (ex: Nursing, Rehab, Admin)"
+                    value={deptForm.name}
+                    onChange={(e) => setDeptForm((p) => ({ ...p, name: e.target.value }))}
+                  />
+                  <label style={ui.smallCheck}>
+                    <input
+                      type="checkbox"
+                      checked={!!deptForm.is_active}
+                      onChange={(e) => setDeptForm((p) => ({ ...p, is_active: e.target.checked }))}
+                    />
+                    Active
+                  </label>
+
+                  {editingDeptId ? (
+                    <>
+                      <button style={ui.btnPrimary} onClick={() => saveDepartment(editingDeptId)} disabled={deptSaving}>
+                        {deptSaving ? "Saving…" : "Save"}
+                      </button>
+                      <button
+                        style={ui.btnGhost}
+                        onClick={() => {
+                          setEditingDeptId(null);
+                          setDeptForm({ name: "", is_active: true });
+                        }}
+                        disabled={deptSaving}
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button style={ui.btnPrimary} onClick={addDepartment} disabled={deptSaving}>
+                      {deptSaving ? "Adding…" : "Add"}
+                    </button>
+                  )}
+                </div>
+
+                <div style={{ overflowX: "auto" }}>
+                  <table style={ui.table}>
+                    <thead>
+                      <tr>
+                        <th style={ui.th}>Department</th>
+                        <th style={ui.th}>Active</th>
+                        <th style={{ ...ui.th, textAlign: "right" }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(deptOptions || []).map((d) => {
+                        const inactive = d.is_active === false;
+                        return (
+                          <tr key={d.id} style={ui.tr}>
+                            <td style={ui.td}>
+                              <div style={ui.cellStrong}>{d.name}</div>
+                              <div style={{ color: "#9CA3AF", fontSize: 12 }}>
+                                id:{" "}
+                                <span style={ui.mono}>
+                                  {d.id}
+                                </span>
+                              </div>
+                            </td>
+                            <td style={ui.td}>
+                              <span style={inactive ? ui.badgeOff : ui.badgeOn}>
+                                {inactive ? "Inactive" : "Active"}
+                              </span>
+                            </td>
+                            <td style={{ ...ui.td, textAlign: "right" }}>
+                              <div style={ui.actions}>
+                                <button
+                                  style={ui.btnGhost}
+                                  onClick={() => {
+                                    setEditingDeptId(d.id);
+                                    setDeptForm({ name: d.name || "", is_active: d.is_active !== false });
+                                  }}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  style={ui.btnMiniGhost}
+                                  onClick={() => toggleDepartmentActive(d)}
+                                  disabled={deptSaving}
+                                >
+                                  {inactive ? "Activate" : "Deactivate"}
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+
+                      {!departmentsLoading && (deptOptions || []).length === 0 ? (
+                        <tr>
+                          <td style={ui.emptyRow} colSpan={3}>
+                            No departments yet.
+                          </td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         {/* ✅ ADMIN ACCESS */}
         {activeTab === "admin_access" && orgId && (
           <div style={ui.card}>
@@ -974,7 +1207,7 @@ const [deptSaving, setDeptSaving] = useState(false);
               <div>
                 <div style={ui.cardTitle}>Admin Access</div>
                 <div style={ui.cardSub}>
-                  Toggle admin permissions for users in this organization. Only users with <b>can_manage_admins</b> can change these.
+                  Manage org membership permissions. Only users with <b>can_manage_admins</b> can change these.
                 </div>
               </div>
 
@@ -985,27 +1218,22 @@ const [deptSaving, setDeptSaving] = useState(false);
                   value={adminSearch}
                   onChange={(e) => setAdminSearch(e.target.value)}
                 />
-                <button
-                  style={ui.btnGhost}
-                  onClick={loadAdminMembers}
-                  disabled={adminMembersLoading}
-                >
+                <button style={ui.btnGhost} onClick={loadAdminMembers} disabled={adminMembersLoading}>
                   {adminMembersLoading ? "Loading…" : "Refresh"}
                 </button>
               </div>
             </div>
 
-            {(!canManageAdmins && !isSuperadmin) ? (
-              <div style={ui.notice}>
-                You don’t have permission to manage admins for this organization.
-              </div>
+            {!canManageAdmins && !isSuperadmin ? (
+              <div style={ui.notice}>You don’t have permission to manage admins for this organization.</div>
             ) : (
               <div style={{ overflowX: "auto" }}>
                 <table style={ui.table}>
                   <thead>
                     <tr>
                       <th style={ui.th}>User</th>
-                      <th style={ui.th}>Role</th>
+                      <th style={ui.th}>Org Role</th>
+                      <th style={ui.th}>Department</th>
                       <th style={ui.th}>Active</th>
                       <th style={ui.th}>Is Admin</th>
                       <th style={ui.th}>Can Manage Admins</th>
@@ -1015,39 +1243,68 @@ const [deptSaving, setDeptSaving] = useState(false);
                   </thead>
                   <tbody>
                     {filteredAdminMembers.map((m) => {
-                      const isSaving = savingMemberUserId === m.user_id;
+                      const isSaving = savingMemberUserId === m.id;
 
-                      // basic UI lockout prevention:
-                      // we cannot safely detect "self" here without auth id,
-                      // but backend already prevents self removal. This is just UX.
                       const isAdmin = !!m.is_admin;
                       const canMgr = !!m.can_manage_admins;
                       const canSch = !!m.can_schedule_write;
                       const isActive = m.is_active !== false;
 
                       return (
-                        <tr key={m.user_id} style={ui.tr}>
+                        <tr key={m.id} style={ui.tr}>
                           <td style={ui.td}>
                             <div style={{ display: "grid", gap: 4 }}>
                               <div style={ui.cellStrong}>
-                                {m.display_name || m.email || "Unknown User"}
+                                {m.staff_name || m.display_name || m.email || "Unknown User"}
                               </div>
                               <div style={{ color: "#9CA3AF", fontSize: 12 }}>
                                 {m.email ? m.email : null}
                                 {m.email && m.phone ? " • " : null}
                                 {m.phone ? m.phone : null}
                                 <span style={{ marginLeft: 8 }}>
-                                  user_id:{" "}
-                                  <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }}>
-                                    {m.user_id}
-                                  </span>
+                                  membership_id: <span style={ui.mono}>{m.id}</span>
+                                </span>
+                                <span style={{ marginLeft: 8 }}>
+                                  user_id: <span style={ui.mono}>{m.user_id}</span>
                                 </span>
                               </div>
                             </div>
                           </td>
 
+                          {/* Org Role (membership.role) */}
                           <td style={ui.td}>
-                            <span style={ui.pill}>{m.role || "—"}</span>
+                            <input
+                              style={{ ...ui.input, height: 36, minWidth: 150 }}
+                              defaultValue={m.role || ""}
+                              placeholder="Role (org)"
+                              disabled={isSaving}
+                              onBlur={(e) => {
+                                const next = String(e.target.value || "").trim();
+                                if (next === String(m.role || "").trim()) return;
+                                saveMemberPerms(m.id, { role: next });
+                              }}
+                            />
+                          </td>
+
+                          {/* Department assignment */}
+                          <td style={ui.td}>
+                            <select
+                              style={{ ...ui.select, height: 36, minWidth: 170 }}
+                              value={m.department_id || ""}
+                              disabled={isSaving}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                saveMemberPerms(m.id, { department_id: v ? v : null });
+                              }}
+                            >
+                              <option value="">No department</option>
+                              {deptOptions.map((d) => (
+                                <option key={d.id} value={d.id}>
+                                  {d.name}
+                                  {d.is_active === false ? " (inactive)" : ""}
+                                </option>
+                              ))}
+                            </select>
                           </td>
 
                           <td style={ui.td}>
@@ -1056,9 +1313,7 @@ const [deptSaving, setDeptSaving] = useState(false);
                                 type="checkbox"
                                 checked={isActive}
                                 disabled={isSaving}
-                                onChange={(e) =>
-                                  saveMemberPerms(m.user_id, { is_active: e.target.checked })
-                                }
+                                onChange={(e) => saveMemberPerms(m.id, { is_active: e.target.checked })}
                               />
                               Active
                             </label>
@@ -1070,22 +1325,20 @@ const [deptSaving, setDeptSaving] = useState(false);
                                 type="checkbox"
                                 checked={isAdmin}
                                 disabled={isSaving}
-                                onChange={(e) =>
-                                  saveMemberPerms(m.user_id, { is_admin: e.target.checked })
-                                }
+                                onChange={(e) => saveMemberPerms(m.id, { is_admin: e.target.checked })}
                               />
                               Admin
                             </label>
                           </td>
 
                           <td style={ui.td}>
-                            <label style={ui.smallCheck}>
+                            <label style={ui.smallCheck} title={!isAdmin ? "Enable Admin first" : ""}>
                               <input
                                 type="checkbox"
                                 checked={canMgr}
-                                disabled={isSaving}
+                                disabled={isSaving || !isAdmin}
                                 onChange={(e) =>
-                                  saveMemberPerms(m.user_id, { can_manage_admins: e.target.checked })
+                                  saveMemberPerms(m.id, { can_manage_admins: e.target.checked })
                                 }
                               />
                               Manage Admins
@@ -1099,7 +1352,7 @@ const [deptSaving, setDeptSaving] = useState(false);
                                 checked={canSch}
                                 disabled={isSaving}
                                 onChange={(e) =>
-                                  saveMemberPerms(m.user_id, { can_schedule_write: e.target.checked })
+                                  saveMemberPerms(m.id, { can_schedule_write: e.target.checked })
                                 }
                               />
                               Schedule Write
@@ -1110,9 +1363,7 @@ const [deptSaving, setDeptSaving] = useState(false);
                             {isSaving ? (
                               <span style={{ color: "#9CA3AF", fontWeight: 900 }}>Saving…</span>
                             ) : (
-                              <span style={{ color: "#9CA3AF", fontSize: 12 }}>
-                                Changes save instantly
-                              </span>
+                              <span style={{ color: "#9CA3AF", fontSize: 12 }}>Changes save instantly</span>
                             )}
                           </td>
                         </tr>
@@ -1121,7 +1372,7 @@ const [deptSaving, setDeptSaving] = useState(false);
 
                     {!adminMembersLoading && filteredAdminMembers.length === 0 ? (
                       <tr>
-                        <td style={ui.emptyRow} colSpan={7}>
+                        <td style={ui.emptyRow} colSpan={8}>
                           No members found.
                         </td>
                       </tr>
@@ -1171,7 +1422,9 @@ const [deptSaving, setDeptSaving] = useState(false);
               </div>
             </div>
 
-            {csvError ? <div style={{ ...ui.notice, borderColor: "rgba(239,68,68,0.35)" }}>{csvError}</div> : null}
+            {csvError ? (
+              <div style={{ ...ui.notice, borderColor: "rgba(239,68,68,0.35)" }}>{csvError}</div>
+            ) : null}
 
             <div style={{ overflowX: "auto" }}>
               <table style={ui.table}>
@@ -1564,7 +1817,9 @@ const [deptSaving, setDeptSaving] = useState(false);
                             <select
                               style={ui.select}
                               value={shiftForm.shift_type}
-                              onChange={(e) => setShiftForm({ ...shiftForm, shift_type: e.target.value })}
+                              onChange={(e) =>
+                                setShiftForm({ ...shiftForm, shift_type: e.target.value })
+                              }
                             >
                               {SHIFT_TYPES.map((t) => (
                                 <option key={t} value={t}>
@@ -1584,14 +1839,18 @@ const [deptSaving, setDeptSaving] = useState(false);
                                 style={ui.input}
                                 type="time"
                                 value={shiftForm.start_local}
-                                onChange={(e) => setShiftForm({ ...shiftForm, start_local: e.target.value })}
+                                onChange={(e) =>
+                                  setShiftForm({ ...shiftForm, start_local: e.target.value })
+                                }
                               />
                               <span style={{ color: "#9CA3AF", fontWeight: 900 }}>–</span>
                               <input
                                 style={ui.input}
                                 type="time"
                                 value={shiftForm.end_local}
-                                onChange={(e) => setShiftForm({ ...shiftForm, end_local: e.target.value })}
+                                onChange={(e) =>
+                                  setShiftForm({ ...shiftForm, end_local: e.target.value })
+                                }
                               />
                             </div>
                           ) : (
@@ -1671,9 +1930,7 @@ const [deptSaving, setDeptSaving] = useState(false);
             </div>
 
             {!canManageFacility ? (
-              <div style={ui.notice}>
-                You don’t have permission to manage facility layout for this organization.
-              </div>
+              <div style={ui.notice}>You don’t have permission to manage facility layout for this organization.</div>
             ) : (
               <div style={ui.rbGrid}>
                 <div style={ui.rbLeft}>
@@ -1731,7 +1988,11 @@ const [deptSaving, setDeptSaving] = useState(false);
                           const selected = r.id === selectedRoomId;
                           const inactive = r.is_active === false;
                           return (
-                            <div key={r.id} onClick={() => setSelectedRoomId(r.id)} style={ui.roomRow(selected, inactive)}>
+                            <div
+                              key={r.id}
+                              onClick={() => setSelectedRoomId(r.id)}
+                              style={ui.roomRow(selected, inactive)}
+                            >
                               <div style={{ minWidth: 0 }}>
                                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                   <div style={{ fontWeight: 950, color: "white", opacity: inactive ? 0.55 : 1 }}>
@@ -1867,10 +2128,7 @@ const [deptSaving, setDeptSaving] = useState(false);
                                       <span style={ui.orderPill}>#{b.display_order ?? idx + 1}</span>
                                     </div>
                                     <div style={{ color: "#9CA3AF", fontSize: 12, marginTop: 2 }}>
-                                      bed_id:{" "}
-                                      <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }}>
-                                        {b.id}
-                                      </span>
+                                      bed_id: <span style={ui.mono}>{b.id}</span>
                                     </div>
                                   </div>
                                 </div>
@@ -2059,14 +2317,9 @@ function SuperAdminOrgSwitcher({ open, onClose, orgs, loading, onPick }) {
                 title={`orgId: ${o.id}`}
               >
                 <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0, textAlign: "left" }}>
-                  <div style={{ color: "white", fontWeight: 1000, fontSize: 14 }}>
-                    {o.name || "Unnamed Org"}
-                  </div>
+                  <div style={{ color: "white", fontWeight: 1000, fontSize: 14 }}>{o.name || "Unnamed Org"}</div>
                   <div style={{ color: "#9CA3AF", fontSize: 12 }}>
-                    {o.org_code || "—"} • orgId:{" "}
-                    <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" }}>
-                      {o.id}
-                    </span>
+                    {o.org_code || "—"} • orgId: <span style={ui.mono}>{o.id}</span>
                   </div>
                 </div>
               </button>
@@ -2194,6 +2447,10 @@ const ui = {
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
     color: "#E5E7EB",
     fontSize: 12,
+  },
+
+  mono: {
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
   },
 
   emptyRow: { padding: 14, color: "#9CA3AF", textAlign: "center" },
