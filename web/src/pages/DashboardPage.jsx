@@ -145,6 +145,12 @@ export default function DashboardPage() {
     return { total, occupied, leave, empty };
   }, [bedBoard]);
 
+  // In SNF land, LOA typically still counts as a patient day.
+  // If you want PPD to be based on OCCUPIED ONLY, change patientDayCount to censusStats.occupied
+  const patientDayCount = useMemo(() => {
+    return (censusStats?.occupied || 0) + (censusStats?.leave || 0);
+  }, [censusStats]);
+
   const calcHours = (start, end) => {
     if (!start || !end) return 0;
     return Math.max((end - start) / 3600000, 0);
@@ -175,10 +181,34 @@ export default function DashboardPage() {
     });
 
     // Always include a catch-all bucket
-    buckets["Unassigned"] = buckets["Unassigned"] || { RN: 0, LPN: 0, hoursRN: 0, hoursLPN: 0 };
+    buckets["Unassigned"] =
+      buckets["Unassigned"] || { RN: 0, LPN: 0, hoursRN: 0, hoursLPN: 0 };
 
     return buckets;
   }
+
+  // ✅ If there is no Evening shift today, only show Day + Night.
+  const visibleShiftBlocks = useMemo(() => {
+    const base = SHIFT_BLOCKS.filter((b) => b.key !== "Evening");
+
+    if (!Array.isArray(shifts) || !Array.isArray(staff)) return base;
+
+    const todayShifts = shifts.filter((shift) => String(shift.shift_date || "") === todayKey);
+
+    const hasEvening = todayShifts.some((shift) => {
+      const worker = findStaffById(staff, shift.staff_id);
+      if (!worker) return false;
+
+      const shiftType =
+        shift.shift_type ||
+        shift.shiftType ||
+        inferShiftTypeFromStartLocal(shift.start_local, worker.role);
+
+      return shiftType === "Evening";
+    });
+
+    return hasEvening ? SHIFT_BLOCKS : base;
+  }, [shifts, staff, todayKey]);
 
   const renderShiftCard = ({ key, label }) => {
     if (!Array.isArray(shifts) || !Array.isArray(staff)) return null;
@@ -197,6 +227,15 @@ export default function DashboardPage() {
 
       return shiftType === key;
     });
+
+    // ✅ Total hours in this shift block
+    const blockHoursTotal = blockShifts.reduce(
+      (sum, sh) => sum + calcHours(sh.start_time, sh.end_time),
+      0
+    );
+
+    // ✅ PPD: hours per patient day
+    const ppd = patientDayCount > 0 ? blockHoursTotal / patientDayCount : null;
 
     // ✅ dynamic units
     const licensed = buildLicensedBucketsFromUnits();
@@ -238,9 +277,7 @@ export default function DashboardPage() {
       }
     });
 
-    const hasLicensedLines = Object.values(licensed).some(
-      (u) => u.RN > 0 || u.LPN > 0
-    );
+    const hasLicensedLines = Object.values(licensed).some((u) => u.RN > 0 || u.LPN > 0);
 
     return (
       <div
@@ -293,6 +330,51 @@ export default function DashboardPage() {
             No staff scheduled today.
           </div>
         )}
+
+        {/* ✅ PPD footer */}
+        <div
+          style={{
+            marginTop: 14,
+            paddingTop: 12,
+            borderTop: "1px solid rgba(255,255,255,0.10)",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ opacity: 0.85 }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  opacity: 0.75,
+                }}
+              >
+                Patients (Occupied + Leave)
+              </div>
+              <div style={{ fontSize: 18, fontWeight: 950 }}>{patientDayCount}</div>
+            </div>
+
+            <div style={{ opacity: 0.95, textAlign: "right" }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  opacity: 0.75,
+                }}
+              >
+                PPD (Hours / Patient Day)
+              </div>
+              <div style={{ fontSize: 18, fontWeight: 1000 }}>
+                {ppd === null ? "—" : ppd.toFixed(2)}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 6, opacity: 0.65, fontSize: 12 }}>
+            Shift hours: {blockHoursTotal.toFixed(1)}h
+          </div>
+        </div>
       </div>
     );
   };
@@ -360,7 +442,7 @@ export default function DashboardPage() {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "24px", marginTop: "24px" }}>
-        {SHIFT_BLOCKS.map(renderShiftCard)}
+        {visibleShiftBlocks.map(renderShiftCard)}
       </div>
     </div>
   );
