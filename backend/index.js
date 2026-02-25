@@ -58,7 +58,7 @@ app.use(express.json());
 // -----------------------------
 
 const adminMemberships = require("./routes/adminManagement");
-app.use("/api/admin-memberships", adminMemberships);
+app.use("/api/adminmanagement", adminMemberships);
 app.use("/api/units", require("./routes/units"));
 app.use("/api/admin", require("./routes/admin"));
 app.use("/api/census", require("./routes/census"));

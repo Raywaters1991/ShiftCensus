@@ -47,7 +47,7 @@ export default function LoginPage() {
     });
     if (error) throw error;
 
-  
+
     sessionStorage.removeItem("token");
     localStorage.removeItem("token");
 
@@ -190,7 +190,7 @@ export default function LoginPage() {
         </section>
       </main>
 
-      <footer style={styles.footer}>© {new Date().getFullYear()} ShiftCensus</footer>
+      <footer style={styles.footer}>© {new Date().getFullYear()} Battle Born Technologies LLC, a Nevada-based Technology company</footer>
     </div>
   );
 }
