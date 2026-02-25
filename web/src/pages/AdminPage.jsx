@@ -11,46 +11,38 @@ export default function AdminPage() {
     orgName,
     orgId,
     orgCode,
+    role,
     switchOrg,
-
-    // org-scoped perms
     isSuperadmin,
     isOrgAdmin,
     canManageAdmins,
-    canScheduleWrite,
   } = useUser();
 
-  // ---------------------------------
-  // Grouped navigation
-  // ---------------------------------
-  const [activeSection, setActiveSection] = useState(() => {
-    if (typeof window === "undefined") return "staff_settings";
-    return window.localStorage.getItem("admin_active_section") || "staff_settings";
+  const [primaryTab, setPrimaryTab] = useState(() => {
+    if (typeof window === "undefined") return "facility";
+    return window.localStorage.getItem("admin_primary_tab") || "facility";
   });
 
-  const [activeTab, setActiveTab] = useState(() => {
-    if (typeof window === "undefined") return "staff";
-    return window.localStorage.getItem("admin_active_tab") || "staff";
+  const [facilityTab, setFacilityTab] = useState(() => {
+    if (typeof window === "undefined") return "shifts";
+    return window.localStorage.getItem("admin_facility_tab") || "shifts";
   });
 
   useEffect(() => {
     if (typeof window !== "undefined") {
-      window.localStorage.setItem("admin_active_section", activeSection);
+      window.localStorage.setItem("admin_primary_tab", primaryTab);
     }
-  }, [activeSection]);
+  }, [primaryTab]);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
-      window.localStorage.setItem("admin_active_tab", activeTab);
+      window.localStorage.setItem("admin_facility_tab", facilityTab);
     }
-  }, [activeTab]);
+  }, [facilityTab]);
 
-  // ---------------------------------
-  // Top-level loading
-  // ---------------------------------
   const [loading, setLoading] = useState(false);
 
-  // Facility switcher
+  // ✅ facility switcher
   const [orgSwitcherOpen, setOrgSwitcherOpen] = useState(false);
   const [superOrgs, setSuperOrgs] = useState([]);
   const [superOrgsLoading, setSuperOrgsLoading] = useState(false);
@@ -69,9 +61,9 @@ export default function AdminPage() {
     }
   }
 
-  // ---------------------------------
+  // ---------------------------
   // Core Admin Data
-  // ---------------------------------
+  // ---------------------------
   const [staff, setStaff] = useState([]);
   const [units, setUnits] = useState([]);
   const [shiftSettings, setShiftSettings] = useState([]);
@@ -89,7 +81,6 @@ export default function AdminPage() {
   });
 
   const [unitForm, setUnitForm] = useState({ name: "" });
-
   const [shiftForm, setShiftForm] = useState({
     role: "",
     shift_type: "Day",
@@ -97,72 +88,10 @@ export default function AdminPage() {
     end_local: "15:00",
   });
 
-  // ---------------------------------
-  // ✅ Staff search + permissions UI
-  // ---------------------------------
-  const [staffSearch, setStaffSearch] = useState("");
-
-  // Memberships that drive permissions (Admin + Census/Schedule read/write)
-  const [adminMembers, setAdminMembers] = useState([]);
-  const [adminMembersLoading, setAdminMembersLoading] = useState(false);
-  const [savingMemberId, setSavingMemberId] = useState(null);
-
-  // Key idea: build lookup by staff_id (or user_id fallback)
-  const memberByStaffId = useMemo(() => {
-    const map = new Map();
-    (adminMembers || []).forEach((m) => {
-      if (m.staff_id) map.set(String(m.staff_id), m);
-    });
-    return map;
-  }, [adminMembers]);
-
-  async function loadAdminMembers() {
-    if (!orgId || !orgCode) return;
-    // If your API allows org admins to manage access, keep. Otherwise restrict by canManageAdmins/isSuperadmin
-    if (!isOrgAdmin && !canManageAdmins && !isSuperadmin) return;
-
-    setAdminMembersLoading(true);
-    try {
-      const data = await api.get("/adminmanagement/list", {
-        headers: { "X-Org-Code": orgCode },
-      });
-
-      const list = Array.isArray(data?.memberships) ? data.memberships : [];
-      setAdminMembers(list);
-    } catch (e) {
-      console.error("LOAD ADMIN MEMBERS ERROR:", e);
-      setAdminMembers([]);
-    } finally {
-      setAdminMembersLoading(false);
-    }
-  }
-
-  async function saveMemberPerms(membershipId, patch) {
-    if (!orgCode) return;
-    setSavingMemberId(membershipId);
-    try {
-      const data = await api.patch(`/adminmanagement/${membershipId}`, patch, {
-        headers: { "X-Org-Code": orgCode },
-      });
-
-      const updated = data?.membership || null;
-      if (!updated?.id) return;
-
-      setAdminMembers((prev) =>
-        prev.map((m) => (String(m.id) === String(updated.id) ? { ...m, ...updated } : m))
-      );
-    } catch (e) {
-      alert(e?.response?.data?.error || e?.message || "Failed to update permissions.");
-    } finally {
-      setSavingMemberId(null);
-    }
-  }
-
-  // ---------------------------------
-  // ✅ Invite link UX
-  // ---------------------------------
-  const [inviteModal, setInviteModal] = useState(null); // { name, email, phone, actionLink, note }
-
+  // ---------------------------
+  // Invite link UX
+  // ---------------------------
+  const [inviteModal, setInviteModal] = useState(null);
   async function copyToClipboard(text) {
     try {
       await navigator.clipboard.writeText(String(text || ""));
@@ -178,61 +107,11 @@ export default function AdminPage() {
     }
   }
 
-  // ---------------------------------
-  // ✅ Shift Settings filters (role bubbles)
-  // ---------------------------------
-  const [selectedShiftRole, setSelectedShiftRole] = useState("ALL");
-
-  const roleOptions = useMemo(() => {
-    const set = new Set(
-      (shiftSettings || [])
-        .map((s) => String(s?.role || "").trim())
-        .filter(Boolean)
-    );
-
-    (staff || []).forEach((st) => {
-      const r = String(st?.role || "").trim();
-      if (r) set.add(r);
-    });
-
-    return Array.from(set).sort((a, b) =>
-      a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
-    );
-  }, [shiftSettings, staff]);
-
-  const filteredShiftSettings = useMemo(() => {
-    if (selectedShiftRole === "ALL") return shiftSettings;
-    return (shiftSettings || []).filter(
-      (s) => String(s?.role || "").trim() === selectedShiftRole
-    );
-  }, [shiftSettings, selectedShiftRole]);
-
-  function selectShiftRole(roleName) {
-    const next = roleName || "ALL";
-    setSelectedShiftRole(next);
-
-    if (next !== "ALL") {
-      setShiftForm((p) => ({ ...p, role: next }));
-    }
-    setEditingShiftId(null);
-  }
-
-  // ---------------------------------
-  // CSV import
-  // ---------------------------------
-  const [showAddStaff, setShowAddStaff] = useState(false);
-  const [staffAdding, setStaffAdding] = useState(false);
-
-  const [csvUploading, setCsvUploading] = useState(false);
-  const [csvError, setCsvError] = useState("");
-  const csvInputRef = useRef(null);
-
-  // ---------------------------------
+  // ---------------------------
   // Departments
-  // ---------------------------------
+  // ---------------------------
   const [departments, setDepartments] = useState([]);
   const [departmentsLoading, setDepartmentsLoading] = useState(false);
-
   const [deptForm, setDeptForm] = useState({ name: "", is_active: true });
   const [editingDeptId, setEditingDeptId] = useState(null);
   const [deptSaving, setDeptSaving] = useState(false);
@@ -318,46 +197,36 @@ export default function AdminPage() {
     }
   }
 
-  // ---------------------------------
-  // Privacy + Facility Settings
-  // ---------------------------------
+  const deptOptions = useMemo(() => {
+    return (departments || [])
+      .slice()
+      .sort((a, b) =>
+        String(a?.name || "").localeCompare(String(b?.name || ""), undefined, {
+          numeric: true,
+          sensitivity: "base",
+        })
+      );
+  }, [departments]);
+
+  // ---------------------------
+  // Org Settings: Privacy + Lunch + Pay Period
+  // ---------------------------
   const [orgSettings, setOrgSettings] = useState(null);
   const [privacySaving, setPrivacySaving] = useState(false);
-  const [showAck, setShowAck] = useState(false);
 
-  // ✅ NEW: lunch break length (minutes) for PPD accuracy
-  const [lunchBreakMins, setLunchBreakMins] = useState(30);
+  const [lunchBreakMinutes, setLunchBreakMinutes] = useState(30);
   const [lunchSaving, setLunchSaving] = useState(false);
 
-  // ✅ NEW: pay period settings for OT
   const [payPeriod, setPayPeriod] = useState({
-    length_days: 14,
-    week_starts_on: "Sunday", // Sunday/Monday etc
-    anchor_date: "", // YYYY-MM-DD (optional)
+    pay_period_length_days: 14,
+    pay_period_anchor_date: "",
   });
-  const [payPeriodSaving, setPayPeriodSaving] = useState(false);
-
-  const canManagePrivacy = !!isOrgAdmin;
-  const canManageFacility = !!isOrgAdmin;
+  const [paySaving, setPaySaving] = useState(false);
 
   async function loadOrgSettings() {
     try {
       const data = await api.get("/org-settings");
       setOrgSettings(data);
-
-      // best-effort fill for new settings (if your backend already stores them)
-      const lb = Number(data?.lunch_break_minutes);
-      if (!Number.isNaN(lb) && lb >= 0) setLunchBreakMins(lb);
-
-      const pp = data?.pay_period || null;
-      if (pp) {
-        setPayPeriod((p) => ({
-          ...p,
-          length_days: Number(pp.length_days || p.length_days),
-          week_starts_on: String(pp.week_starts_on || p.week_starts_on),
-          anchor_date: String(pp.anchor_date || p.anchor_date || ""),
-        }));
-      }
     } catch (e) {
       console.error("ORG SETTINGS LOAD ERROR:", e);
       setOrgSettings({
@@ -376,51 +245,73 @@ export default function AdminPage() {
         acknowledged,
       });
       setOrgSettings(updated);
-      setShowAck(false);
     } catch (e) {
-      alert(e?.message || "Failed to update privacy settings");
+      alert(e?.response?.data?.error || e?.message || "Failed to update privacy settings");
     } finally {
       setPrivacySaving(false);
     }
   }
 
-  // ✅ NEW: save lunch break minutes
-  async function saveLunchBreakMinutes() {
+  async function loadLunchBreak() {
+    try {
+      const data = await api.get("/org-settings/lunch-break");
+      setLunchBreakMinutes(Number(data?.lunch_break_minutes ?? 30));
+    } catch (e) {
+      console.error("LOAD LUNCH BREAK ERROR:", e);
+      setLunchBreakMinutes(30);
+    }
+  }
+
+  async function saveLunchBreak() {
     setLunchSaving(true);
     try {
-      const mins = Math.max(0, Math.min(240, Number(lunchBreakMins || 0)));
-      const updated = await api.put("/org-settings/lunch-break", { minutes: mins });
-      setOrgSettings((p) => ({ ...p, ...(updated || {}) }));
-      alert("Lunch break saved.");
+      const updated = await api.put("/org-settings/lunch-break", {
+        lunch_break_minutes: Number(lunchBreakMinutes || 0),
+      });
+      setLunchBreakMinutes(Number(updated?.lunch_break_minutes ?? 30));
     } catch (e) {
-      alert(e?.response?.data?.error || e?.message || "Failed to save lunch break.");
+      alert(e?.response?.data?.error || e?.message || "Failed to save lunch break minutes");
     } finally {
       setLunchSaving(false);
     }
   }
 
-  // ✅ NEW: save pay period settings
-  async function savePayPeriod() {
-    setPayPeriodSaving(true);
+  async function loadPayPeriod() {
     try {
-      const payload = {
-        length_days: Number(payPeriod.length_days || 14),
-        week_starts_on: String(payPeriod.week_starts_on || "Sunday"),
-        anchor_date: payPeriod.anchor_date ? String(payPeriod.anchor_date) : null,
-      };
-      const updated = await api.put("/org-settings/pay-period", payload);
-      setOrgSettings((p) => ({ ...p, ...(updated || {}) }));
-      alert("Pay period saved.");
+      const data = await api.get("/org-settings/pay-period");
+      setPayPeriod({
+        pay_period_length_days: Number(data?.pay_period_length_days ?? 14),
+        pay_period_anchor_date: data?.pay_period_anchor_date ? String(data.pay_period_anchor_date) : "",
+      });
     } catch (e) {
-      alert(e?.response?.data?.error || e?.message || "Failed to save pay period.");
-    } finally {
-      setPayPeriodSaving(false);
+      console.error("LOAD PAY PERIOD ERROR:", e);
+      setPayPeriod({ pay_period_length_days: 14, pay_period_anchor_date: "" });
     }
   }
 
-  // ---------------------------------
+  async function savePayPeriod() {
+    setPaySaving(true);
+    try {
+      const updated = await api.put("/org-settings/pay-period", {
+        pay_period_length_days: Number(payPeriod.pay_period_length_days || 14),
+        pay_period_anchor_date: payPeriod.pay_period_anchor_date
+          ? String(payPeriod.pay_period_anchor_date).trim()
+          : null,
+      });
+      setPayPeriod({
+        pay_period_length_days: Number(updated?.pay_period_length_days ?? 14),
+        pay_period_anchor_date: updated?.pay_period_anchor_date ? String(updated.pay_period_anchor_date) : "",
+      });
+    } catch (e) {
+      alert(e?.response?.data?.error || e?.message || "Failed to save pay period");
+    } finally {
+      setPaySaving(false);
+    }
+  }
+
+  // ---------------------------
   // Rooms & Beds
-  // ---------------------------------
+  // ---------------------------
   const [rooms, setRooms] = useState([]);
   const [roomsLoading, setRoomsLoading] = useState(false);
   const [selectedRoomId, setSelectedRoomId] = useState(null);
@@ -448,10 +339,12 @@ export default function AdminPage() {
 
       const firstActive = sorted.find((r) => r.is_active !== false) || sorted[0] || null;
 
-      setSelectedRoomId((prev) => (prev ? prev : firstActive?.id ?? null));
+      setSelectedRoomId((prev) => {
+        if (prev) return prev;
+        return firstActive?.id ?? null;
+      });
 
       const currentRoomId = (selectedRoomId ?? firstActive?.id) || null;
-
       if (currentRoomId) {
         const room = sorted.find((r) => r.id === currentRoomId);
         setBeds(Array.isArray(room?.beds) ? room.beds.slice().sort(sortByOrderThenLabel) : []);
@@ -474,8 +367,31 @@ export default function AdminPage() {
     setBeds(nextBeds);
   }
 
+  useEffect(() => {
+    if (primaryTab !== "facility") return;
+    if (facilityTab !== "rooms_beds") return;
+    if (!orgId) return;
+    loadRooms();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [primaryTab, facilityTab, orgId]);
+
+  useEffect(() => {
+    if (primaryTab !== "facility") return;
+    if (facilityTab !== "rooms_beds") return;
+    if (!selectedRoomId) {
+      setBeds([]);
+      return;
+    }
+    setBedsLoading(true);
+    try {
+      syncBedsFromRooms(selectedRoomId);
+    } finally {
+      setBedsLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRoomId, primaryTab, facilityTab, rooms]);
+
   async function addRoom() {
-    if (!canManageFacility) return;
     const name = String(roomForm.name || "").trim();
     if (!name) return;
     setRoomSaving(true);
@@ -492,6 +408,7 @@ export default function AdminPage() {
       });
 
       setRoomForm({ name: "", is_active: true });
+      if (!selectedRoomId && created?.id) setBeds([]);
     } catch (e) {
       alert(e?.message || "Failed to add room.");
     } finally {
@@ -500,7 +417,6 @@ export default function AdminPage() {
   }
 
   async function saveRoom(id) {
-    if (!canManageFacility) return;
     const name = String(roomForm.name || "").trim();
     if (!name) return;
     setRoomSaving(true);
@@ -510,9 +426,7 @@ export default function AdminPage() {
         is_active: !!roomForm.is_active,
       });
       setRooms((prev) =>
-        prev
-          .map((r) => (r.id === id ? { ...r, ...updated } : r))
-          .sort(sortByOrderThenName)
+        prev.map((r) => (r.id === id ? { ...r, ...updated } : r)).sort(sortByOrderThenName)
       );
       setEditingRoomId(null);
       setRoomForm({ name: "", is_active: true });
@@ -524,16 +438,13 @@ export default function AdminPage() {
   }
 
   async function toggleRoomActive(room) {
-    if (!canManageFacility) return;
     setRoomSaving(true);
     try {
       const updated = await api.patch(`/facility/rooms/${room.id}`, {
         is_active: !(room.is_active !== false),
       });
       setRooms((prev) =>
-        prev
-          .map((r) => (r.id === room.id ? { ...r, ...updated } : r))
-          .sort(sortByOrderThenName)
+        prev.map((r) => (r.id === room.id ? { ...r, ...updated } : r)).sort(sortByOrderThenName)
       );
     } catch (e) {
       alert(e?.message || "Failed to update room.");
@@ -543,7 +454,6 @@ export default function AdminPage() {
   }
 
   async function addBed() {
-    if (!canManageFacility) return;
     if (!selectedRoomId) return alert("Select a room first.");
     const label = String(bedForm.label || "").trim();
     if (!label) return;
@@ -557,11 +467,13 @@ export default function AdminPage() {
       setBeds((prev) => [...prev, created].sort(sortByOrderThenLabel));
 
       setRooms((prev) =>
-        prev.map((r) => {
-          if (r.id !== selectedRoomId) return r;
-          const nextBeds = Array.isArray(r.beds) ? [...r.beds, created] : [created];
-          return { ...r, beds: nextBeds };
-        })
+        prev
+          .map((r) => {
+            if (r.id !== selectedRoomId) return r;
+            const nextBeds = Array.isArray(r.beds) ? [...r.beds, created] : [created];
+            return { ...r, beds: nextBeds };
+          })
+          .sort(sortByOrderThenName)
       );
 
       setBedForm({ label: "", is_active: true });
@@ -573,7 +485,6 @@ export default function AdminPage() {
   }
 
   async function saveBed(id) {
-    if (!canManageFacility) return;
     const label = String(bedForm.label || "").trim();
     if (!label) return;
     setBedSaving(true);
@@ -588,7 +499,9 @@ export default function AdminPage() {
       setRooms((prev) =>
         prev.map((r) => {
           if (r.id !== selectedRoomId) return r;
-          const nextBeds = (Array.isArray(r.beds) ? r.beds : []).map((b) => (b.id === id ? updated : b));
+          const nextBeds = (Array.isArray(r.beds) ? r.beds : []).map((b) =>
+            b.id === id ? updated : b
+          );
           return { ...r, beds: nextBeds };
         })
       );
@@ -603,19 +516,22 @@ export default function AdminPage() {
   }
 
   async function toggleBedActive(bed) {
-    if (!canManageFacility) return;
     setBedSaving(true);
     try {
       const updated = await api.patch(`/facility/beds/${bed.id}`, {
         is_active: !(bed.is_active !== false),
       });
 
-      setBeds((prev) => prev.map((b) => (b.id === bed.id ? updated : b)).sort(sortByOrderThenLabel));
+      setBeds((prev) =>
+        prev.map((b) => (b.id === bed.id ? updated : b)).sort(sortByOrderThenLabel)
+      );
 
       setRooms((prev) =>
         prev.map((r) => {
           if (r.id !== selectedRoomId) return r;
-          const nextBeds = (Array.isArray(r.beds) ? r.beds : []).map((b) => (b.id === bed.id ? updated : b));
+          const nextBeds = (Array.isArray(r.beds) ? r.beds : []).map((b) =>
+            b.id === bed.id ? updated : b
+          );
           return { ...r, beds: nextBeds };
         })
       );
@@ -627,11 +543,9 @@ export default function AdminPage() {
   }
 
   async function persistBedOrder(nextBeds) {
-    if (!canManageFacility) return;
     if (!selectedRoomId) return;
 
     setBeds(nextBeds);
-
     setRooms((prev) =>
       prev.map((r) => {
         if (r.id !== selectedRoomId) return r;
@@ -670,78 +584,16 @@ export default function AdminPage() {
     persistBedOrder(next);
   }
 
-  function moveBedByIndex(fromIdx, toIdx) {
-    if (toIdx < 0 || toIdx >= beds.length) return;
-    const next = beds.slice();
-    const [item] = next.splice(fromIdx, 1);
-    next.splice(toIdx, 0, item);
-    persistBedOrder(next);
-  }
+  // ---------------------------
+  // Staff CRUD + CSV import
+  // ---------------------------
+  const [showAddStaff, setShowAddStaff] = useState(false);
+  const [staffAdding, setStaffAdding] = useState(false);
 
-  // ---------------------------------
-  // Units actions
-  // ---------------------------------
-  async function addUnit() {
-    const name = String(unitForm.name || "").trim();
-    if (!name) return;
-    const created = await api.post("/units", { name });
-    setUnits((prev) => [...prev, created]);
-    setUnitForm({ name: "" });
-  }
+  const [csvUploading, setCsvUploading] = useState(false);
+  const [csvError, setCsvError] = useState("");
+  const csvInputRef = useRef(null);
 
-  async function saveUnit(id) {
-    const name = String(unitForm.name || "").trim();
-    if (!name) return;
-    const updated = await api.patch(`/units/${id}`, { name });
-    setUnits((prev) => prev.map((u) => (u.id === id ? updated : u)));
-    setEditingUnitId(null);
-  }
-
-  async function deleteUnit(id) {
-    if (!window.confirm("Delete this unit?")) return;
-    await api.delete(`/units/${id}`);
-    setUnits((prev) => prev.filter((u) => u.id !== id));
-  }
-
-  // ---------------------------------
-  // Shift settings actions
-  // ---------------------------------
-  async function addShift() {
-    const roleVal =
-      selectedShiftRole !== "ALL" ? selectedShiftRole : String(shiftForm.role || "").trim();
-    if (!roleVal) return;
-
-    const created = await api.post("/shift-settings", { ...shiftForm, role: roleVal });
-    setShiftSettings((prev) => [...prev, created]);
-
-    setShiftForm((p) => ({
-      ...p,
-      role: selectedShiftRole !== "ALL" ? selectedShiftRole : "",
-      shift_type: "Day",
-      start_local: "07:00",
-      end_local: "15:00",
-    }));
-  }
-
-  async function saveShift(id) {
-    const roleVal =
-      selectedShiftRole !== "ALL" ? selectedShiftRole : String(shiftForm.role || "").trim();
-    if (!roleVal) return;
-
-    const updated = await api.patch(`/shift-settings/${id}`, { ...shiftForm, role: roleVal });
-    setShiftSettings((prev) => prev.map((s) => (s.id === id ? updated : s)));
-    setEditingShiftId(null);
-  }
-
-  async function deleteShift(id) {
-    if (!window.confirm("Delete this shift setting?")) return;
-    await api.delete(`/shift-settings/${id}`);
-    setShiftSettings((prev) => prev.filter((s) => s.id !== id));
-  }
-
-  // ---------------------------------
-  // Staff actions
-  // ---------------------------------
   async function addStaff() {
     const payload = {
       name: String(staffForm.name || "").trim(),
@@ -756,10 +608,10 @@ export default function AdminPage() {
     setStaffAdding(true);
     try {
       const created = await api.post("/staff", payload);
+
       setStaff((prev) => [...prev, created]);
       setShowAddStaff(false);
 
-      // invite UX
       if (created?.actionLink) {
         setInviteModal({
           name: created?.name || payload.name,
@@ -782,9 +634,6 @@ export default function AdminPage() {
       }
 
       setStaffForm({ name: "", role: "", email: "", phone: "", department_id: "" });
-
-      // refresh permissions list because new staff might get membership row created
-      loadAdminMembers();
     } catch (e) {
       alert(e?.message || "Failed to add staff.");
     } finally {
@@ -811,9 +660,6 @@ export default function AdminPage() {
     setStaff((prev) => prev.filter((s) => s.id !== id));
   }
 
-  // ---------------------------------
-  // CSV helpers
-  // ---------------------------------
   function normalizeHeader(h) {
     return String(h || "")
       .trim()
@@ -971,8 +817,6 @@ export default function AdminPage() {
 
       setStaff((prev) => [...prev, ...created]);
       alert(`Imported ${created.length} staff member(s).`);
-
-      loadAdminMembers();
     } catch (e) {
       console.error("CSV UPLOAD ERROR:", e);
       setCsvError(e?.message || "Failed to import CSV.");
@@ -982,75 +826,156 @@ export default function AdminPage() {
     }
   }
 
-  // ---------------------------------
-  // Derived lists
-  // ---------------------------------
-  const deptOptions = useMemo(() => {
-    return (departments || [])
-      .slice()
-      .sort((a, b) =>
-        String(a?.name || "").localeCompare(String(b?.name || ""), undefined, {
-          numeric: true,
-          sensitivity: "base",
-        })
-      );
-  }, [departments]);
-
-  const filteredStaff = useMemo(() => {
-    const q = String(staffSearch || "").trim().toLowerCase();
-    if (!q) return staff;
-
-    return (staff || []).filter((s) => {
-      const hay = [s.id, s.name, s.role, s.email, s.phone, s.department_id]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return hay.includes(q);
-    });
-  }, [staff, staffSearch]);
-
-  const headerSubtitle = useMemo(() => {
-    const roomCount = rooms?.length ? rooms.length : null;
-    const bedCount = beds?.length ? beds.length : null;
-    if (activeTab !== "rooms_beds") return null;
-    const selectedRoom = rooms.find((r) => r.id === selectedRoomId);
-    const roomLabel = selectedRoom ? `Room: ${selectedRoom.name}` : "No room selected";
-    const suffix = bedCount !== null ? ` • ${bedCount} beds` : "";
-    return `${roomLabel}${suffix}${roomCount !== null ? ` • ${roomCount} rooms total` : ""}`;
-  }, [activeTab, rooms, beds, selectedRoomId]);
-
-  // ---------------------------------
-  // Tabs
-  // ---------------------------------
-  const staffTabs = useMemo(() => [{ key: "staff", label: "Staff" }], []);
-  const facilityTabs = useMemo(
-    () => [
-      { key: "shifts", label: "Shift Settings" },
-      { key: "departments", label: "Departments" },
-      { key: "units", label: "Units" },
-      { key: "rooms_beds", label: "Rooms & Beds" },
-      { key: "privacy", label: "Privacy" },
-      { key: "pay_period", label: "Pay Period" },
-    ],
-    []
-  );
-
-  function setSection(nextSection) {
-    setActiveSection(nextSection);
-    const nextTabs = nextSection === "facility_settings" ? facilityTabs : staffTabs;
-    const safeTab = nextTabs.find((t) => t.key === activeTab)?.key || nextTabs[0]?.key || "staff";
-    setActiveTab(safeTab);
+  // ---------------------------
+  // Units CRUD
+  // ---------------------------
+  async function addUnit() {
+    const name = String(unitForm.name || "").trim();
+    if (!name) return;
+    const created = await api.post("/units", { name });
+    setUnits((prev) => [...prev, created]);
+    setUnitForm({ name: "" });
   }
 
-  // ---------------------------------
-  // Initial loading
-  // ---------------------------------
+  async function saveUnit(id) {
+    const name = String(unitForm.name || "").trim();
+    if (!name) return;
+    const updated = await api.patch(`/units/${id}`, { name });
+    setUnits((prev) => prev.map((u) => (u.id === id ? updated : u)));
+    setEditingUnitId(null);
+  }
+
+  async function deleteUnit(id) {
+    if (!window.confirm("Delete this unit?")) return;
+    await api.delete(`/units/${id}`);
+    setUnits((prev) => prev.filter((u) => u.id !== id));
+  }
+
+  // ---------------------------
+  // Shift Settings CRUD
+  // ---------------------------
+  const [selectedShiftRole, setSelectedShiftRole] = useState("ALL");
+
+  const roleOptions = useMemo(() => {
+    const set = new Set(
+      (shiftSettings || []).map((s) => String(s?.role || "").trim()).filter(Boolean)
+    );
+    (staff || []).forEach((st) => {
+      const r = String(st?.role || "").trim();
+      if (r) set.add(r);
+    });
+    return Array.from(set).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
+    );
+  }, [shiftSettings, staff]);
+
+  const filteredShiftSettings = useMemo(() => {
+    if (selectedShiftRole === "ALL") return shiftSettings;
+    return (shiftSettings || []).filter(
+      (s) => String(s?.role || "").trim() === selectedShiftRole
+    );
+  }, [shiftSettings, selectedShiftRole]);
+
+  function selectShiftRole(roleName) {
+    const next = roleName || "ALL";
+    setSelectedShiftRole(next);
+    if (next !== "ALL") setShiftForm((p) => ({ ...p, role: next }));
+    setEditingShiftId(null);
+  }
+
+  async function addShift() {
+    const roleVal =
+      selectedShiftRole !== "ALL" ? selectedShiftRole : String(shiftForm.role || "").trim();
+    if (!roleVal) return;
+
+    const created = await api.post("/shift-settings", { ...shiftForm, role: roleVal });
+    setShiftSettings((prev) => [...prev, created]);
+
+    setShiftForm((p) => ({
+      ...p,
+      role: selectedShiftRole !== "ALL" ? selectedShiftRole : "",
+      shift_type: "Day",
+      start_local: "07:00",
+      end_local: "15:00",
+    }));
+  }
+
+  async function saveShift(id) {
+    const roleVal =
+      selectedShiftRole !== "ALL" ? selectedShiftRole : String(shiftForm.role || "").trim();
+    if (!roleVal) return;
+
+    const updated = await api.patch(`/shift-settings/${id}`, { ...shiftForm, role: roleVal });
+    setShiftSettings((prev) => prev.map((s) => (s.id === id ? updated : s)));
+    setEditingShiftId(null);
+  }
+
+  async function deleteShift(id) {
+    if (!window.confirm("Delete this shift setting?")) return;
+    await api.delete(`/shift-settings/${id}`);
+    setShiftSettings((prev) => prev.filter((s) => s.id !== id));
+  }
+
+  // ---------------------------
+  // Admin Management (Staff Settings permissions)
+  // ---------------------------
+  const [adminMembers, setAdminMembers] = useState([]);
+  const [adminMembersLoading, setAdminMembersLoading] = useState(false);
+  const [adminSearch, setAdminSearch] = useState("");
+  const [savingMemberUserId, setSavingMemberUserId] = useState(null);
+
+  const canManageStaffSettings = !!(isOrgAdmin || canManageAdmins || isSuperadmin);
+
+  async function loadAdminMembers() {
+    if (!orgId) return;
+    if (!canManageStaffSettings) return;
+
+    setAdminMembersLoading(true);
+    try {
+      const q = String(adminSearch || "").trim();
+      const data = await api.get(`/adminmanagement/list${q ? `?q=${encodeURIComponent(q)}` : ""}`);
+      const list = Array.isArray(data?.memberships) ? data.memberships : [];
+      setAdminMembers(list);
+    } catch (e) {
+      console.error("LOAD ADMIN MEMBERS ERROR:", e);
+      alert(e?.response?.data?.error || e?.message || "Failed to load staff settings.");
+      setAdminMembers([]);
+    } finally {
+      setAdminMembersLoading(false);
+    }
+  }
+
+  async function saveMemberPerms(userId, patch) {
+    setSavingMemberUserId(userId);
+    try {
+      const data = await api.patch(`/adminmanagement/${userId}`, patch);
+      const updated = data?.membership || null;
+      if (!updated?.user_id) return;
+
+      setAdminMembers((prev) =>
+        prev.map((m) =>
+          String(m.user_id || "") === String(updated.user_id)
+            ? { ...m, membership: { ...(m.membership || {}), ...updated } }
+            : m
+        )
+      );
+    } catch (e) {
+      alert(e?.response?.data?.error || e?.message || "Failed to update permissions.");
+    } finally {
+      setSavingMemberUserId(null);
+    }
+  }
+
+  // ---------------------------
+  // Load core data on org change
+  // ---------------------------
   useEffect(() => {
     if (!orgId) return;
     loadAll();
     loadOrgSettings();
     loadDepartments();
-    loadAdminMembers(); // ✅ staff permissions need this
+    loadLunchBreak();
+    loadPayPeriod();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgId]);
 
@@ -1077,77 +1002,37 @@ export default function AdminPage() {
     }
   }
 
-  // On-demand loaders
+  // Auto-load appropriate sections when switching tabs
   useEffect(() => {
     if (!orgId) return;
 
-    if (activeTab === "rooms_beds") loadRooms();
-    if (activeTab === "departments") loadDepartments();
-    if (activeTab === "privacy" || activeTab === "pay_period" || activeTab === "shifts") loadOrgSettings();
+    if (primaryTab === "facility") {
+      if (facilityTab === "departments") loadDepartments();
+      if (facilityTab === "rooms_beds") loadRooms();
+      if (facilityTab === "pay_period") loadPayPeriod();
+      if (facilityTab === "shifts") loadLunchBreak();
+    }
+
+    if (primaryTab === "staff") loadAdminMembers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, orgId]);
+  }, [primaryTab, facilityTab, orgId]);
 
   useEffect(() => {
-    if (activeTab !== "rooms_beds") return;
-    if (!selectedRoomId) {
-      setBeds([]);
-      return;
-    }
-    setBedsLoading(true);
-    try {
-      syncBedsFromRooms(selectedRoomId);
-    } finally {
-      setBedsLoading(false);
-    }
+    if (primaryTab !== "staff") return;
+    if (!orgId) return;
+    const t = setTimeout(() => loadAdminMembers(), 250);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedRoomId, activeTab, rooms]);
+  }, [adminSearch]);
 
-  // ---------------------------------
-  // ✅ Permission helpers: Admin -> show census/schedule
-  // ---------------------------------
-  function getMembershipForStaff(staffId) {
-    return memberByStaffId.get(String(staffId)) || null;
-  }
-
-  function isAdminForStaff(staffId) {
-    const m = getMembershipForStaff(staffId);
-    return !!(m?.is_org_admin || m?.can_manage_admins || m?.can_schedule_read || m?.can_schedule_write || m?.can_census_read || m?.can_census_write);
-  }
-
-  async function toggleAdminForStaff(staffId, checked) {
-    const m = getMembershipForStaff(staffId);
-    if (!m?.id) {
-      alert("No permission record found for this staff member yet. (Backend needs to create membership row.)");
-      return;
-    }
-
-    if (checked) {
-      // turning admin ON (defaults: read access)
-      await saveMemberPerms(m.id, {
-        is_org_admin: true,
-        can_census_read: true,
-        can_census_write: false,
-        can_schedule_read: true,
-        can_schedule_write: false,
-      });
-    } else {
-      // turning admin OFF -> clear everything
-      await saveMemberPerms(m.id, {
-        is_org_admin: false,
-        can_manage_admins: false,
-        can_census_read: false,
-        can_census_write: false,
-        can_schedule_read: false,
-        can_schedule_write: false,
-      });
-    }
-  }
-
-  async function setAccess(staffId, patch) {
-    const m = getMembershipForStaff(staffId);
-    if (!m?.id) return alert("No permission record found for this staff member yet.");
-    await saveMemberPerms(m.id, patch);
-  }
+  const headerSubtitle = useMemo(() => {
+    if (primaryTab !== "facility" || facilityTab !== "rooms_beds") return null;
+    const roomCount = rooms?.length ? rooms.length : 0;
+    const bedCount = beds?.length ? beds.length : 0;
+    const selectedRoom = rooms.find((r) => r.id === selectedRoomId);
+    const roomLabel = selectedRoom ? `Room: ${selectedRoom.name}` : "No room selected";
+    return `${roomLabel} • ${bedCount} beds • ${roomCount} rooms total`;
+  }, [primaryTab, facilityTab, rooms, beds, selectedRoomId]);
 
   // ==================================================
   // RENDER
@@ -1165,15 +1050,17 @@ export default function AdminPage() {
                 {orgCode ? (
                   <>
                     {" "}
-                    •{" "}
-                    <span style={ui.mono}>{orgCode}</span>
+                    • <span style={ui.mono}>{orgCode}</span>
                   </>
                 ) : null}
               </span>
+
               {headerSubtitle ? (
                 <span style={{ marginLeft: 10, color: "#9CA3AF" }}>{headerSubtitle}</span>
               ) : null}
-              {loading ? <span style={{ marginLeft: 10, color: "#9CA3AF" }}>Loading…</span> : null}
+              {loading ? (
+                <span style={{ marginLeft: 10, color: "#9CA3AF" }}>Loading…</span>
+              ) : null}
             </div>
           </div>
         </div>
@@ -1208,42 +1095,63 @@ export default function AdminPage() {
         />
       )}
 
-      {/* SECTION PICKER */}
-      <div style={ui.sectionRow}>
-        <button
-          type="button"
-          style={ui.sectionPill(activeSection === "staff_settings")}
-          onClick={() => setSection("staff_settings")}
-        >
-          Staff Settings
-        </button>
-        <button
-          type="button"
-          style={ui.sectionPill(activeSection === "facility_settings")}
-          onClick={() => setSection("facility_settings")}
-        >
-          Facility Settings
-        </button>
+      {/* PRIMARY TABS */}
+      <div style={ui.tabs}>
+        <TabButton
+          active={primaryTab === "facility"}
+          onClick={() => setPrimaryTab("facility")}
+          label="Facility Settings"
+        />
+        <TabButton
+          active={primaryTab === "staff"}
+          onClick={() => setPrimaryTab("staff")}
+          label="Staff Settings"
+        />
       </div>
 
-      {/* Tabs for section */}
-      <div style={ui.tabs}>
-        {(activeSection === "facility_settings" ? facilityTabs : staffTabs).map((t) => (
+      {/* Facility sub-tabs */}
+      {primaryTab === "facility" ? (
+        <div style={ui.tabs}>
           <TabButton
-            key={t.key}
-            active={activeTab === t.key}
-            onClick={() => setActiveTab(t.key)}
-            label={t.label}
+            active={facilityTab === "shifts"}
+            onClick={() => setFacilityTab("shifts")}
+            label="Shift Settings"
           />
-        ))}
-      </div>
+          <TabButton
+            active={facilityTab === "departments"}
+            onClick={() => setFacilityTab("departments")}
+            label="Departments"
+          />
+          <TabButton
+            active={facilityTab === "units"}
+            onClick={() => setFacilityTab("units")}
+            label="Units"
+          />
+          <TabButton
+            active={facilityTab === "rooms_beds"}
+            onClick={() => setFacilityTab("rooms_beds")}
+            label="Rooms & Beds"
+          />
+          <TabButton
+            active={facilityTab === "privacy"}
+            onClick={() => setFacilityTab("privacy")}
+            label="Privacy"
+          />
+          <TabButton
+            active={facilityTab === "pay_period"}
+            onClick={() => setFacilityTab("pay_period")}
+            label="Pay Period"
+          />
+        </div>
+      ) : null}
 
       {/* CONTENT */}
       <div style={ui.contentGrid}>
         {!orgId ? (
           <div style={ui.card}>
             <div style={ui.notice}>
-              No facility selected. Click <b>Change Facility</b> to pick the organization you want to manage.
+              No facility selected. Click <b>Change Facility</b> to pick the organization you want
+              to manage.
             </div>
           </div>
         ) : null}
@@ -1257,18 +1165,31 @@ export default function AdminPage() {
                 <div style={{ display: "grid", gap: 10 }}>
                   <div>
                     <b>{inviteModal.name || "Staff member"}</b>
-                    {inviteModal.email ? <span style={{ color: "#9CA3AF" }}> • {inviteModal.email}</span> : null}
-                    {inviteModal.phone ? <span style={{ color: "#9CA3AF" }}> • {inviteModal.phone}</span> : null}
+                    {inviteModal.email ? (
+                      <span style={{ color: "#9CA3AF" }}> • {inviteModal.email}</span>
+                    ) : null}
+                    {inviteModal.phone ? (
+                      <span style={{ color: "#9CA3AF" }}> • {inviteModal.phone}</span>
+                    ) : null}
                   </div>
 
                   <div style={ui.notice}>{inviteModal.note || "Invite link created."}</div>
 
                   {inviteModal.actionLink ? (
                     <>
-                      <div style={{ color: "#9CA3AF", fontSize: 12 }}>Invite / set-password link:</div>
+                      <div style={{ color: "#9CA3AF", fontSize: 12 }}>
+                        Invite / set-password link:
+                      </div>
                       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                        <input style={{ ...ui.input, minWidth: 320, flex: 1 }} readOnly value={inviteModal.actionLink} />
-                        <button style={ui.btnPrimary} onClick={() => copyToClipboard(inviteModal.actionLink)}>
+                        <input
+                          style={{ ...ui.input, minWidth: 320, flex: 1 }}
+                          readOnly
+                          value={inviteModal.actionLink}
+                        />
+                        <button
+                          style={ui.btnPrimary}
+                          onClick={() => copyToClipboard(inviteModal.actionLink)}
+                        >
                           Copy Link
                         </button>
                       </div>
@@ -1286,27 +1207,808 @@ export default function AdminPage() {
           </div>
         ) : null}
 
-        {/* ===========================
+        {/* =========================
+            FACILITY SETTINGS
+           ========================= */}
+        {primaryTab === "facility" && orgId ? (
+          <>
+            {/* Shift Settings */}
+            {facilityTab === "shifts" ? (
+              <div style={ui.card}>
+                <div style={ui.cardHeader}>
+                  <div>
+                    <div style={ui.cardTitle}>Shift Settings</div>
+                    <div style={ui.cardSub}>
+                      Configure standard shift times per role and your lunch break duration (used
+                      for accurate PPD).
+                    </div>
+                  </div>
+                  <button
+                    style={ui.btnGhost}
+                    onClick={() => {
+                      loadAll();
+                      loadLunchBreak();
+                    }}
+                    disabled={loading}
+                  >
+                    Refresh
+                  </button>
+                </div>
+
+                {/* Lunch Break */}
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 10,
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    marginBottom: 12,
+                  }}
+                >
+                  <div style={{ color: "#9CA3AF", fontSize: 12, minWidth: 160 }}>
+                    Lunch break (minutes)
+                  </div>
+                  <input
+                    style={{ ...ui.input, width: 120, minWidth: 120 }}
+                    type="number"
+                    min={0}
+                    max={180}
+                    value={lunchBreakMinutes}
+                    onChange={(e) => setLunchBreakMinutes(e.target.value)}
+                  />
+                  <button style={ui.btnPrimary} onClick={saveLunchBreak} disabled={lunchSaving}>
+                    {lunchSaving ? "Saving…" : "Save"}
+                  </button>
+                  <div style={{ color: "#9CA3AF", fontSize: 12 }}>Common defaults: 0, 30, 60</div>
+                </div>
+
+                {/* Role bubbles */}
+                <div style={ui.roleBubbleWrap}>
+                  <button
+                    style={ui.roleBubble(selectedShiftRole === "ALL")}
+                    onClick={() => selectShiftRole("ALL")}
+                  >
+                    ALL
+                  </button>
+                  {roleOptions.map((r) => (
+                    <button
+                      key={r}
+                      style={ui.roleBubble(selectedShiftRole === r)}
+                      onClick={() => selectShiftRole(r)}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Add / edit shift form */}
+                <div style={ui.inlineFormWrap}>
+                  {selectedShiftRole === "ALL" ? (
+                    <input
+                      style={ui.input}
+                      placeholder="Role (ex: CNA)"
+                      value={shiftForm.role || ""}
+                      onChange={(e) => setShiftForm((p) => ({ ...p, role: e.target.value }))}
+                    />
+                  ) : (
+                    <div style={ui.roleLockedPill}>
+                      Role: <b>{selectedShiftRole}</b>
+                      <button
+                        style={ui.roleUnlockBtn}
+                        onClick={() => selectShiftRole("ALL")}
+                        type="button"
+                      >
+                        Change
+                      </button>
+                    </div>
+                  )}
+
+                  <select
+                    style={ui.select}
+                    value={shiftForm.shift_type}
+                    onChange={(e) => setShiftForm((p) => ({ ...p, shift_type: e.target.value }))}
+                  >
+                    {SHIFT_TYPES.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+
+                  <input
+                    style={ui.input}
+                    type="time"
+                    value={shiftForm.start_local}
+                    onChange={(e) => setShiftForm((p) => ({ ...p, start_local: e.target.value }))}
+                  />
+                  <input
+                    style={ui.input}
+                    type="time"
+                    value={shiftForm.end_local}
+                    onChange={(e) => setShiftForm((p) => ({ ...p, end_local: e.target.value }))}
+                  />
+
+                  {editingShiftId ? (
+                    <>
+                      <button style={ui.btnPrimary} onClick={() => saveShift(editingShiftId)}>
+                        Save
+                      </button>
+                      <button style={ui.btnGhost} onClick={() => setEditingShiftId(null)}>
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button style={ui.btnPrimary} onClick={addShift}>
+                      Add
+                    </button>
+                  )}
+                </div>
+
+                <div style={{ overflowX: "auto" }}>
+                  <table style={ui.table}>
+                    <thead>
+                      <tr>
+                        <th style={ui.th}>Role</th>
+                        <th style={ui.th}>Shift</th>
+                        <th style={ui.th}>Start</th>
+                        <th style={ui.th}>End</th>
+                        <th style={{ ...ui.th, textAlign: "right" }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(filteredShiftSettings || []).map((s) => {
+                        return (
+                          <tr key={s.id} style={ui.tr}>
+                            <td style={ui.td}>
+                              <span style={ui.pill}>{s.role}</span>
+                            </td>
+                            <td style={ui.td}>{s.shift_type}</td>
+                            <td style={ui.td}>{s.start_local}</td>
+                            <td style={ui.td}>{s.end_local}</td>
+                            <td style={{ ...ui.td, textAlign: "right" }}>
+                              <div style={ui.actions}>
+                                <button
+                                  style={ui.btnGhost}
+                                  onClick={() => {
+                                    setEditingShiftId(s.id);
+                                    setShiftForm({
+                                      role: s.role || "",
+                                      shift_type: s.shift_type || "Day",
+                                      start_local: s.start_local || "07:00",
+                                      end_local: s.end_local || "15:00",
+                                    });
+                                  }}
+                                >
+                                  Edit
+                                </button>
+                                <button style={ui.btnDanger} onClick={() => deleteShift(s.id)}>
+                                  Delete
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {(filteredShiftSettings || []).length === 0 ? (
+                        <tr>
+                          <td style={ui.emptyRow} colSpan={5}>
+                            No shift settings yet.
+                          </td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Departments */}
+            {facilityTab === "departments" ? (
+              <div style={ui.card}>
+                <div style={ui.cardHeader}>
+                  <div>
+                    <div style={ui.cardTitle}>Departments</div>
+                    <div style={ui.cardSub}>Create departments (Nursing, Therapy, Dietary, etc.).</div>
+                  </div>
+
+                  <button style={ui.btnGhost} onClick={loadDepartments} disabled={departmentsLoading}>
+                    {departmentsLoading ? "Loading…" : "Refresh"}
+                  </button>
+                </div>
+
+                {!canManageStaffSettings ? (
+                  <div style={ui.notice}>
+                    You don’t have permission to manage departments for this organization.
+                  </div>
+                ) : (
+                  <>
+                    <div style={ui.inlineForm}>
+                      <input
+                        style={ui.input}
+                        placeholder="Department name (ex: Nursing, Rehab, Admin)"
+                        value={deptForm.name}
+                        onChange={(e) => setDeptForm((p) => ({ ...p, name: e.target.value }))}
+                      />
+                      <label style={ui.smallCheck}>
+                        <input
+                          type="checkbox"
+                          checked={!!deptForm.is_active}
+                          onChange={(e) => setDeptForm((p) => ({ ...p, is_active: e.target.checked }))}
+                        />
+                        Active
+                      </label>
+
+                      {editingDeptId ? (
+                        <>
+                          <button
+                            style={ui.btnPrimary}
+                            onClick={() => saveDepartment(editingDeptId)}
+                            disabled={deptSaving}
+                          >
+                            {deptSaving ? "Saving…" : "Save"}
+                          </button>
+                          <button
+                            style={ui.btnGhost}
+                            onClick={() => {
+                              setEditingDeptId(null);
+                              setDeptForm({ name: "", is_active: true });
+                            }}
+                            disabled={deptSaving}
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button style={ui.btnPrimary} onClick={addDepartment} disabled={deptSaving}>
+                          {deptSaving ? "Adding…" : "Add"}
+                        </button>
+                      )}
+                    </div>
+
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={ui.table}>
+                        <thead>
+                          <tr>
+                            <th style={ui.th}>Department</th>
+                            <th style={ui.th}>Active</th>
+                            <th style={{ ...ui.th, textAlign: "right" }}>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(deptOptions || []).map((d) => {
+                            const inactive = d.is_active === false;
+                            return (
+                              <tr key={d.id} style={ui.tr}>
+                                <td style={ui.td}>
+                                  <div style={ui.cellStrong}>{d.name}</div>
+                                  <div style={{ color: "#9CA3AF", fontSize: 12 }}>
+                                    id: <span style={ui.mono}>{d.id}</span>
+                                  </div>
+                                </td>
+                                <td style={ui.td}>
+                                  <span style={inactive ? ui.badgeOff : ui.badgeOn}>
+                                    {inactive ? "Inactive" : "Active"}
+                                  </span>
+                                </td>
+                                <td style={{ ...ui.td, textAlign: "right" }}>
+                                  <div style={ui.actions}>
+                                    <button
+                                      style={ui.btnGhost}
+                                      onClick={() => {
+                                        setEditingDeptId(d.id);
+                                        setDeptForm({
+                                          name: d.name || "",
+                                          is_active: d.is_active !== false,
+                                        });
+                                      }}
+                                    >
+                                      Edit
+                                    </button>
+                                    <button
+                                      style={ui.btnMiniGhost}
+                                      onClick={() => toggleDepartmentActive(d)}
+                                      disabled={deptSaving}
+                                    >
+                                      {inactive ? "Activate" : "Deactivate"}
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+
+                          {!departmentsLoading && (deptOptions || []).length === 0 ? (
+                            <tr>
+                              <td style={ui.emptyRow} colSpan={3}>
+                                No departments yet.
+                              </td>
+                            </tr>
+                          ) : null}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : null}
+
+            {/* Units */}
+            {facilityTab === "units" ? (
+              <div style={ui.card}>
+                <div style={ui.cardHeader}>
+                  <div>
+                    <div style={ui.cardTitle}>Units</div>
+                    <div style={ui.cardSub}>Manage units used for assignments and dashboards.</div>
+                  </div>
+                  <button style={ui.btnGhost} onClick={loadAll} disabled={loading}>
+                    Refresh
+                  </button>
+                </div>
+
+                <div style={ui.inlineForm}>
+                  <input
+                    style={ui.input}
+                    placeholder="Unit name (ex: 1 West)"
+                    value={unitForm.name}
+                    onChange={(e) => setUnitForm({ name: e.target.value })}
+                  />
+                  {editingUnitId ? (
+                    <>
+                      <button style={ui.btnPrimary} onClick={() => saveUnit(editingUnitId)}>
+                        Save
+                      </button>
+                      <button
+                        style={ui.btnGhost}
+                        onClick={() => {
+                          setEditingUnitId(null);
+                          setUnitForm({ name: "" });
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button style={ui.btnPrimary} onClick={addUnit}>
+                      Add
+                    </button>
+                  )}
+                </div>
+
+                <div style={{ overflowX: "auto" }}>
+                  <table style={ui.table}>
+                    <thead>
+                      <tr>
+                        <th style={ui.th}>ID</th>
+                        <th style={ui.th}>Name</th>
+                        <th style={{ ...ui.th, textAlign: "right" }}>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(units || []).map((u) => (
+                        <tr key={u.id} style={ui.tr}>
+                          <td style={ui.tdMono}>{u.id}</td>
+                          <td style={ui.td}>
+                            <div style={ui.cellStrong}>{u.name}</div>
+                          </td>
+                          <td style={{ ...ui.td, textAlign: "right" }}>
+                            <div style={ui.actions}>
+                              <button
+                                style={ui.btnGhost}
+                                onClick={() => {
+                                  setEditingUnitId(u.id);
+                                  setUnitForm({ name: u.name || "" });
+                                }}
+                              >
+                                Edit
+                              </button>
+                              <button style={ui.btnDanger} onClick={() => deleteUnit(u.id)}>
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {(units || []).length === 0 ? (
+                        <tr>
+                          <td style={ui.emptyRow} colSpan={3}>
+                            No units yet.
+                          </td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Rooms & Beds */}
+            {facilityTab === "rooms_beds" ? (
+              <div style={ui.card}>
+                <div style={ui.cardHeader}>
+                  <div>
+                    <div style={ui.cardTitle}>Rooms & Beds</div>
+                    <div style={ui.cardSub}>Manage room list and bed labels (with drag reorder).</div>
+                  </div>
+                  <button style={ui.btnGhost} onClick={loadRooms} disabled={roomsLoading}>
+                    {roomsLoading ? "Loading…" : "Refresh"}
+                  </button>
+                </div>
+
+                <div style={ui.rbGrid}>
+                  {/* Left: Rooms */}
+                  <div style={ui.rbLeft}>
+                    <div style={ui.rbPanelTitle}>Rooms</div>
+
+                    <div style={ui.inlineFormWrap}>
+                      <input
+                        style={ui.input}
+                        placeholder="Room name (ex: 301)"
+                        value={roomForm.name}
+                        onChange={(e) => setRoomForm((p) => ({ ...p, name: e.target.value }))}
+                      />
+                      <label style={ui.smallCheck}>
+                        <input
+                          type="checkbox"
+                          checked={!!roomForm.is_active}
+                          onChange={(e) =>
+                            setRoomForm((p) => ({ ...p, is_active: e.target.checked }))
+                          }
+                        />
+                        Active
+                      </label>
+
+                      {editingRoomId ? (
+                        <>
+                          <button
+                            style={ui.btnPrimary}
+                            onClick={() => saveRoom(editingRoomId)}
+                            disabled={roomSaving}
+                          >
+                            {roomSaving ? "Saving…" : "Save"}
+                          </button>
+                          <button
+                            style={ui.btnGhost}
+                            onClick={() => {
+                              setEditingRoomId(null);
+                              setRoomForm({ name: "", is_active: true });
+                            }}
+                            disabled={roomSaving}
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button style={ui.btnPrimary} onClick={addRoom} disabled={roomSaving}>
+                          {roomSaving ? "Adding…" : "Add"}
+                        </button>
+                      )}
+                    </div>
+
+                    <div style={ui.rbList}>
+                      {(rooms || []).map((r) => {
+                        const selected = String(r.id) === String(selectedRoomId);
+                        const inactive = r.is_active === false;
+                        return (
+                          <div
+                            key={r.id}
+                            style={ui.roomRow(selected, inactive)}
+                            onClick={() => setSelectedRoomId(r.id)}
+                          >
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ color: "white", fontWeight: 1000 }}>
+                                {r.name}
+                                {inactive ? (
+                                  <span style={{ color: "#9CA3AF" }}> (inactive)</span>
+                                ) : null}
+                              </div>
+                              <div style={{ color: "#9CA3AF", fontSize: 12 }}>
+                                id: <span style={ui.mono}>{r.id}</span>
+                              </div>
+                            </div>
+
+                            <div style={{ display: "flex", gap: 8 }}>
+                              <button
+                                style={ui.btnMiniGhost}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingRoomId(r.id);
+                                  setRoomForm({
+                                    name: r.name || "",
+                                    is_active: r.is_active !== false,
+                                  });
+                                }}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                style={ui.btnMiniGhost}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleRoomActive(r);
+                                }}
+                                disabled={roomSaving}
+                              >
+                                {inactive ? "Activate" : "Deactivate"}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      {(rooms || []).length === 0 && !roomsLoading ? (
+                        <div style={ui.empty2}>No rooms yet.</div>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {/* Right: Beds */}
+                  <div style={ui.rbRight}>
+                    <div style={ui.rbPanelTitle}>Beds</div>
+
+                    {!selectedRoomId ? (
+                      <div style={ui.notice}>Select a room to manage beds.</div>
+                    ) : (
+                      <>
+                        <div style={ui.inlineFormWrap}>
+                          <input
+                            style={ui.input}
+                            placeholder="Bed label (ex: 301D, 301W)"
+                            value={bedForm.label}
+                            onChange={(e) => setBedForm((p) => ({ ...p, label: e.target.value }))}
+                          />
+                          <label style={ui.smallCheck}>
+                            <input
+                              type="checkbox"
+                              checked={!!bedForm.is_active}
+                              onChange={(e) =>
+                                setBedForm((p) => ({ ...p, is_active: e.target.checked }))
+                              }
+                            />
+                            Active
+                          </label>
+
+                          {editingBedId ? (
+                            <>
+                              <button
+                                style={ui.btnPrimary}
+                                onClick={() => saveBed(editingBedId)}
+                                disabled={bedSaving}
+                              >
+                                {bedSaving ? "Saving…" : "Save"}
+                              </button>
+                              <button
+                                style={ui.btnGhost}
+                                onClick={() => {
+                                  setEditingBedId(null);
+                                  setBedForm({ label: "", is_active: true });
+                                }}
+                                disabled={bedSaving}
+                              >
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <button style={ui.btnPrimary} onClick={addBed} disabled={bedSaving}>
+                              {bedSaving ? "Adding…" : "Add"}
+                            </button>
+                          )}
+                        </div>
+
+                        <div style={ui.bedList}>
+                          {bedsLoading ? <div style={ui.empty2}>Loading beds…</div> : null}
+
+                          {(beds || []).map((b) => {
+                            const inactive = b.is_active === false;
+                            return (
+                              <div
+                                key={b.id}
+                                style={ui.bedRow(inactive)}
+                                draggable
+                                onDragStart={() => onBedDragStart(b.id)}
+                                onDragOver={(e) => e.preventDefault()}
+                                onDrop={() => onBedDrop(b.id)}
+                              >
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    gap: 10,
+                                    alignItems: "center",
+                                    minWidth: 0,
+                                  }}
+                                >
+                                  <div style={ui.dragHandle}>≡</div>
+                                  <div style={{ minWidth: 0 }}>
+                                    <div style={{ color: "white", fontWeight: 1000 }}>
+                                      {b.label}
+                                      {inactive ? (
+                                        <span style={{ color: "#9CA3AF" }}> (inactive)</span>
+                                      ) : null}
+                                    </div>
+                                    <div style={{ color: "#9CA3AF", fontSize: 12 }}>
+                                      id: <span style={ui.mono}>{b.id}</span>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div style={{ display: "flex", gap: 8 }}>
+                                  <button
+                                    style={ui.btnMiniGhost}
+                                    onClick={() => {
+                                      setEditingBedId(b.id);
+                                      setBedForm({
+                                        label: b.label || "",
+                                        is_active: b.is_active !== false,
+                                      });
+                                    }}
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    style={ui.btnMiniGhost}
+                                    onClick={() => toggleBedActive(b)}
+                                    disabled={bedSaving}
+                                  >
+                                    {inactive ? "Activate" : "Deactivate"}
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+
+                          {!bedsLoading && (beds || []).length === 0 ? (
+                            <div style={ui.empty2}>No beds yet.</div>
+                          ) : null}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Privacy */}
+            {facilityTab === "privacy" ? (
+              <div style={ui.card}>
+                <div style={ui.cardHeader}>
+                  <div>
+                    <div style={ui.cardTitle}>Privacy</div>
+                    <div style={ui.cardSub}>Control whether patient identifiers are shown in the app.</div>
+                  </div>
+                  <button style={ui.btnGhost} onClick={loadOrgSettings} disabled={privacySaving}>
+                    Refresh
+                  </button>
+                </div>
+
+                <div style={ui.notice}>
+                  <div style={{ fontWeight: 950, marginBottom: 8 }}>Patient Identifiers</div>
+
+                  <div style={{ display: "grid", gap: 10 }}>
+                    <label style={ui.checkRow}>
+                      <input
+                        type="checkbox"
+                        checked={!!orgSettings?.show_patient_identifiers}
+                        onChange={(e) => {
+                          const enabled = e.target.checked;
+                          if (!enabled) {
+                            savePrivacy({
+                              enabled: false,
+                              format: orgSettings?.identifier_format || "first_last_initial",
+                              acknowledged: true,
+                            });
+                          } else {
+                            const ok = window.confirm(
+                              "Enabling identifiers may expose PHI. Confirm you understand and accept responsibility."
+                            );
+                            if (!ok) return;
+                            savePrivacy({
+                              enabled: true,
+                              format: orgSettings?.identifier_format || "first_last_initial",
+                              acknowledged: true,
+                            });
+                          }
+                        }}
+                      />
+                      <div>
+                        <div style={{ fontWeight: 900 }}>Show patient identifiers</div>
+                        <div style={{ color: "#9CA3AF", fontSize: 12 }}>
+                          Only enable if your facility policy allows it.
+                        </div>
+                      </div>
+                    </label>
+
+                    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                      <div style={{ color: "#9CA3AF", fontSize: 12 }}>Identifier format</div>
+                      <select
+                        style={ui.select}
+                        value={orgSettings?.identifier_format || "first_last_initial"}
+                        onChange={(e) =>
+                          savePrivacy({
+                            enabled: !!orgSettings?.show_patient_identifiers,
+                            format: e.target.value,
+                            acknowledged: true,
+                          })
+                        }
+                        disabled={privacySaving}
+                      >
+                        <option value="first_last_initial">First name + last initial</option>
+                        <option value="initials">Initials only</option>
+                      </select>
+                    </div>
+
+                    {privacySaving ? <div style={{ color: "#9CA3AF" }}>Saving…</div> : null}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Pay Period */}
+            {facilityTab === "pay_period" ? (
+              <div style={ui.card}>
+                <div style={ui.cardHeader}>
+                  <div>
+                    <div style={ui.cardTitle}>Pay Period</div>
+                    <div style={ui.cardSub}>Used to calculate overtime accurately.</div>
+                  </div>
+                  <button style={ui.btnGhost} onClick={loadPayPeriod} disabled={paySaving}>
+                    Refresh
+                  </button>
+                </div>
+
+                <div style={ui.inlineFormWrap}>
+                  <div style={{ display: "grid", gap: 6 }}>
+                    <div style={ui.label}>Pay period length (days)</div>
+                    <input
+                      style={{ ...ui.input, width: 200 }}
+                      type="number"
+                      min={7}
+                      max={31}
+                      value={payPeriod.pay_period_length_days}
+                      onChange={(e) =>
+                        setPayPeriod((p) => ({ ...p, pay_period_length_days: e.target.value }))
+                      }
+                    />
+                  </div>
+
+                  <div style={{ display: "grid", gap: 6 }}>
+                    <div style={ui.label}>Anchor date (YYYY-MM-DD)</div>
+                    <input
+                      style={{ ...ui.input, width: 240 }}
+                      placeholder="2026-01-01"
+                      value={payPeriod.pay_period_anchor_date}
+                      onChange={(e) =>
+                        setPayPeriod((p) => ({ ...p, pay_period_anchor_date: e.target.value }))
+                      }
+                    />
+                  </div>
+
+                  <button style={ui.btnPrimary} onClick={savePayPeriod} disabled={paySaving}>
+                    {paySaving ? "Saving…" : "Save"}
+                  </button>
+                </div>
+
+                <div style={{ color: "#9CA3AF", fontSize: 12 }}>
+                  Tip: anchor date should be the first day of a pay period (or a known pay period
+                  start).
+                </div>
+              </div>
+            ) : null}
+          </>
+        ) : null}
+
+        {/* =========================
             STAFF SETTINGS
-           =========================== */}
-        {activeTab === "staff" && orgId && (
+           ========================= */}
+        {primaryTab === "staff" && orgId ? (
           <div style={ui.card}>
             <div style={ui.cardHeader}>
               <div>
-                <div style={ui.cardTitle}>Staff</div>
+                <div style={ui.cardTitle}>Staff Settings</div>
                 <div style={ui.cardSub}>
-                  Add staff and manage access. When <b>Admin</b> is checked, choose Census/Schedule read/write.
+                  Add staff members and manage admin permissions for Census/Schedule access.
                 </div>
               </div>
 
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <input
-                  style={{ ...ui.input, minWidth: 260 }}
-                  placeholder="Search staff…"
-                  value={staffSearch}
-                  onChange={(e) => setStaffSearch(e.target.value)}
-                />
-
                 <button
                   style={ui.btnPrimary}
                   onClick={() => {
@@ -1334,7 +2036,7 @@ export default function AdminPage() {
                 </button>
 
                 <button style={ui.btnGhost} onClick={loadAdminMembers} disabled={adminMembersLoading}>
-                  {adminMembersLoading ? "Loading Access…" : "Refresh Access"}
+                  {adminMembersLoading ? "Loading…" : "Refresh Permissions"}
                 </button>
               </div>
             </div>
@@ -1343,232 +2045,244 @@ export default function AdminPage() {
               <div style={{ ...ui.notice, borderColor: "rgba(239,68,68,0.35)" }}>{csvError}</div>
             ) : null}
 
-            <div style={{ overflowX: "auto" }}>
-              <table style={ui.table}>
-                <thead>
-                  <tr>
-                    <th style={ui.th}>ID</th>
-                    <th style={ui.th}>Name</th>
-                    <th style={ui.th}>Role</th>
-                    <th style={ui.th}>Department</th>
-                    <th style={ui.th}>Email</th>
-                    <th style={ui.th}>Phone</th>
-                    <th style={ui.th}>Admin</th>
-                    <th style={ui.th}>Census</th>
-                    <th style={ui.th}>Schedule</th>
-                    <th style={{ ...ui.th, textAlign: "right" }}>Actions</th>
-                  </tr>
-                </thead>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+              <input
+                style={{ ...ui.input, minWidth: 260 }}
+                placeholder="Search staff (name, role, email, phone, employee #)"
+                value={adminSearch}
+                onChange={(e) => setAdminSearch(e.target.value)}
+              />
+              <div style={{ color: "#9CA3AF", fontSize: 12 }}>
+                Your role: <b>{String(role || "").toUpperCase()}</b>
+              </div>
+            </div>
 
-                <tbody>
-                  {filteredStaff.map((s) => {
-                    const isEdit = editingStaffId === s.id;
+            {!canManageStaffSettings ? (
+              <div style={ui.notice}>
+                You don’t have permission to manage Staff Settings for this organization.
+              </div>
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table style={ui.table}>
+                  <thead>
+                    <tr>
+                      <th style={ui.th}>Staff</th>
+                      <th style={ui.th}>Department</th>
+                      <th style={ui.th}>Email / Phone</th>
+                      <th style={ui.th}>Admin</th>
+                      <th style={ui.th}>Schedule</th>
+                      <th style={ui.th}>Census</th>
+                      <th style={{ ...ui.th, textAlign: "right" }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(adminMembers || []).map((row) => {
+                      const stName = row.staff_name || "—";
+                      const stRole = row.staff_role || "—";
+                      const deptName =
+                        deptOptions.find(
+                          (d) =>
+                            String(d.id) ===
+                            String(row.staff_department_id || row.membership?.department_id)
+                        )?.name || "—";
 
-                    const deptName =
-                      deptOptions.find((d) => String(d.id) === String(s.department_id))?.name || "—";
+                      const mem = row.membership || null;
+                      const userId = row.user_id || mem?.user_id || null;
 
-                    const m = getMembershipForStaff(s.id);
-                    const busy = String(savingMemberId) === String(m?.id);
+                      const isAdmin = !!mem?.is_admin;
 
-                    const isAdmin = isAdminForStaff(s.id);
+                      const isSaving =
+                        savingMemberUserId &&
+                        userId &&
+                        String(savingMemberUserId) === String(userId);
 
-                    const censusRead = !!m?.can_census_read;
-                    const censusWrite = !!m?.can_census_write;
-                    const scheduleRead = !!m?.can_schedule_read;
-                    const scheduleWrite = !!m?.can_schedule_write;
+                      return (
+                        <tr key={`${row.staff_id || "nostaff"}-${userId || "nouser"}`} style={ui.tr}>
+                          <td style={ui.td}>
+                            <div style={ui.cellStrong}>{stName}</div>
+                            <div style={{ color: "#9CA3AF", fontSize: 12 }}>{stRole}</div>
+                            {row.employee_no ? (
+                              <div style={{ color: "#9CA3AF", fontSize: 12 }}>
+                                Employee #: <span style={ui.mono}>{row.employee_no}</span>
+                              </div>
+                            ) : null}
+                            {!userId ? (
+                              <div style={{ color: "rgba(239,68,68,0.9)", fontSize: 12 }}>
+                                No user linked (user_id missing)
+                              </div>
+                            ) : null}
+                          </td>
 
-                    return (
-                      <tr key={s.id} style={ui.tr}>
-                        <td style={ui.tdMono}>{s.id}</td>
+                          <td style={ui.td}>
+                            <div style={ui.muted}>{deptName}</div>
+                          </td>
 
-                        <td style={ui.td}>
-                          {isEdit ? (
-                            <input
-                              style={ui.input}
-                              value={staffForm.name || ""}
-                              onChange={(e) => setStaffForm({ ...staffForm, name: e.target.value })}
-                            />
-                          ) : (
-                            <span style={ui.cellStrong}>{s.name}</span>
-                          )}
-                        </td>
+                          <td style={ui.td}>
+                            <div style={ui.muted}>{row.email || "—"}</div>
+                            <div style={ui.muted}>{row.phone || "—"}</div>
+                          </td>
 
-                        <td style={ui.td}>
-                          {isEdit ? (
-                            <input
-                              style={ui.input}
-                              value={staffForm.role || ""}
-                              onChange={(e) => setStaffForm({ ...staffForm, role: e.target.value })}
-                            />
-                          ) : (
-                            <span style={ui.pill}>{s.role}</span>
-                          )}
-                        </td>
-
-                        <td style={ui.td}>
-                          {isEdit ? (
-                            <select
-                              style={ui.select}
-                              value={staffForm.department_id || ""}
-                              onChange={(e) => setStaffForm((p) => ({ ...p, department_id: e.target.value }))}
-                            >
-                              <option value="">No department</option>
-                              {deptOptions.map((d) => (
-                                <option key={d.id} value={d.id}>
-                                  {d.name}
-                                  {d.is_active === false ? " (inactive)" : ""}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <span style={ui.muted}>{deptName}</span>
-                          )}
-                        </td>
-
-                        <td style={ui.td}>
-                          {isEdit ? (
-                            <input
-                              style={ui.input}
-                              value={staffForm.email || ""}
-                              onChange={(e) => setStaffForm({ ...staffForm, email: e.target.value })}
-                            />
-                          ) : (
-                            <span style={ui.muted}>{s.email || "—"}</span>
-                          )}
-                        </td>
-
-                        <td style={ui.td}>
-                          {isEdit ? (
-                            <input
-                              style={ui.input}
-                              value={staffForm.phone || ""}
-                              onChange={(e) => setStaffForm({ ...staffForm, phone: e.target.value })}
-                            />
-                          ) : (
-                            <span style={ui.muted}>{s.phone || "—"}</span>
-                          )}
-                        </td>
-
-                        {/* Admin checkbox */}
-                        <td style={ui.td}>
-                          <input
-                            type="checkbox"
-                            checked={isAdmin}
-                            disabled={busy || (!isOrgAdmin && !canManageAdmins && !isSuperadmin)}
-                            onChange={(e) => toggleAdminForStaff(s.id, e.target.checked)}
-                            title={!m?.id ? "No membership record yet" : "Admin"}
-                          />
-                        </td>
-
-                        {/* Census (only show when admin true) */}
-                        <td style={ui.td}>
-                          {isAdmin ? (
-                            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                              <label style={ui.smallToggle}>
+                          <td style={ui.td}>
+                            {userId ? (
+                              <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
                                 <input
                                   type="checkbox"
-                                  checked={censusRead}
-                                  disabled={busy}
-                                  onChange={(e) => setAccess(s.id, { can_census_read: e.target.checked })}
+                                  checked={isAdmin}
+                                  disabled={isSaving || !canManageStaffSettings}
+                                  onChange={(e) =>
+                                    saveMemberPerms(userId, {
+                                      is_admin: e.target.checked,
+                                    })
+                                  }
                                 />
-                                Read
+                                <span style={{ color: "#E5E7EB", fontWeight: 900 }}>
+                                  {isAdmin ? "Yes" : "No"}
+                                </span>
                               </label>
-                              <label style={ui.smallToggle}>
-                                <input
-                                  type="checkbox"
-                                  checked={censusWrite}
-                                  disabled={busy}
-                                  onChange={(e) => setAccess(s.id, { can_census_write: e.target.checked })}
-                                />
-                                Write
-                              </label>
-                            </div>
-                          ) : (
-                            <span style={ui.muted}>—</span>
-                          )}
-                        </td>
+                            ) : (
+                              <span style={ui.muted}>—</span>
+                            )}
+                          </td>
 
-                        {/* Schedule (only show when admin true) */}
-                        <td style={ui.td}>
-                          {isAdmin ? (
-                            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                              <label style={ui.smallToggle}>
-                                <input
-                                  type="checkbox"
-                                  checked={scheduleRead}
-                                  disabled={busy}
-                                  onChange={(e) => setAccess(s.id, { can_schedule_read: e.target.checked })}
-                                />
-                                Read
-                              </label>
-                              <label style={ui.smallToggle}>
-                                <input
-                                  type="checkbox"
-                                  checked={scheduleWrite}
-                                  disabled={busy}
-                                  onChange={(e) => setAccess(s.id, { can_schedule_write: e.target.checked })}
-                                />
-                                Write
-                              </label>
-                            </div>
-                          ) : (
-                            <span style={ui.muted}>—</span>
-                          )}
-                        </td>
+                          <td style={ui.td}>
+                            {isAdmin && userId ? (
+                              <div style={{ display: "grid", gap: 6 }}>
+                                <label style={ui.smallCheck}>
+                                  <input
+                                    type="checkbox"
+                                    checked={!!mem?.can_schedule_read}
+                                    disabled={isSaving || !canManageStaffSettings}
+                                    onChange={(e) =>
+                                      saveMemberPerms(userId, {
+                                        can_schedule_read: e.target.checked,
+                                        is_admin: true,
+                                      })
+                                    }
+                                  />
+                                  Read
+                                </label>
+                                <label style={ui.smallCheck}>
+                                  <input
+                                    type="checkbox"
+                                    checked={!!mem?.can_schedule_write}
+                                    disabled={isSaving || !canManageStaffSettings}
+                                    onChange={(e) =>
+                                      saveMemberPerms(userId, {
+                                        can_schedule_write: e.target.checked,
+                                        is_admin: true,
+                                      })
+                                    }
+                                  />
+                                  Write
+                                </label>
+                              </div>
+                            ) : (
+                              <span style={ui.muted}>—</span>
+                            )}
+                          </td>
 
-                        <td style={{ ...ui.td, textAlign: "right" }}>
-                          {isEdit ? (
-                            <div style={ui.actions}>
-                              <button style={ui.btnPrimary} onClick={() => saveStaff(s.id)}>
-                                Save
-                              </button>
-                              <button
-                                style={ui.btnGhost}
-                                onClick={() => {
-                                  setEditingStaffId(null);
-                                  setStaffForm({ name: "", role: "", email: "", phone: "", department_id: "" });
-                                }}
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          ) : (
-                            <div style={ui.actions}>
-                              <button
-                                style={ui.btnGhost}
-                                onClick={() => {
-                                  setEditingStaffId(s.id);
-                                  setStaffForm({
-                                    name: s.name || "",
-                                    role: s.role || "",
-                                    email: s.email || "",
-                                    phone: s.phone || "",
-                                    department_id: s.department_id || "",
-                                  });
-                                }}
-                              >
-                                Edit
-                              </button>
-                              <button style={ui.btnDanger} onClick={() => deleteStaff(s.id)}>
-                                Delete
-                              </button>
-                            </div>
-                          )}
+                          <td style={ui.td}>
+                            {isAdmin && userId ? (
+                              <div style={{ display: "grid", gap: 6 }}>
+                                <label style={ui.smallCheck}>
+                                  <input
+                                    type="checkbox"
+                                    checked={!!mem?.can_census_read}
+                                    disabled={isSaving || !canManageStaffSettings}
+                                    onChange={(e) =>
+                                      saveMemberPerms(userId, {
+                                        can_census_read: e.target.checked,
+                                        is_admin: true,
+                                      })
+                                    }
+                                  />
+                                  Read
+                                </label>
+                                <label style={ui.smallCheck}>
+                                  <input
+                                    type="checkbox"
+                                    checked={!!mem?.can_census_write}
+                                    disabled={isSaving || !canManageStaffSettings}
+                                    onChange={(e) =>
+                                      saveMemberPerms(userId, {
+                                        can_census_write: e.target.checked,
+                                        is_admin: true,
+                                      })
+                                    }
+                                  />
+                                  Write
+                                </label>
+                              </div>
+                            ) : (
+                              <span style={ui.muted}>—</span>
+                            )}
+                          </td>
+
+                          <td style={{ ...ui.td, textAlign: "right" }}>
+                            {row.staff_id ? (
+                              editingStaffId === row.staff_id ? (
+                                <div style={ui.actions}>
+                                  <button style={ui.btnPrimary} onClick={() => saveStaff(row.staff_id)}>
+                                    Save
+                                  </button>
+                                  <button
+                                    style={ui.btnGhost}
+                                    onClick={() => {
+                                      setEditingStaffId(null);
+                                      setStaffForm({
+                                        name: "",
+                                        role: "",
+                                        email: "",
+                                        phone: "",
+                                        department_id: "",
+                                      });
+                                    }}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              ) : (
+                                <div style={ui.actions}>
+                                  <button
+                                    style={ui.btnGhost}
+                                    onClick={() => {
+                                      const st = staff.find((x) => x.id === row.staff_id);
+                                      setEditingStaffId(row.staff_id);
+                                      setStaffForm({
+                                        name: st?.name || row.staff_name || "",
+                                        role: st?.role || row.staff_role || "",
+                                        email: st?.email || row.email || "",
+                                        phone: st?.phone || row.phone || "",
+                                        department_id: st?.department_id || "",
+                                      });
+                                    }}
+                                  >
+                                    Edit
+                                  </button>
+                                  <button style={ui.btnDanger} onClick={() => deleteStaff(row.staff_id)}>
+                                    Delete
+                                  </button>
+                                </div>
+                              )
+                            ) : (
+                              <span style={ui.muted}>—</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+
+                    {!adminMembersLoading && (adminMembers || []).length === 0 ? (
+                      <tr>
+                        <td style={ui.emptyRow} colSpan={7}>
+                          No staff/memberships found.
                         </td>
                       </tr>
-                    );
-                  })}
-
-                  {filteredStaff.length === 0 ? (
-                    <tr>
-                      <td style={ui.emptyRow} colSpan={10}>
-                        No matching staff.
-                      </td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             {/* ADD STAFF MODAL */}
             {showAddStaff ? (
@@ -1593,7 +2307,9 @@ export default function AdminPage() {
                       <select
                         style={ui.select}
                         value={staffForm.department_id || ""}
-                        onChange={(e) => setStaffForm((p) => ({ ...p, department_id: e.target.value }))}
+                        onChange={(e) =>
+                          setStaffForm((p) => ({ ...p, department_id: e.target.value }))
+                        }
                       >
                         <option value="">No department</option>
                         {deptOptions.map((d) => (
@@ -1620,7 +2336,8 @@ export default function AdminPage() {
                       <div style={{ color: "#9CA3AF", fontSize: 12 }}>
                         Required: <b>Name</b> and <b>Role</b>.
                         <br />
-                        If you enter an email, ShiftCensus will create a login and generate an invite link.
+                        If you enter an email, ShiftCensus will create a login and generate an
+                        invite link.
                         If you also enter an E.164 phone (+1...), it will SMS the link.
                       </div>
                     </div>
@@ -1645,818 +2362,7 @@ export default function AdminPage() {
               </div>
             ) : null}
           </div>
-        )}
-
-        {/* ===========================
-            FACILITY SETTINGS
-           =========================== */}
-
-        {/* SHIFT SETTINGS (with lunch break minutes) */}
-        {activeTab === "shifts" && orgId && (
-          <div style={ui.card}>
-            <div style={ui.cardHeader}>
-              <div>
-                <div style={ui.cardTitle}>Shift Settings</div>
-                <div style={ui.cardSub}>
-                  Define shift templates per role. Lunch break minutes are used to make PPD calculations more accurate.
-                </div>
-              </div>
-
-              <button style={ui.btnGhost} onClick={loadAll} disabled={loading}>
-                Refresh
-              </button>
-            </div>
-
-            {/* Lunch break setting */}
-            <div style={{ ...ui.notice, marginBottom: 12 }}>
-              <div style={{ fontWeight: 1000, marginBottom: 8 }}>Lunch Break Length</div>
-              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <input
-                  style={{ ...ui.input, width: 120 }}
-                  type="number"
-                  min={0}
-                  max={240}
-                  value={lunchBreakMins}
-                  onChange={(e) => setLunchBreakMins(e.target.value)}
-                />
-                <span style={ui.muted}>minutes (ex: 30)</span>
-                <button style={ui.btnPrimary} onClick={saveLunchBreakMinutes} disabled={lunchSaving}>
-                  {lunchSaving ? "Saving…" : "Save Lunch"}
-                </button>
-              </div>
-            </div>
-
-            {/* Role bubbles */}
-            <div style={ui.roleBubbleWrap}>
-              <button
-                type="button"
-                style={ui.roleBubble(selectedShiftRole === "ALL")}
-                onClick={() => selectShiftRole("ALL")}
-              >
-                ALL
-              </button>
-              {roleOptions.map((r) => (
-                <button
-                  key={r}
-                  type="button"
-                  style={ui.roleBubble(selectedShiftRole === r)}
-                  onClick={() => selectShiftRole(r)}
-                >
-                  {r}
-                </button>
-              ))}
-            </div>
-
-            {/* Add/Edit shift */}
-            <div style={ui.inlineFormWrap}>
-              {selectedShiftRole === "ALL" ? (
-                <input
-                  style={ui.input}
-                  placeholder="Role (ex: CNA)"
-                  value={shiftForm.role || ""}
-                  onChange={(e) => setShiftForm((p) => ({ ...p, role: e.target.value }))}
-                />
-              ) : (
-                <div style={ui.roleLockedPill}>
-                  Role: <b>{selectedShiftRole}</b>
-                  <button style={ui.roleUnlockBtn} onClick={() => selectShiftRole("ALL")} type="button">
-                    Unlock
-                  </button>
-                </div>
-              )}
-
-              <select
-                style={ui.select}
-                value={shiftForm.shift_type}
-                onChange={(e) => setShiftForm((p) => ({ ...p, shift_type: e.target.value }))}
-              >
-                {SHIFT_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-
-              <input
-                style={ui.input}
-                type="time"
-                value={shiftForm.start_local}
-                onChange={(e) => setShiftForm((p) => ({ ...p, start_local: e.target.value }))}
-              />
-              <input
-                style={ui.input}
-                type="time"
-                value={shiftForm.end_local}
-                onChange={(e) => setShiftForm((p) => ({ ...p, end_local: e.target.value }))}
-              />
-
-              {editingShiftId ? (
-                <>
-                  <button style={ui.btnPrimary} onClick={() => saveShift(editingShiftId)}>
-                    Save
-                  </button>
-                  <button
-                    style={ui.btnGhost}
-                    onClick={() => {
-                      setEditingShiftId(null);
-                      setShiftForm({ role: "", shift_type: "Day", start_local: "07:00", end_local: "15:00" });
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </>
-              ) : (
-                <button style={ui.btnPrimary} onClick={addShift}>
-                  Add
-                </button>
-              )}
-            </div>
-
-            {/* List */}
-            <div style={{ overflowX: "auto" }}>
-              <table style={ui.table}>
-                <thead>
-                  <tr>
-                    <th style={ui.th}>Role</th>
-                    <th style={ui.th}>Shift</th>
-                    <th style={ui.th}>Start</th>
-                    <th style={ui.th}>End</th>
-                    <th style={{ ...ui.th, textAlign: "right" }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(filteredShiftSettings || []).map((s) => (
-                    <tr key={s.id} style={ui.tr}>
-                      <td style={ui.td}><span style={ui.pill}>{s.role}</span></td>
-                      <td style={ui.td}>{s.shift_type}</td>
-                      <td style={ui.td}>{s.start_local}</td>
-                      <td style={ui.td}>{s.end_local}</td>
-                      <td style={{ ...ui.td, textAlign: "right" }}>
-                        <div style={ui.actions}>
-                          <button
-                            style={ui.btnGhost}
-                            onClick={() => {
-                              setEditingShiftId(s.id);
-                              setShiftForm({
-                                role: s.role || "",
-                                shift_type: s.shift_type || "Day",
-                                start_local: s.start_local || "07:00",
-                                end_local: s.end_local || "15:00",
-                              });
-                            }}
-                          >
-                            Edit
-                          </button>
-                          <button style={ui.btnDanger} onClick={() => deleteShift(s.id)}>
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {(filteredShiftSettings || []).length === 0 ? (
-                    <tr>
-                      <td style={ui.emptyRow} colSpan={5}>
-                        No shift settings yet.
-                      </td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* DEPARTMENTS */}
-        {activeTab === "departments" && orgId && (
-          <div style={ui.card}>
-            <div style={ui.cardHeader}>
-              <div>
-                <div style={ui.cardTitle}>Departments</div>
-                <div style={ui.cardSub}>Create departments (Nursing, Therapy, Dietary, etc.).</div>
-              </div>
-
-              <button style={ui.btnGhost} onClick={loadDepartments} disabled={departmentsLoading}>
-                {departmentsLoading ? "Loading…" : "Refresh"}
-              </button>
-            </div>
-
-            {!isOrgAdmin && !canManageAdmins && !isSuperadmin ? (
-              <div style={ui.notice}>You don’t have permission to manage departments for this organization.</div>
-            ) : (
-              <>
-                <div style={ui.inlineForm}>
-                  <input
-                    style={ui.input}
-                    placeholder="Department name"
-                    value={deptForm.name}
-                    onChange={(e) => setDeptForm((p) => ({ ...p, name: e.target.value }))}
-                  />
-                  <label style={ui.smallCheck}>
-                    <input
-                      type="checkbox"
-                      checked={!!deptForm.is_active}
-                      onChange={(e) => setDeptForm((p) => ({ ...p, is_active: e.target.checked }))}
-                    />
-                    Active
-                  </label>
-
-                  {editingDeptId ? (
-                    <>
-                      <button style={ui.btnPrimary} onClick={() => saveDepartment(editingDeptId)} disabled={deptSaving}>
-                        {deptSaving ? "Saving…" : "Save"}
-                      </button>
-                      <button
-                        style={ui.btnGhost}
-                        onClick={() => {
-                          setEditingDeptId(null);
-                          setDeptForm({ name: "", is_active: true });
-                        }}
-                        disabled={deptSaving}
-                      >
-                        Cancel
-                      </button>
-                    </>
-                  ) : (
-                    <button style={ui.btnPrimary} onClick={addDepartment} disabled={deptSaving}>
-                      {deptSaving ? "Adding…" : "Add"}
-                    </button>
-                  )}
-                </div>
-
-                <div style={{ overflowX: "auto" }}>
-                  <table style={ui.table}>
-                    <thead>
-                      <tr>
-                        <th style={ui.th}>Department</th>
-                        <th style={ui.th}>Active</th>
-                        <th style={{ ...ui.th, textAlign: "right" }}>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {deptOptions.map((d) => {
-                        const inactive = d.is_active === false;
-                        return (
-                          <tr key={d.id} style={ui.tr}>
-                            <td style={ui.td}>
-                              <div style={ui.cellStrong}>{d.name}</div>
-                              <div style={{ color: "#9CA3AF", fontSize: 12 }}>
-                                id: <span style={ui.mono}>{d.id}</span>
-                              </div>
-                            </td>
-                            <td style={ui.td}>
-                              <span style={inactive ? ui.badgeOff : ui.badgeOn}>
-                                {inactive ? "Inactive" : "Active"}
-                              </span>
-                            </td>
-                            <td style={{ ...ui.td, textAlign: "right" }}>
-                              <div style={ui.actions}>
-                                <button
-                                  style={ui.btnGhost}
-                                  onClick={() => {
-                                    setEditingDeptId(d.id);
-                                    setDeptForm({ name: d.name || "", is_active: d.is_active !== false });
-                                  }}
-                                >
-                                  Edit
-                                </button>
-                                <button
-                                  style={ui.btnMiniGhost}
-                                  onClick={() => toggleDepartmentActive(d)}
-                                  disabled={deptSaving}
-                                >
-                                  {inactive ? "Activate" : "Deactivate"}
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-
-                      {!departmentsLoading && deptOptions.length === 0 ? (
-                        <tr>
-                          <td style={ui.emptyRow} colSpan={3}>
-                            No departments yet.
-                          </td>
-                        </tr>
-                      ) : null}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            )}
-          </div>
-        )}
-
-        {/* UNITS */}
-        {activeTab === "units" && orgId && (
-          <div style={ui.card}>
-            <div style={ui.cardHeader}>
-              <div>
-                <div style={ui.cardTitle}>Units</div>
-                <div style={ui.cardSub}>Create units/wings used across census and assignments.</div>
-              </div>
-
-              <button style={ui.btnGhost} onClick={loadAll} disabled={loading}>
-                Refresh
-              </button>
-            </div>
-
-            <div style={ui.inlineForm}>
-              <input
-                style={ui.input}
-                placeholder="Unit name (ex: North Wing)"
-                value={unitForm.name}
-                onChange={(e) => setUnitForm({ name: e.target.value })}
-              />
-              {editingUnitId ? (
-                <>
-                  <button style={ui.btnPrimary} onClick={() => saveUnit(editingUnitId)}>
-                    Save
-                  </button>
-                  <button
-                    style={ui.btnGhost}
-                    onClick={() => {
-                      setEditingUnitId(null);
-                      setUnitForm({ name: "" });
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </>
-              ) : (
-                <button style={ui.btnPrimary} onClick={addUnit}>
-                  Add
-                </button>
-              )}
-            </div>
-
-            <div style={{ overflowX: "auto" }}>
-              <table style={ui.table}>
-                <thead>
-                  <tr>
-                    <th style={ui.th}>ID</th>
-                    <th style={ui.th}>Name</th>
-                    <th style={{ ...ui.th, textAlign: "right" }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {units.map((u) => (
-                    <tr key={u.id} style={ui.tr}>
-                      <td style={ui.tdMono}>{u.id}</td>
-                      <td style={ui.td}><span style={ui.cellStrong}>{u.name}</span></td>
-                      <td style={{ ...ui.td, textAlign: "right" }}>
-                        <div style={ui.actions}>
-                          <button
-                            style={ui.btnGhost}
-                            onClick={() => {
-                              setEditingUnitId(u.id);
-                              setUnitForm({ name: u.name || "" });
-                            }}
-                          >
-                            Edit
-                          </button>
-                          <button style={ui.btnDanger} onClick={() => deleteUnit(u.id)}>
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                  {units.length === 0 ? (
-                    <tr>
-                      <td style={ui.emptyRow} colSpan={3}>
-                        No units yet.
-                      </td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* ROOMS & BEDS */}
-        {activeTab === "rooms_beds" && orgId && (
-          <div style={ui.card}>
-            <div style={ui.cardHeader}>
-              <div>
-                <div style={ui.cardTitle}>Rooms & Beds</div>
-                <div style={ui.cardSub}>Manage rooms, beds, active/inactive, and bed order.</div>
-              </div>
-
-              <button style={ui.btnGhost} onClick={loadRooms} disabled={roomsLoading}>
-                {roomsLoading ? "Loading…" : "Refresh"}
-              </button>
-            </div>
-
-            {!canManageFacility ? (
-              <div style={ui.notice}>You don’t have permission to manage facility settings.</div>
-            ) : (
-              <div style={ui.rbGrid}>
-                {/* LEFT: ROOMS */}
-                <div style={ui.rbLeft}>
-                  <div style={ui.rbPanelTitle}>Rooms</div>
-
-                  <div style={ui.inlineFormWrap}>
-                    <input
-                      style={{ ...ui.input, minWidth: 180, flex: 1 }}
-                      placeholder="Room name (ex: 301)"
-                      value={roomForm.name}
-                      onChange={(e) => setRoomForm((p) => ({ ...p, name: e.target.value }))}
-                    />
-                    <label style={ui.smallCheck}>
-                      <input
-                        type="checkbox"
-                        checked={!!roomForm.is_active}
-                        onChange={(e) => setRoomForm((p) => ({ ...p, is_active: e.target.checked }))}
-                      />
-                      Active
-                    </label>
-
-                    {editingRoomId ? (
-                      <>
-                        <button style={ui.btnMini} onClick={() => saveRoom(editingRoomId)} disabled={roomSaving}>
-                          {roomSaving ? "Saving…" : "Save"}
-                        </button>
-                        <button
-                          style={ui.btnMiniGhost}
-                          onClick={() => {
-                            setEditingRoomId(null);
-                            setRoomForm({ name: "", is_active: true });
-                          }}
-                          disabled={roomSaving}
-                        >
-                          Cancel
-                        </button>
-                      </>
-                    ) : (
-                      <button style={ui.btnMini} onClick={addRoom} disabled={roomSaving}>
-                        {roomSaving ? "Adding…" : "Add"}
-                      </button>
-                    )}
-                  </div>
-
-                  <div style={ui.rbList}>
-                    {(rooms || []).map((r) => {
-                      const selected = String(r.id) === String(selectedRoomId);
-                      const inactive = r.is_active === false;
-                      return (
-                        <div
-                          key={r.id}
-                          style={ui.roomRow(selected, inactive)}
-                          onClick={() => setSelectedRoomId(r.id)}
-                          role="button"
-                          tabIndex={0}
-                        >
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontWeight: 950, color: "white" }}>{r.name}</div>
-                            <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-                              <span style={inactive ? ui.badgeOff : ui.badgeOn}>
-                                {inactive ? "Inactive" : "Active"}
-                              </span>
-                              <span style={ui.orderPill}>Beds: {Array.isArray(r.beds) ? r.beds.length : 0}</span>
-                            </div>
-                          </div>
-
-                          <div style={ui.actions}>
-                            <button
-                              style={ui.btnMiniGhost}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setEditingRoomId(r.id);
-                                setRoomForm({ name: r.name || "", is_active: r.is_active !== false });
-                              }}
-                            >
-                              Edit
-                            </button>
-                            <button
-                              style={ui.btnMiniGhost}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                toggleRoomActive(r);
-                              }}
-                            >
-                              {inactive ? "Activate" : "Deactivate"}
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-
-                    {!roomsLoading && (rooms || []).length === 0 ? (
-                      <div style={ui.empty2}>No rooms yet.</div>
-                    ) : null}
-                  </div>
-                </div>
-
-                {/* RIGHT: BEDS */}
-                <div style={ui.rbRight}>
-                  <div style={ui.rbPanelTitle}>Beds</div>
-
-                  {!selectedRoomId ? (
-                    <div style={ui.notice}>Select a room to manage its beds.</div>
-                  ) : (
-                    <>
-                      <div style={ui.inlineFormWrap}>
-                        <input
-                          style={{ ...ui.input, minWidth: 180, flex: 1 }}
-                          placeholder="Bed label (ex: A, B, Door, Window)"
-                          value={bedForm.label}
-                          onChange={(e) => setBedForm((p) => ({ ...p, label: e.target.value }))}
-                        />
-                        <label style={ui.smallCheck}>
-                          <input
-                            type="checkbox"
-                            checked={!!bedForm.is_active}
-                            onChange={(e) => setBedForm((p) => ({ ...p, is_active: e.target.checked }))}
-                          />
-                          Active
-                        </label>
-
-                        {editingBedId ? (
-                          <>
-                            <button style={ui.btnMini} onClick={() => saveBed(editingBedId)} disabled={bedSaving}>
-                              {bedSaving ? "Saving…" : "Save"}
-                            </button>
-                            <button
-                              style={ui.btnMiniGhost}
-                              onClick={() => {
-                                setEditingBedId(null);
-                                setBedForm({ label: "", is_active: true });
-                              }}
-                              disabled={bedSaving}
-                            >
-                              Cancel
-                            </button>
-                          </>
-                        ) : (
-                          <button style={ui.btnMini} onClick={addBed} disabled={bedSaving}>
-                            {bedSaving ? "Adding…" : "Add"}
-                          </button>
-                        )}
-                      </div>
-
-                      <div style={ui.bedList}>
-                        {bedsLoading ? <div style={ui.empty2}>Loading beds…</div> : null}
-
-                        {(beds || []).map((b, idx) => {
-                          const inactive = b.is_active === false;
-                          return (
-                            <div
-                              key={b.id}
-                              style={ui.bedRow(inactive)}
-                              draggable
-                              onDragStart={() => onBedDragStart(b.id)}
-                              onDragOver={(e) => e.preventDefault()}
-                              onDrop={() => onBedDrop(b.id)}
-                            >
-                              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                                <div style={ui.dragHandle} title="Drag to reorder">
-                                  ≡
-                                </div>
-                                <div>
-                                  <div style={{ fontWeight: 950, color: "white" }}>{b.label}</div>
-                                  <div style={{ marginTop: 6 }}>
-                                    <span style={inactive ? ui.badgeOff : ui.badgeOn}>
-                                      {inactive ? "Inactive" : "Active"}
-                                    </span>
-                                    <span style={{ marginLeft: 8, ...ui.orderPill }}>#{idx + 1}</span>
-                                  </div>
-                                </div>
-                              </div>
-
-                              <div style={ui.actions}>
-                                <button
-                                  style={ui.btnMiniGhost}
-                                  onClick={() => moveBedByIndex(idx, idx - 1)}
-                                  disabled={idx === 0}
-                                  title="Move up"
-                                >
-                                  ↑
-                                </button>
-                                <button
-                                  style={ui.btnMiniGhost}
-                                  onClick={() => moveBedByIndex(idx, idx + 1)}
-                                  disabled={idx === beds.length - 1}
-                                  title="Move down"
-                                >
-                                  ↓
-                                </button>
-                                <button
-                                  style={ui.btnMiniGhost}
-                                  onClick={() => {
-                                    setEditingBedId(b.id);
-                                    setBedForm({ label: b.label || "", is_active: b.is_active !== false });
-                                  }}
-                                >
-                                  Edit
-                                </button>
-                                <button
-                                  style={ui.btnMiniGhost}
-                                  onClick={() => toggleBedActive(b)}
-                                  disabled={bedSaving}
-                                >
-                                  {inactive ? "Activate" : "Deactivate"}
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-
-                        {!bedsLoading && (beds || []).length === 0 ? (
-                          <div style={ui.empty2}>No beds yet.</div>
-                        ) : null}
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* PRIVACY */}
-        {activeTab === "privacy" && orgId && (
-          <div style={ui.card}>
-            <div style={ui.cardHeader}>
-              <div>
-                <div style={ui.cardTitle}>Privacy</div>
-                <div style={ui.cardSub}>Control patient identifiers shown in the app.</div>
-              </div>
-              <button style={ui.btnGhost} onClick={loadOrgSettings} disabled={privacySaving}>
-                Refresh
-              </button>
-            </div>
-
-            {!canManagePrivacy ? (
-              <div style={ui.notice}>You don’t have permission to manage privacy settings.</div>
-            ) : (
-              <>
-                <div
-                  style={ui.checkRow}
-                  onClick={() =>
-                    setOrgSettings((p) => ({
-                      ...p,
-                      show_patient_identifiers: !p?.show_patient_identifiers,
-                    }))
-                  }
-                >
-                  <input
-                    type="checkbox"
-                    checked={!!orgSettings?.show_patient_identifiers}
-                    onChange={(e) =>
-                      setOrgSettings((p) => ({
-                        ...p,
-                        show_patient_identifiers: e.target.checked,
-                      }))
-                    }
-                  />
-                  <div>
-                    <div style={{ fontWeight: 950 }}>Show patient identifiers</div>
-                    <div style={{ color: "#9CA3AF", fontSize: 12, marginTop: 4 }}>
-                      When enabled, census boards can display patient names/initials based on format below.
-                    </div>
-                  </div>
-                </div>
-
-                <div style={ui.privacyRow}>
-                  <div style={{ minWidth: 260 }}>
-                    <div style={ui.label}>Identifier format</div>
-                    <select
-                      style={{ ...ui.select, minWidth: 260 }}
-                      value={orgSettings?.identifier_format || "first_last_initial"}
-                      onChange={(e) =>
-                        setOrgSettings((p) => ({ ...p, identifier_format: e.target.value }))
-                      }
-                      disabled={!orgSettings?.show_patient_identifiers}
-                    >
-                      <option value="first_last_initial">First name + last initial (John D.)</option>
-                      <option value="first_initial_last">First initial + last name (J. Doe)</option>
-                      <option value="initials">Initials only (J.D.)</option>
-                    </select>
-                  </div>
-
-                  <button
-                    style={ui.btnPrimary}
-                    disabled={privacySaving}
-                    onClick={() => {
-                      if (!!orgSettings?.show_patient_identifiers) {
-                        setShowAck(true);
-                        return;
-                      }
-                      savePrivacy({
-                        enabled: false,
-                        format: orgSettings?.identifier_format || "first_last_initial",
-                        acknowledged: true,
-                      });
-                    }}
-                  >
-                    {privacySaving ? "Saving…" : "Save"}
-                  </button>
-                </div>
-
-                {showAck ? (
-                  <div onMouseDown={() => setShowAck(false)} style={ui.modalOverlay}>
-                    <div onMouseDown={(e) => e.stopPropagation()} style={ui.modal}>
-                      <div style={ui.modalTitle}>Privacy Acknowledgement</div>
-                      <div style={ui.modalBody}>
-                        You’re about to enable patient identifiers. Confirm you have authorization and are following facility policy.
-                      </div>
-                      <div style={ui.modalActions}>
-                        <button style={ui.btnGhost} onClick={() => setShowAck(false)} disabled={privacySaving}>
-                          Cancel
-                        </button>
-                        <button
-                          style={ui.btnPrimary}
-                          onClick={() =>
-                            savePrivacy({
-                              enabled: true,
-                              format: orgSettings?.identifier_format || "first_last_initial",
-                              acknowledged: true,
-                            })
-                          }
-                          disabled={privacySaving}
-                        >
-                          {privacySaving ? "Saving…" : "I Acknowledge & Enable"}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ) : null}
-              </>
-            )}
-          </div>
-        )}
-
-        {/* PAY PERIOD */}
-        {activeTab === "pay_period" && orgId && (
-          <div style={ui.card}>
-            <div style={ui.cardHeader}>
-              <div>
-                <div style={ui.cardTitle}>Pay Period</div>
-                <div style={ui.cardSub}>
-                  Configure pay period rules so overtime calculations match facility payroll.
-                </div>
-              </div>
-              <button style={ui.btnGhost} onClick={loadOrgSettings} disabled={payPeriodSaving}>
-                Refresh
-              </button>
-            </div>
-
-            <div style={ui.notice}>
-              <div style={{ display: "grid", gap: 12 }}>
-                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-                  <div>
-                    <div style={ui.label}>Pay period length (days)</div>
-                    <input
-                      style={{ ...ui.input, width: 160 }}
-                      type="number"
-                      min={7}
-                      max={31}
-                      value={payPeriod.length_days}
-                      onChange={(e) => setPayPeriod((p) => ({ ...p, length_days: e.target.value }))}
-                    />
-                  </div>
-
-                  <div>
-                    <div style={ui.label}>Week starts on</div>
-                    <select
-                      style={{ ...ui.select, width: 200 }}
-                      value={payPeriod.week_starts_on}
-                      onChange={(e) => setPayPeriod((p) => ({ ...p, week_starts_on: e.target.value }))}
-                    >
-                      {["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].map((d) => (
-                        <option key={d} value={d}>{d}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <div style={ui.label}>Anchor date (optional)</div>
-                    <input
-                      style={{ ...ui.input, width: 200 }}
-                      type="date"
-                      value={payPeriod.anchor_date || ""}
-                      onChange={(e) => setPayPeriod((p) => ({ ...p, anchor_date: e.target.value }))}
-                    />
-                  </div>
-                </div>
-
-                <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                  <button style={ui.btnPrimary} onClick={savePayPeriod} disabled={payPeriodSaving}>
-                    {payPeriodSaving ? "Saving…" : "Save Pay Period"}
-                  </button>
-                </div>
-
-                <div style={{ color: "#9CA3AF", fontSize: 12 }}>
-                  If you don’t use an anchor date, ShiftCensus will still use pay period length for overtime windows,
-                  but anchoring makes the boundaries line up exactly with payroll.
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        ) : null}
       </div>
     </div>
   );
@@ -2495,8 +2401,18 @@ function SuperAdminOrgSwitcher({ open, onClose, orgs, loading, onPick }) {
                 onClick={() => onPick?.(o.id)}
                 title={`orgId: ${o.id}`}
               >
-                <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0, textAlign: "left" }}>
-                  <div style={{ color: "white", fontWeight: 1000, fontSize: 14 }}>{o.name || "Unnamed Org"}</div>
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                    minWidth: 0,
+                    textAlign: "left",
+                  }}
+                >
+                  <div style={{ color: "white", fontWeight: 1000, fontSize: 14 }}>
+                    {o.name || "Unnamed Org"}
+                  </div>
                   <div style={{ color: "#9CA3AF", fontSize: 12 }}>
                     {o.org_code || "—"} • orgId: <span style={ui.mono}>{o.id}</span>
                   </div>
@@ -2571,19 +2487,6 @@ const ui = {
 
   topActions: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" },
 
-  sectionRow: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 },
-  sectionPill: (active) => ({
-    height: 38,
-    borderRadius: 999,
-    padding: "8px 12px",
-    border: active ? "1px solid rgba(255,255,255,0.26)" : "1px solid rgba(255,255,255,0.10)",
-    background: active ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.04)",
-    color: "white",
-    fontWeight: 1000,
-    cursor: "pointer",
-    boxShadow: "0 10px 28px rgba(0,0,0,0.28)",
-  }),
-
   tabs: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 },
 
   tab: (active) => ({
@@ -2633,12 +2536,15 @@ const ui = {
     padding: "10px 10px",
     borderBottom: "1px solid rgba(255,255,255,0.10)",
     background: "rgba(255,255,255,0.03)",
-    whiteSpace: "nowrap",
   },
 
   tr: { borderBottom: "1px solid rgba(255,255,255,0.06)" },
 
-  td: { padding: "10px 10px", borderBottom: "1px solid rgba(255,255,255,0.06)", verticalAlign: "middle" },
+  td: {
+    padding: "10px 10px",
+    borderBottom: "1px solid rgba(255,255,255,0.06)",
+    verticalAlign: "top",
+  },
 
   tdMono: {
     padding: "10px 10px",
@@ -2648,16 +2554,20 @@ const ui = {
     fontSize: 12,
   },
 
-  mono: {
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-  },
+  mono: { fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" },
 
   emptyRow: { padding: 14, color: "#9CA3AF", textAlign: "center" },
 
   cellStrong: { fontWeight: 950, color: "#E5E7EB" },
   muted: { color: "#9CA3AF" },
 
-  actions: { display: "inline-flex", gap: 8, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap" },
+  actions: {
+    display: "inline-flex",
+    gap: 8,
+    alignItems: "center",
+    justifyContent: "flex-end",
+    flexWrap: "wrap",
+  },
 
   input: {
     height: 40,
@@ -2692,7 +2602,6 @@ const ui = {
     background: "rgba(255,255,255,0.04)",
     fontWeight: 900,
     fontSize: 12,
-    whiteSpace: "nowrap",
   },
 
   btnPrimary: {
@@ -2726,18 +2635,6 @@ const ui = {
     border: "1px solid rgba(239,68,68,0.35)",
     cursor: "pointer",
     fontWeight: 900,
-  },
-
-  btnMini: {
-    height: 34,
-    borderRadius: 12,
-    padding: "8px 10px",
-    background: "rgba(255,255,255,0.10)",
-    color: "white",
-    border: "1px solid rgba(255,255,255,0.14)",
-    cursor: "pointer",
-    fontWeight: 900,
-    fontSize: 12,
   },
 
   btnMiniGhost: {
@@ -2807,8 +2704,6 @@ const ui = {
     fontSize: 12,
   },
 
-  privacyRow: { display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginTop: 12 },
-
   checkRow: {
     display: "flex",
     gap: 10,
@@ -2842,7 +2737,13 @@ const ui = {
 
   modalTitle: { fontSize: 16, fontWeight: 1000, marginBottom: 10 },
   modalBody: { color: "#E5E7EB", lineHeight: 1.55, fontSize: 13 },
-  modalActions: { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 14, flexWrap: "wrap" },
+  modalActions: {
+    display: "flex",
+    justifyContent: "flex-end",
+    gap: 10,
+    marginTop: 14,
+    flexWrap: "wrap",
+  },
 
   rbGrid: {
     display: "grid",
@@ -2945,42 +2846,19 @@ const ui = {
     fontWeight: 900,
   },
 
-  orderPill: {
-    padding: "4px 8px",
-    borderRadius: 999,
-    border: "1px solid rgba(255,255,255,0.12)",
-    background: "rgba(255,255,255,0.05)",
-    color: "#E5E7EB",
-    fontSize: 11,
-    fontWeight: 900,
-  },
-
   smallCheck: {
     display: "flex",
     gap: 8,
     alignItems: "center",
     padding: "0 10px",
-    height: 40,
-    borderRadius: 14,
+    height: 34,
+    borderRadius: 12,
     border: "1px solid rgba(255,255,255,0.12)",
     background: "rgba(255,255,255,0.04)",
     color: "white",
     fontWeight: 900,
     fontSize: 12,
     userSelect: "none",
-  },
-
-  smallToggle: {
-    display: "inline-flex",
-    gap: 6,
-    alignItems: "center",
-    padding: "6px 8px",
-    borderRadius: 10,
-    border: "1px solid rgba(255,255,255,0.12)",
-    background: "rgba(255,255,255,0.04)",
-    color: "white",
-    fontWeight: 900,
-    fontSize: 12,
   },
 
   label: {
@@ -2991,7 +2869,7 @@ const ui = {
     marginBottom: 6,
   },
 
-  // superadmin org picker
+  // superadmin org picker styles
   overlay: {
     position: "fixed",
     inset: 0,

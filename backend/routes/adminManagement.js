@@ -6,208 +6,194 @@ const supabaseAdmin = require("../supabaseAdmin");
 const { requireAuth } = require("../middleware/auth");
 const { requireOrg } = require("../middleware/orgGuard");
 
-// -----------------------------
-// helpers
-// -----------------------------
-function pickAllowedPatch(body) {
-  const b = body || {};
-  const out = {};
-
-  const allowed = [
-    "role",
-    "is_active",
-    "is_admin",
-    "can_manage_admins",
-    "can_schedule_read",
-    "can_schedule_write",
-    "can_census_read",
-    "can_census_write",
-    "department_id",
-    "department_locked",
-  ];
-
-  for (const k of allowed) {
-    if (Object.prototype.hasOwnProperty.call(b, k)) out[k] = b[k];
-  }
-
-  if (out.department_id === "") out.department_id = null;
-  return out;
-}
-
-async function canManageAdmins(req) {
-  if (String(req.role || "").toLowerCase() === "superadmin") return true;
-
-  const orgId = req.orgId;
-  const userId = req.user?.id;
-  if (!orgId || !userId) return false;
-
-  const { data, error } = await supabaseAdmin
-    .from("org_memberships")
-    .select("*")
-    .eq("org_id", orgId)
-    .eq("user_id", userId)
-    .maybeSingle();
-
-  if (error || !data) return false;
-  if (data.is_active === false) return false;
-
-  const role = String(data.role || "").toLowerCase();
-  return !!data.can_manage_admins || !!data.is_admin || ["admin", "don", "ed"].includes(role);
-}
-
-// -----------------------------
-// middleware
-// -----------------------------
 router.use(requireAuth);
 router.use(requireOrg);
 
-// =====================================================
-// GET /list  -> memberships + staff info (org-scoped)
-// =====================================================
-router.get("/list", async (req, res) => {
-  try {
-    const ok = await canManageAdmins(req);
-    if (!ok) return res.status(403).json({ error: "Not allowed" });
+function isPrivileged(role) {
+  const r = String(role || "").toLowerCase();
+  return ["superadmin", "admin", "don", "ed"].includes(r);
+}
 
-    const orgId = req.orgId;
-    const orgCode = req.orgCode || req.org_code;
-    if (!orgId) return res.status(400).json({ error: "Missing orgId (orgGuard)" });
-
-    const { data: mems, error: memErr } = await supabaseAdmin
-      .from("org_memberships")
-      .select("*")
-      .eq("org_id", orgId);
-
-    if (memErr) {
-      console.error("ADMIN MGMT LIST memberships error:", memErr);
-      return res.status(500).json({ error: "Failed to load memberships" });
-    }
-
-    const memberships = Array.isArray(mems) ? mems : [];
-    const userIds = memberships.map((m) => m.user_id).filter(Boolean);
-
-    // join staff (best-effort)
-    let staffRows = [];
-    if (userIds.length && orgCode) {
-      const { data: st, error: stErr } = await supabaseAdmin
-        .from("staff")
-        .select("id, user_id, name, role, email, phone, department_id")
-        .eq("org_code", orgCode)
-        .in("user_id", userIds);
-
-      if (stErr) console.warn("ADMIN MGMT LIST staff join warn:", stErr);
-      else staffRows = Array.isArray(st) ? st : [];
-    }
-
-    const staffByUser = new Map(staffRows.map((s) => [String(s.user_id), s]));
-
-    // normalize to what AdminPage expects:
-    // - `id` should exist; we'll set it to user_id (unique per org)
-    const enriched = memberships.map((m) => {
-      const st = staffByUser.get(String(m.user_id)) || null;
-
-      return {
-        id: m.user_id, // ✅ frontend uses m.id as the row identifier
-        user_id: m.user_id,
-        org_id: m.org_id,
-
-        role: m.role ?? null,
-        is_active: m.is_active !== false,
-        is_admin: !!m.is_admin,
-        can_manage_admins: !!m.can_manage_admins,
-        can_schedule_read: m.can_schedule_read !== false,
-        can_schedule_write: !!m.can_schedule_write,
-        can_census_read: m.can_census_read !== false,
-        can_census_write: !!m.can_census_write,
-
-        department_id: m.department_id ?? st?.department_id ?? null,
-        department_locked: !!m.department_locked,
-
-        staff_name: st?.name || null,
-        staff_role: st?.role || null,
-        email: st?.email || null,
-        phone: st?.phone || null,
-      };
-    });
-
-    return res.json({ memberships: enriched });
-  } catch (e) {
-    console.error("ADMIN MGMT LIST ERROR:", e);
-    return res.status(500).json({ error: "Server error" });
+function toBool(v, fallback = false) {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v === 1;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    if (["true", "1", "yes", "y", "on"].includes(s)) return true;
+    if (["false", "0", "no", "n", "off"].includes(s)) return false;
   }
-});
+  return fallback;
+}
 
-// =====================================================
-// PATCH /:id  (id = user_id)
-// =====================================================
-router.patch("/:id", async (req, res) => {
-  try {
-    const ok = await canManageAdmins(req);
-    if (!ok) return res.status(403).json({ error: "Not allowed" });
+// GET /api/adminmanagement/list?q=...
+router.get("/list", async (req, res) => {
+  const orgId = req.orgId;
 
-    const orgId = req.orgId;
-    const orgCode = req.orgCode || req.org_code;
-    const userId = String(req.params.id || "").trim();
+  // Gate: only privileged roles for now (you can tighten later to can_manage_admins)
+  if (!isPrivileged(req.role)) {
+    return res.status(403).json({ error: "Insufficient role" });
+  }
 
-    if (!orgId) return res.status(400).json({ error: "Missing orgId (orgGuard)" });
-    if (!userId) return res.status(400).json({ error: "Missing user id" });
+  const q = String(req.query?.q || "").trim().toLowerCase();
 
-    const patch = pickAllowedPatch(req.body);
+  // Load memberships for org
+  const { data: memberships, error: mErr } = await supabaseAdmin
+    .from("org_memberships")
+    .select(
+      "user_id,org_id,role,is_active,is_admin,can_manage_admins,can_schedule_read,can_schedule_write,can_census_read,can_census_write,department_id,department_locked,created_at"
+    )
+    .eq("org_id", orgId);
 
-    if (Object.prototype.hasOwnProperty.call(patch, "is_admin") && !patch.is_admin) {
-      patch.can_manage_admins = false;
-    }
+  if (mErr) {
+    console.error("ADMINMGMT LIST memberships ERROR:", mErr);
+    return res.status(500).json({ error: "Failed to load memberships" });
+  }
 
-    const { data: updated, error: upErr } = await supabaseAdmin
-      .from("org_memberships")
-      .update(patch)
-      .eq("org_id", orgId)
-      .eq("user_id", userId)
-      .select("*")
-      .single();
+  // Load staff for org
+  const { data: staff, error: sErr } = await supabaseAdmin
+    .from("staff")
+    .select("id,name,role,email,phone,department_id,user_id,org_id,org_code,employee_no")
+    .eq("org_id", orgId);
 
-    if (upErr) {
-      console.error("ADMIN MGMT PATCH ERROR:", upErr);
-      return res.status(500).json({ error: "Failed to update membership" });
-    }
+  if (sErr) {
+    console.error("ADMINMGMT LIST staff ERROR:", sErr);
+    return res.status(500).json({ error: "Failed to load staff" });
+  }
 
-    // best-effort include staff info
-    let staff = null;
-    if (orgCode) {
-      const { data: st } = await supabaseAdmin
-        .from("staff")
-        .select("name, role, email, phone, department_id")
-        .eq("org_code", orgCode)
-        .eq("user_id", userId)
-        .maybeSingle();
-      staff = st || null;
-    }
+  const memByUser = new Map((memberships || []).map((m) => [String(m.user_id), m]));
 
-    return res.json({
+  // Combine: prioritize staff rows, but include memberships even if no staff row exists
+  const combined = [];
+
+  (staff || []).forEach((st) => {
+    const uid = st.user_id ? String(st.user_id) : null;
+    const mem = uid ? memByUser.get(uid) : null;
+
+    combined.push({
+      // staff identity
+      staff_id: st.id,
+      staff_name: st.name,
+      staff_role: st.role,
+      email: st.email,
+      phone: st.phone,
+      staff_department_id: st.department_id ?? null,
+      employee_no: st.employee_no ?? null,
+
+      // membership identity
+      user_id: st.user_id ?? null,
+      membership: mem
+        ? {
+            ...mem,
+            is_admin: mem.is_admin ?? false,
+            can_manage_admins: mem.can_manage_admins ?? false,
+            can_schedule_read: mem.can_schedule_read ?? false,
+            can_schedule_write: mem.can_schedule_write ?? false,
+            can_census_read: mem.can_census_read ?? false,
+            can_census_write: mem.can_census_write ?? false,
+            department_locked: mem.department_locked ?? false,
+          }
+        : null,
+    });
+  });
+
+  // Add memberships not tied to staff
+  (memberships || []).forEach((m) => {
+    const uid = String(m.user_id);
+    const already = combined.some((x) => String(x.user_id || "") === uid);
+    if (already) return;
+
+    combined.push({
+      staff_id: null,
+      staff_name: null,
+      staff_role: null,
+      email: null,
+      phone: null,
+      staff_department_id: null,
+      employee_no: null,
+      user_id: m.user_id,
       membership: {
-        id: updated.user_id,
-        user_id: updated.user_id,
-        org_id: updated.org_id,
-        role: updated.role ?? null,
-        is_active: updated.is_active !== false,
-        is_admin: !!updated.is_admin,
-        can_manage_admins: !!updated.can_manage_admins,
-        can_schedule_read: updated.can_schedule_read !== false,
-        can_schedule_write: !!updated.can_schedule_write,
-        can_census_read: updated.can_census_read !== false,
-        can_census_write: !!updated.can_census_write,
-        department_id: updated.department_id ?? staff?.department_id ?? null,
-        department_locked: !!updated.department_locked,
-        staff_name: staff?.name || null,
-        staff_role: staff?.role || null,
-        email: staff?.email || null,
-        phone: staff?.phone || null,
+        ...m,
+        is_admin: m.is_admin ?? false,
+        can_manage_admins: m.can_manage_admins ?? false,
+        can_schedule_read: m.can_schedule_read ?? false,
+        can_schedule_write: m.can_schedule_write ?? false,
+        can_census_read: m.can_census_read ?? false,
+        can_census_write: m.can_census_write ?? false,
+        department_locked: m.department_locked ?? false,
       },
     });
-  } catch (e) {
-    console.error("ADMIN MGMT PATCH ERROR:", e);
-    return res.status(500).json({ error: "Server error" });
+  });
+
+  const filtered = !q
+    ? combined
+    : combined.filter((x) => {
+        const hay = [
+          x.staff_name,
+          x.staff_role,
+          x.email,
+          x.phone,
+          x.employee_no,
+          x.user_id,
+          x.staff_id,
+          x.membership?.role,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        return hay.includes(q);
+      });
+
+  res.json({ memberships: filtered });
+});
+
+// PATCH /api/adminmanagement/:userId
+router.patch("/:userId", async (req, res) => {
+  const orgId = req.orgId;
+  const userId = String(req.params.userId || "").trim();
+
+  if (!userId) return res.status(400).json({ error: "Missing userId" });
+
+  if (!isPrivileged(req.role)) {
+    return res.status(403).json({ error: "Insufficient role" });
   }
+
+  const patch = req.body || {};
+
+  // If is_admin is false, force all perms off
+  const is_admin = toBool(patch.is_admin, false);
+
+  const payload = {
+    is_admin,
+    can_manage_admins: is_admin ? toBool(patch.can_manage_admins, false) : false,
+    can_schedule_read: is_admin ? toBool(patch.can_schedule_read, false) : false,
+    can_schedule_write: is_admin ? toBool(patch.can_schedule_write, false) : false,
+    can_census_read: is_admin ? toBool(patch.can_census_read, false) : false,
+    can_census_write: is_admin ? toBool(patch.can_census_write, false) : false,
+    department_id: patch.department_id ? String(patch.department_id) : null,
+    department_locked: toBool(patch.department_locked, false),
+  };
+
+  const { data, error } = await supabaseAdmin
+    .from("org_memberships")
+    .update(payload)
+    .eq("org_id", orgId)
+    .eq("user_id", userId)
+    .select(
+      "user_id,org_id,role,is_active,is_admin,can_manage_admins,can_schedule_read,can_schedule_write,can_census_read,can_census_write,department_id,department_locked,created_at"
+    )
+    .maybeSingle();
+
+  if (error) {
+    console.error("ADMINMGMT PATCH ERROR:", error);
+    return res.status(500).json({ error: "Failed to update membership" });
+  }
+
+  if (!data) {
+    return res.status(404).json({ error: "Membership not found for this org/user" });
+  }
+
+  res.json({ membership: data });
 });
 
 module.exports = router;
