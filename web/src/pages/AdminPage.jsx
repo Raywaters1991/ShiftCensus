@@ -6,38 +6,23 @@ import OrgSwitcher from "../components/OrgSwitcher";
 
 const SHIFT_TYPES = ["Day", "Evening", "Night"];
 
-const SECTION_TABS = {
-  staff_settings: [
-    { key: "staff", label: "Staff" },
-    { key: "shifts", label: "Shift Settings" },
-    { key: "departments", label: "Departments" },
-    { key: "admin_access", label: "Admin Access" },
-  ],
-  facility_settings: [
-    { key: "units", label: "Units" },
-    { key: "rooms_beds", label: "Rooms & Beds" },
-    { key: "privacy", label: "Privacy" },
-  ],
-};
-
 export default function AdminPage() {
   const {
     orgName,
     orgId,
     orgCode,
-    role,
     switchOrg,
 
-    // ✅ org-scoped perms from your updated UserContext
+    // org-scoped perms
     isSuperadmin,
     isOrgAdmin,
     canManageAdmins,
     canScheduleWrite,
   } = useUser();
 
-  // ---------------------------
-  // ✅ New: Section + Tab (organized)
-  // ---------------------------
+  // ---------------------------------
+  // Grouped navigation
+  // ---------------------------------
   const [activeSection, setActiveSection] = useState(() => {
     if (typeof window === "undefined") return "staff_settings";
     return window.localStorage.getItem("admin_active_section") || "staff_settings";
@@ -48,27 +33,24 @@ export default function AdminPage() {
     return window.localStorage.getItem("admin_active_tab") || "staff";
   });
 
-  // Persist
   useEffect(() => {
     if (typeof window !== "undefined") {
       window.localStorage.setItem("admin_active_section", activeSection);
-      window.localStorage.setItem("admin_active_tab", activeTab);
     }
-  }, [activeSection, activeTab]);
-
-  // Keep tab valid when section changes
-  useEffect(() => {
-    const tabs = SECTION_TABS[activeSection] || [];
-    const isValid = tabs.some((t) => t.key === activeTab);
-    if (!isValid) {
-      setActiveTab(tabs[0]?.key || "staff");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSection]);
 
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("admin_active_tab", activeTab);
+    }
+  }, [activeTab]);
+
+  // ---------------------------------
+  // Top-level loading
+  // ---------------------------------
   const [loading, setLoading] = useState(false);
 
-  // ✅ facility switcher (normal users use OrgSwitcher memberships; superadmin uses all orgs list)
+  // Facility switcher
   const [orgSwitcherOpen, setOrgSwitcherOpen] = useState(false);
   const [superOrgs, setSuperOrgs] = useState([]);
   const [superOrgsLoading, setSuperOrgsLoading] = useState(false);
@@ -77,7 +59,7 @@ export default function AdminPage() {
     if (!isSuperadmin) return;
     setSuperOrgsLoading(true);
     try {
-      const data = await api.get("/organizations"); // assumes GET /organizations exists for superadmin
+      const data = await api.get("/organizations");
       setSuperOrgs(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error("LOAD SUPER ORGS ERROR:", e);
@@ -87,9 +69,9 @@ export default function AdminPage() {
     }
   }
 
-  // ---------------------------
+  // ---------------------------------
   // Core Admin Data
-  // ---------------------------
+  // ---------------------------------
   const [staff, setStaff] = useState([]);
   const [units, setUnits] = useState([]);
   const [shiftSettings, setShiftSettings] = useState([]);
@@ -107,6 +89,7 @@ export default function AdminPage() {
   });
 
   const [unitForm, setUnitForm] = useState({ name: "" });
+
   const [shiftForm, setShiftForm] = useState({
     role: "",
     shift_type: "Day",
@@ -114,10 +97,72 @@ export default function AdminPage() {
     end_local: "15:00",
   });
 
-  // ---------------------------
+  // ---------------------------------
+  // ✅ Staff search + permissions UI
+  // ---------------------------------
+  const [staffSearch, setStaffSearch] = useState("");
+
+  // Memberships that drive permissions (Admin + Census/Schedule read/write)
+  const [adminMembers, setAdminMembers] = useState([]);
+  const [adminMembersLoading, setAdminMembersLoading] = useState(false);
+  const [savingMemberId, setSavingMemberId] = useState(null);
+
+  // Key idea: build lookup by staff_id (or user_id fallback)
+  const memberByStaffId = useMemo(() => {
+    const map = new Map();
+    (adminMembers || []).forEach((m) => {
+      if (m.staff_id) map.set(String(m.staff_id), m);
+    });
+    return map;
+  }, [adminMembers]);
+
+  async function loadAdminMembers() {
+    if (!orgId || !orgCode) return;
+    // If your API allows org admins to manage access, keep. Otherwise restrict by canManageAdmins/isSuperadmin
+    if (!isOrgAdmin && !canManageAdmins && !isSuperadmin) return;
+
+    setAdminMembersLoading(true);
+    try {
+      const data = await api.get("/adminmanagement/list", {
+        headers: { "X-Org-Code": orgCode },
+      });
+
+      const list = Array.isArray(data?.memberships) ? data.memberships : [];
+      setAdminMembers(list);
+    } catch (e) {
+      console.error("LOAD ADMIN MEMBERS ERROR:", e);
+      setAdminMembers([]);
+    } finally {
+      setAdminMembersLoading(false);
+    }
+  }
+
+  async function saveMemberPerms(membershipId, patch) {
+    if (!orgCode) return;
+    setSavingMemberId(membershipId);
+    try {
+      const data = await api.patch(`/adminmanagement/${membershipId}`, patch, {
+        headers: { "X-Org-Code": orgCode },
+      });
+
+      const updated = data?.membership || null;
+      if (!updated?.id) return;
+
+      setAdminMembers((prev) =>
+        prev.map((m) => (String(m.id) === String(updated.id) ? { ...m, ...updated } : m))
+      );
+    } catch (e) {
+      alert(e?.response?.data?.error || e?.message || "Failed to update permissions.");
+    } finally {
+      setSavingMemberId(null);
+    }
+  }
+
+  // ---------------------------------
   // ✅ Invite link UX
-  // ---------------------------
+  // ---------------------------------
   const [inviteModal, setInviteModal] = useState(null); // { name, email, phone, actionLink, note }
+
   async function copyToClipboard(text) {
     try {
       await navigator.clipboard.writeText(String(text || ""));
@@ -133,9 +178,9 @@ export default function AdminPage() {
     }
   }
 
-  // ---------------------------
-  // SHIFT SETTINGS UI (ROLE BUBBLES)
-  // ---------------------------
+  // ---------------------------------
+  // ✅ Shift Settings filters (role bubbles)
+  // ---------------------------------
   const [selectedShiftRole, setSelectedShiftRole] = useState("ALL");
 
   const roleOptions = useMemo(() => {
@@ -162,9 +207,19 @@ export default function AdminPage() {
     );
   }, [shiftSettings, selectedShiftRole]);
 
-  // ---------------------------
-  // STAFF ADD + CSV IMPORT
-  // ---------------------------
+  function selectShiftRole(roleName) {
+    const next = roleName || "ALL";
+    setSelectedShiftRole(next);
+
+    if (next !== "ALL") {
+      setShiftForm((p) => ({ ...p, role: next }));
+    }
+    setEditingShiftId(null);
+  }
+
+  // ---------------------------------
+  // CSV import
+  // ---------------------------------
   const [showAddStaff, setShowAddStaff] = useState(false);
   const [staffAdding, setStaffAdding] = useState(false);
 
@@ -172,9 +227,9 @@ export default function AdminPage() {
   const [csvError, setCsvError] = useState("");
   const csvInputRef = useRef(null);
 
-  // ---------------------------
-  // ✅ Departments
-  // ---------------------------
+  // ---------------------------------
+  // Departments
+  // ---------------------------------
   const [departments, setDepartments] = useState([]);
   const [departmentsLoading, setDepartmentsLoading] = useState(false);
 
@@ -186,7 +241,7 @@ export default function AdminPage() {
     if (!orgId) return;
     setDepartmentsLoading(true);
     try {
-      const data = await api.get("/departments"); // org-scoped by X-Org-Code from api interceptor
+      const data = await api.get("/departments");
       setDepartments(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error("LOAD DEPARTMENTS ERROR:", e);
@@ -263,16 +318,109 @@ export default function AdminPage() {
     }
   }
 
-  // ---------------------------
-  // PRIVACY SETTINGS
-  // ---------------------------
+  // ---------------------------------
+  // Privacy + Facility Settings
+  // ---------------------------------
   const [orgSettings, setOrgSettings] = useState(null);
   const [privacySaving, setPrivacySaving] = useState(false);
   const [showAck, setShowAck] = useState(false);
 
-  // ---------------------------
-  // ROOMS & BEDS
-  // ---------------------------
+  // ✅ NEW: lunch break length (minutes) for PPD accuracy
+  const [lunchBreakMins, setLunchBreakMins] = useState(30);
+  const [lunchSaving, setLunchSaving] = useState(false);
+
+  // ✅ NEW: pay period settings for OT
+  const [payPeriod, setPayPeriod] = useState({
+    length_days: 14,
+    week_starts_on: "Sunday", // Sunday/Monday etc
+    anchor_date: "", // YYYY-MM-DD (optional)
+  });
+  const [payPeriodSaving, setPayPeriodSaving] = useState(false);
+
+  const canManagePrivacy = !!isOrgAdmin;
+  const canManageFacility = !!isOrgAdmin;
+
+  async function loadOrgSettings() {
+    try {
+      const data = await api.get("/org-settings");
+      setOrgSettings(data);
+
+      // best-effort fill for new settings (if your backend already stores them)
+      const lb = Number(data?.lunch_break_minutes);
+      if (!Number.isNaN(lb) && lb >= 0) setLunchBreakMins(lb);
+
+      const pp = data?.pay_period || null;
+      if (pp) {
+        setPayPeriod((p) => ({
+          ...p,
+          length_days: Number(pp.length_days || p.length_days),
+          week_starts_on: String(pp.week_starts_on || p.week_starts_on),
+          anchor_date: String(pp.anchor_date || p.anchor_date || ""),
+        }));
+      }
+    } catch (e) {
+      console.error("ORG SETTINGS LOAD ERROR:", e);
+      setOrgSettings({
+        show_patient_identifiers: false,
+        identifier_format: "first_last_initial",
+      });
+    }
+  }
+
+  async function savePrivacy({ enabled, format, acknowledged }) {
+    setPrivacySaving(true);
+    try {
+      const updated = await api.put("/org-settings/identifiers", {
+        enabled,
+        format,
+        acknowledged,
+      });
+      setOrgSettings(updated);
+      setShowAck(false);
+    } catch (e) {
+      alert(e?.message || "Failed to update privacy settings");
+    } finally {
+      setPrivacySaving(false);
+    }
+  }
+
+  // ✅ NEW: save lunch break minutes
+  async function saveLunchBreakMinutes() {
+    setLunchSaving(true);
+    try {
+      const mins = Math.max(0, Math.min(240, Number(lunchBreakMins || 0)));
+      const updated = await api.put("/org-settings/lunch-break", { minutes: mins });
+      setOrgSettings((p) => ({ ...p, ...(updated || {}) }));
+      alert("Lunch break saved.");
+    } catch (e) {
+      alert(e?.response?.data?.error || e?.message || "Failed to save lunch break.");
+    } finally {
+      setLunchSaving(false);
+    }
+  }
+
+  // ✅ NEW: save pay period settings
+  async function savePayPeriod() {
+    setPayPeriodSaving(true);
+    try {
+      const payload = {
+        length_days: Number(payPeriod.length_days || 14),
+        week_starts_on: String(payPeriod.week_starts_on || "Sunday"),
+        anchor_date: payPeriod.anchor_date ? String(payPeriod.anchor_date) : null,
+      };
+      const updated = await api.put("/org-settings/pay-period", payload);
+      setOrgSettings((p) => ({ ...p, ...(updated || {}) }));
+      alert("Pay period saved.");
+    } catch (e) {
+      alert(e?.response?.data?.error || e?.message || "Failed to save pay period.");
+    } finally {
+      setPayPeriodSaving(false);
+    }
+  }
+
+  // ---------------------------------
+  // Rooms & Beds
+  // ---------------------------------
   const [rooms, setRooms] = useState([]);
   const [roomsLoading, setRoomsLoading] = useState(false);
   const [selectedRoomId, setSelectedRoomId] = useState(null);
@@ -289,119 +437,8 @@ export default function AdminPage() {
 
   const dragBedIdRef = useRef(null);
 
-  // ✅ Admin management
-  const [adminMembers, setAdminMembers] = useState([]);
-  const [adminMembersLoading, setAdminMembersLoading] = useState(false);
-  const [adminSearch, setAdminSearch] = useState("");
-  const [savingMemberUserId, setSavingMemberUserId] = useState(null);
-
-  // ✅ Permissions derived from ORG SCOPED flags
-  const canManagePrivacy = !!isOrgAdmin; // tighten later if you want separate flag
-  const canManageFacility = !!isOrgAdmin; // tighten later if you want separate flag
-
-  // ✅ IMPORTANT: reload org-scoped data whenever orgId changes
-  useEffect(() => {
-    if (!orgId) return;
-    loadAll();
-    loadOrgSettings();
-    loadDepartments();
-
-    // load tab-specific
-    if (activeTab === "rooms_beds") loadRooms();
-    if (activeTab === "admin_access" && (canManageAdmins || isSuperadmin)) loadAdminMembers();
-
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orgId]);
-
-  // initial load for superadmin org list (for Change Facility)
-  useEffect(() => {
-    if (isSuperadmin) loadSuperOrgs();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSuperadmin]);
-
-  async function loadAll() {
-    setLoading(true);
-    try {
-      const [s, u, ss] = await Promise.all([
-        api.get("/staff"),
-        api.get("/units"),
-        api.get("/shift-settings"),
-      ]);
-      setStaff(Array.isArray(s) ? s : []);
-      setUnits(Array.isArray(u) ? u : []);
-      setShiftSettings(Array.isArray(ss) ? ss : []);
-    } catch (err) {
-      console.error("ADMIN LOAD ERROR:", err);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function loadOrgSettings() {
-    try {
-      const data = await api.get("/org-settings");
-      setOrgSettings(data);
-    } catch (e) {
-      console.error("ORG SETTINGS LOAD ERROR:", e);
-      setOrgSettings({
-        show_patient_identifiers: false,
-        identifier_format: "first_last_initial",
-        identifiers_acknowledged: false,
-      });
-    }
-  }
-
-  // ---------------------------
-  // Admin memberships load
-  // ---------------------------
-  async function loadAdminMembers() {
-    if (!orgId || !orgCode) return;
-    if (!canManageAdmins && !isSuperadmin) return;
-
-    setAdminMembersLoading(true);
-    try {
-      const data = await api.get("/adminmanagement/list", {
-        headers: { "X-Org-Code": orgCode },
-      });
-
-      const list = Array.isArray(data?.memberships) ? data.memberships : [];
-      setAdminMembers(list);
-    } catch (e) {
-      console.error("LOAD ADMIN MEMBERS ERROR:", e);
-      alert(e?.response?.data?.error || e?.message || "Failed to load admin memberships.");
-      setAdminMembers([]);
-    } finally {
-      setAdminMembersLoading(false);
-    }
-  }
-
-  async function saveMemberPerms(membershipId, patch) {
-    if (!orgCode) return;
-    setSavingMemberUserId(membershipId);
-    try {
-      const data = await api.patch(`/adminmanagement/${membershipId}`, patch, {
-        headers: { "X-Org-Code": orgCode },
-      });
-
-      const updated = data?.membership || null;
-      if (!updated?.id) return;
-
-      setAdminMembers((prev) =>
-        prev.map((m) => (String(m.id) === String(updated.id) ? { ...m, ...updated } : m))
-      );
-    } catch (e) {
-      alert(e?.response?.data?.error || e?.message || "Failed to update member permissions.");
-    } finally {
-      setSavingMemberUserId(null);
-    }
-  }
-
-  // ---------------------------
-  // Rooms/Beds load
-  // ---------------------------
   async function loadRooms() {
     setRoomsLoading(true);
-    setBedsLoading(true);
     try {
       const data = await api.get("/facility/rooms");
       const list = Array.isArray(data) ? data : [];
@@ -411,25 +448,19 @@ export default function AdminPage() {
 
       const firstActive = sorted.find((r) => r.is_active !== false) || sorted[0] || null;
 
-      setSelectedRoomId((prev) => {
-        if (prev) return prev;
-        return firstActive?.id ?? null;
-      });
+      setSelectedRoomId((prev) => (prev ? prev : firstActive?.id ?? null));
 
       const currentRoomId = (selectedRoomId ?? firstActive?.id) || null;
 
       if (currentRoomId) {
-        const room = sorted.find((r) => String(r.id) === String(currentRoomId));
+        const room = sorted.find((r) => r.id === currentRoomId);
         setBeds(Array.isArray(room?.beds) ? room.beds.slice().sort(sortByOrderThenLabel) : []);
       } else {
         setBeds([]);
       }
     } catch (e) {
       console.error("LOAD ROOMS ERROR:", e);
-      alert(
-        e?.message ||
-          "Failed to load rooms. If you haven’t added the backend /api/facility routes yet, say so and I’ll wire them."
-      );
+      alert(e?.message || "Failed to load rooms.");
     } finally {
       setRoomsLoading(false);
       setBedsLoading(false);
@@ -438,85 +469,279 @@ export default function AdminPage() {
 
   function syncBedsFromRooms(roomId, roomsList) {
     const list = Array.isArray(roomsList) ? roomsList : rooms;
-    const room = list.find((r) => String(r.id) === String(roomId));
+    const room = list.find((r) => r.id === roomId);
     const nextBeds = Array.isArray(room?.beds) ? room.beds.slice().sort(sortByOrderThenLabel) : [];
     setBeds(nextBeds);
   }
 
-  useEffect(() => {
-    if (activeTab !== "rooms_beds") return;
-    if (!orgId) return;
-    loadRooms();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, orgId]);
-
-  useEffect(() => {
-    if (activeTab !== "admin_access") return;
-    if (!orgId) return;
-    if (!canManageAdmins && !isSuperadmin) return;
-    loadAdminMembers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, orgId, canManageAdmins, isSuperadmin]);
-
-  useEffect(() => {
-    if (activeTab !== "departments") return;
-    if (!orgId) return;
-    loadDepartments();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, orgId]);
-
-  useEffect(() => {
-    if (activeTab !== "rooms_beds") return;
-    if (!selectedRoomId) {
-      setBeds([]);
-      return;
-    }
-    setBedsLoading(true);
+  async function addRoom() {
+    if (!canManageFacility) return;
+    const name = String(roomForm.name || "").trim();
+    if (!name) return;
+    setRoomSaving(true);
     try {
-      syncBedsFromRooms(selectedRoomId);
-    } finally {
-      setBedsLoading(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedRoomId, activeTab, rooms]);
-
-  // ---------------------------
-  // Privacy save
-  // ---------------------------
-  async function savePrivacy({ enabled, format, acknowledged }) {
-    setPrivacySaving(true);
-    try {
-      const updated = await api.put("/org-settings/identifiers", {
-        enabled,
-        format,
-        acknowledged,
+      const created = await api.post("/facility/rooms", {
+        name,
+        is_active: !!roomForm.is_active,
       });
-      setOrgSettings(updated);
-      alert("Privacy settings saved.");
+
+      setRooms((prev) => {
+        const next = [...prev, created].sort(sortByOrderThenName);
+        if (!selectedRoomId && created?.id) setSelectedRoomId(created.id);
+        return next;
+      });
+
+      setRoomForm({ name: "", is_active: true });
     } catch (e) {
-      alert(e?.response?.data?.error || e.message || "Failed to update privacy settings");
+      alert(e?.message || "Failed to add room.");
     } finally {
-      setPrivacySaving(false);
+      setRoomSaving(false);
     }
   }
 
-  // ==================================================
-  // SHIFT SETTINGS UI HELPERS
-  // ==================================================
-  function selectShiftRole(roleName) {
-    const next = roleName || "ALL";
-    setSelectedShiftRole(next);
-
-    if (next !== "ALL") {
-      setShiftForm((p) => ({ ...p, role: next }));
+  async function saveRoom(id) {
+    if (!canManageFacility) return;
+    const name = String(roomForm.name || "").trim();
+    if (!name) return;
+    setRoomSaving(true);
+    try {
+      const updated = await api.patch(`/facility/rooms/${id}`, {
+        name,
+        is_active: !!roomForm.is_active,
+      });
+      setRooms((prev) =>
+        prev
+          .map((r) => (r.id === id ? { ...r, ...updated } : r))
+          .sort(sortByOrderThenName)
+      );
+      setEditingRoomId(null);
+      setRoomForm({ name: "", is_active: true });
+    } catch (e) {
+      alert(e?.message || "Failed to save room.");
+    } finally {
+      setRoomSaving(false);
     }
+  }
 
+  async function toggleRoomActive(room) {
+    if (!canManageFacility) return;
+    setRoomSaving(true);
+    try {
+      const updated = await api.patch(`/facility/rooms/${room.id}`, {
+        is_active: !(room.is_active !== false),
+      });
+      setRooms((prev) =>
+        prev
+          .map((r) => (r.id === room.id ? { ...r, ...updated } : r))
+          .sort(sortByOrderThenName)
+      );
+    } catch (e) {
+      alert(e?.message || "Failed to update room.");
+    } finally {
+      setRoomSaving(false);
+    }
+  }
+
+  async function addBed() {
+    if (!canManageFacility) return;
+    if (!selectedRoomId) return alert("Select a room first.");
+    const label = String(bedForm.label || "").trim();
+    if (!label) return;
+    setBedSaving(true);
+    try {
+      const created = await api.post(`/facility/rooms/${selectedRoomId}/beds`, {
+        label,
+        is_active: !!bedForm.is_active,
+      });
+
+      setBeds((prev) => [...prev, created].sort(sortByOrderThenLabel));
+
+      setRooms((prev) =>
+        prev.map((r) => {
+          if (r.id !== selectedRoomId) return r;
+          const nextBeds = Array.isArray(r.beds) ? [...r.beds, created] : [created];
+          return { ...r, beds: nextBeds };
+        })
+      );
+
+      setBedForm({ label: "", is_active: true });
+    } catch (e) {
+      alert(e?.message || "Failed to add bed.");
+    } finally {
+      setBedSaving(false);
+    }
+  }
+
+  async function saveBed(id) {
+    if (!canManageFacility) return;
+    const label = String(bedForm.label || "").trim();
+    if (!label) return;
+    setBedSaving(true);
+    try {
+      const updated = await api.patch(`/facility/beds/${id}`, {
+        label,
+        is_active: !!bedForm.is_active,
+      });
+
+      setBeds((prev) => prev.map((b) => (b.id === id ? updated : b)).sort(sortByOrderThenLabel));
+
+      setRooms((prev) =>
+        prev.map((r) => {
+          if (r.id !== selectedRoomId) return r;
+          const nextBeds = (Array.isArray(r.beds) ? r.beds : []).map((b) => (b.id === id ? updated : b));
+          return { ...r, beds: nextBeds };
+        })
+      );
+
+      setEditingBedId(null);
+      setBedForm({ label: "", is_active: true });
+    } catch (e) {
+      alert(e?.message || "Failed to save bed.");
+    } finally {
+      setBedSaving(false);
+    }
+  }
+
+  async function toggleBedActive(bed) {
+    if (!canManageFacility) return;
+    setBedSaving(true);
+    try {
+      const updated = await api.patch(`/facility/beds/${bed.id}`, {
+        is_active: !(bed.is_active !== false),
+      });
+
+      setBeds((prev) => prev.map((b) => (b.id === bed.id ? updated : b)).sort(sortByOrderThenLabel));
+
+      setRooms((prev) =>
+        prev.map((r) => {
+          if (r.id !== selectedRoomId) return r;
+          const nextBeds = (Array.isArray(r.beds) ? r.beds : []).map((b) => (b.id === bed.id ? updated : b));
+          return { ...r, beds: nextBeds };
+        })
+      );
+    } catch (e) {
+      alert(e?.message || "Failed to update bed.");
+    } finally {
+      setBedSaving(false);
+    }
+  }
+
+  async function persistBedOrder(nextBeds) {
+    if (!canManageFacility) return;
+    if (!selectedRoomId) return;
+
+    setBeds(nextBeds);
+
+    setRooms((prev) =>
+      prev.map((r) => {
+        if (r.id !== selectedRoomId) return r;
+        return { ...r, beds: nextBeds };
+      })
+    );
+
+    try {
+      const bed_ids = nextBeds.map((b) => b.id);
+      await api.post("/facility/beds/reorder", {
+        room_id: selectedRoomId,
+        bed_ids,
+      });
+    } catch (e) {
+      console.error("REORDER SAVE ERROR:", e);
+      alert(e?.message || "Failed to save bed order.");
+    }
+  }
+
+  function onBedDragStart(bedId) {
+    dragBedIdRef.current = bedId;
+  }
+
+  function onBedDrop(targetBedId) {
+    const fromId = dragBedIdRef.current;
+    dragBedIdRef.current = null;
+    if (!fromId || fromId === targetBedId) return;
+
+    const fromIdx = beds.findIndex((b) => b.id === fromId);
+    const toIdx = beds.findIndex((b) => b.id === targetBedId);
+    if (fromIdx < 0 || toIdx < 0) return;
+
+    const next = beds.slice();
+    const [item] = next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, item);
+    persistBedOrder(next);
+  }
+
+  function moveBedByIndex(fromIdx, toIdx) {
+    if (toIdx < 0 || toIdx >= beds.length) return;
+    const next = beds.slice();
+    const [item] = next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, item);
+    persistBedOrder(next);
+  }
+
+  // ---------------------------------
+  // Units actions
+  // ---------------------------------
+  async function addUnit() {
+    const name = String(unitForm.name || "").trim();
+    if (!name) return;
+    const created = await api.post("/units", { name });
+    setUnits((prev) => [...prev, created]);
+    setUnitForm({ name: "" });
+  }
+
+  async function saveUnit(id) {
+    const name = String(unitForm.name || "").trim();
+    if (!name) return;
+    const updated = await api.patch(`/units/${id}`, { name });
+    setUnits((prev) => prev.map((u) => (u.id === id ? updated : u)));
+    setEditingUnitId(null);
+  }
+
+  async function deleteUnit(id) {
+    if (!window.confirm("Delete this unit?")) return;
+    await api.delete(`/units/${id}`);
+    setUnits((prev) => prev.filter((u) => u.id !== id));
+  }
+
+  // ---------------------------------
+  // Shift settings actions
+  // ---------------------------------
+  async function addShift() {
+    const roleVal =
+      selectedShiftRole !== "ALL" ? selectedShiftRole : String(shiftForm.role || "").trim();
+    if (!roleVal) return;
+
+    const created = await api.post("/shift-settings", { ...shiftForm, role: roleVal });
+    setShiftSettings((prev) => [...prev, created]);
+
+    setShiftForm((p) => ({
+      ...p,
+      role: selectedShiftRole !== "ALL" ? selectedShiftRole : "",
+      shift_type: "Day",
+      start_local: "07:00",
+      end_local: "15:00",
+    }));
+  }
+
+  async function saveShift(id) {
+    const roleVal =
+      selectedShiftRole !== "ALL" ? selectedShiftRole : String(shiftForm.role || "").trim();
+    if (!roleVal) return;
+
+    const updated = await api.patch(`/shift-settings/${id}`, { ...shiftForm, role: roleVal });
+    setShiftSettings((prev) => prev.map((s) => (s.id === id ? updated : s)));
     setEditingShiftId(null);
   }
 
-  // ==================================================
-  // STAFF ACTIONS
-  // ==================================================
+  async function deleteShift(id) {
+    if (!window.confirm("Delete this shift setting?")) return;
+    await api.delete(`/shift-settings/${id}`);
+    setShiftSettings((prev) => prev.filter((s) => s.id !== id));
+  }
+
+  // ---------------------------------
+  // Staff actions
+  // ---------------------------------
   async function addStaff() {
     const payload = {
       name: String(staffForm.name || "").trim(),
@@ -531,10 +756,10 @@ export default function AdminPage() {
     setStaffAdding(true);
     try {
       const created = await api.post("/staff", payload);
-
       setStaff((prev) => [...prev, created]);
       setShowAddStaff(false);
 
+      // invite UX
       if (created?.actionLink) {
         setInviteModal({
           name: created?.name || payload.name,
@@ -557,12 +782,11 @@ export default function AdminPage() {
       }
 
       setStaffForm({ name: "", role: "", email: "", phone: "", department_id: "" });
+
+      // refresh permissions list because new staff might get membership row created
+      loadAdminMembers();
     } catch (e) {
-      alert(
-        e?.response?.data?.error ||
-          e?.message ||
-          "Failed to add staff. If POST /staff isn't wired yet, tell me and I’ll add the backend route."
-      );
+      alert(e?.message || "Failed to add staff.");
     } finally {
       setStaffAdding(false);
     }
@@ -579,7 +803,6 @@ export default function AdminPage() {
     const updated = await api.patch(`/staff/${id}`, payload);
     setStaff((prev) => prev.map((s) => (s.id === id ? updated : s)));
     setEditingStaffId(null);
-    setStaffForm({ name: "", role: "", email: "", phone: "", department_id: "" });
   }
 
   async function deleteStaff(id) {
@@ -588,8 +811,14 @@ export default function AdminPage() {
     setStaff((prev) => prev.filter((s) => s.id !== id));
   }
 
+  // ---------------------------------
+  // CSV helpers
+  // ---------------------------------
   function normalizeHeader(h) {
-    return String(h || "").trim().toLowerCase().replace(/\s+/g, "_");
+    return String(h || "")
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, "_");
   }
 
   function parseCsvText(text) {
@@ -651,9 +880,15 @@ export default function AdminPage() {
     const idxName = header.findIndex((h) => h === "name" || h === "full_name");
     const idxRole = header.findIndex((h) => h === "role" || h === "title");
     const idxEmail = header.findIndex((h) => h === "email" || h === "e-mail");
-    const idxPhone = header.findIndex((h) => h === "phone" || h === "phone_number" || h === "mobile");
+    const idxPhone = header.findIndex(
+      (h) => h === "phone" || h === "phone_number" || h === "mobile"
+    );
     const idxDept = header.findIndex(
-      (h) => h === "department_id" || h === "department" || h === "dept" || h === "department_name"
+      (h) =>
+        h === "department_id" ||
+        h === "department" ||
+        h === "dept" ||
+        h === "department_name"
     );
 
     const errors = [];
@@ -736,6 +971,8 @@ export default function AdminPage() {
 
       setStaff((prev) => [...prev, ...created]);
       alert(`Imported ${created.length} staff member(s).`);
+
+      loadAdminMembers();
     } catch (e) {
       console.error("CSV UPLOAD ERROR:", e);
       setCsvError(e?.message || "Failed to import CSV.");
@@ -745,316 +982,9 @@ export default function AdminPage() {
     }
   }
 
-  // ==================================================
-  // UNIT ACTIONS
-  // ==================================================
-  async function addUnit() {
-    const name = String(unitForm.name || "").trim();
-    if (!name) return;
-    const created = await api.post("/units", { name });
-    setUnits((prev) => [...prev, created].sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || ""), undefined, { numeric: true })));
-    setUnitForm({ name: "" });
-  }
-
-  async function saveUnit(id) {
-    const name = String(unitForm.name || "").trim();
-    if (!name) return;
-    const updated = await api.patch(`/units/${id}`, { name });
-    setUnits((prev) => prev.map((u) => (u.id === id ? updated : u)).sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || ""), undefined, { numeric: true })));
-    setEditingUnitId(null);
-    setUnitForm({ name: "" });
-  }
-
-  async function deleteUnit(id) {
-    if (!window.confirm("Delete this unit?")) return;
-    await api.delete(`/units/${id}`);
-    setUnits((prev) => prev.filter((u) => u.id !== id));
-  }
-
-  // ==================================================
-  // SHIFT SETTINGS ACTIONS
-  // ==================================================
-  async function addShift() {
-    const roleVal =
-      selectedShiftRole !== "ALL" ? selectedShiftRole : String(shiftForm.role || "").trim();
-
-    if (!roleVal) return alert("Role is required.");
-
-    const created = await api.post("/shift-settings", { ...shiftForm, role: roleVal });
-    setShiftSettings((prev) => [...prev, created]);
-
-    setShiftForm((p) => ({
-      ...p,
-      role: selectedShiftRole !== "ALL" ? selectedShiftRole : "",
-      shift_type: "Day",
-      start_local: "07:00",
-      end_local: "15:00",
-    }));
-  }
-
-  async function saveShift(id) {
-    const roleVal =
-      selectedShiftRole !== "ALL" ? selectedShiftRole : String(shiftForm.role || "").trim();
-
-    if (!roleVal) return alert("Role is required.");
-
-    const updated = await api.patch(`/shift-settings/${id}`, { ...shiftForm, role: roleVal });
-    setShiftSettings((prev) => prev.map((s) => (s.id === id ? updated : s)));
-    setEditingShiftId(null);
-  }
-
-  async function deleteShift(id) {
-    if (!window.confirm("Delete this shift setting?")) return;
-    await api.delete(`/shift-settings/${id}`);
-    setShiftSettings((prev) => prev.filter((s) => s.id !== id));
-  }
-
-  // ==================================================
-  // ROOMS ACTIONS
-  // ==================================================
-  async function addRoom() {
-    if (!canManageFacility) return alert("You don’t have permission to change facility settings.");
-    const name = String(roomForm.name || "").trim();
-    if (!name) return;
-    setRoomSaving(true);
-    try {
-      const created = await api.post("/facility/rooms", {
-        name,
-        is_active: !!roomForm.is_active,
-      });
-
-      setRooms((prev) => {
-        const next = [...prev, created].sort(sortByOrderThenName);
-        if (!selectedRoomId && created?.id) setSelectedRoomId(created.id);
-        return next;
-      });
-
-      setRoomForm({ name: "", is_active: true });
-      if (!selectedRoomId && created?.id) setBeds([]);
-    } catch (e) {
-      alert(e?.response?.data?.error || e?.message || "Failed to add room.");
-    } finally {
-      setRoomSaving(false);
-    }
-  }
-
-  async function saveRoom(id) {
-    if (!canManageFacility) return alert("You don’t have permission to change facility settings.");
-    const name = String(roomForm.name || "").trim();
-    if (!name) return;
-    setRoomSaving(true);
-    try {
-      const updated = await api.patch(`/facility/rooms/${id}`, {
-        name,
-        is_active: !!roomForm.is_active,
-      });
-      setRooms((prev) =>
-        prev
-          .map((r) => (r.id === id ? { ...r, ...updated } : r))
-          .sort(sortByOrderThenName)
-      );
-      setEditingRoomId(null);
-      setRoomForm({ name: "", is_active: true });
-    } catch (e) {
-      alert(e?.response?.data?.error || e?.message || "Failed to save room.");
-    } finally {
-      setRoomSaving(false);
-    }
-  }
-
-  async function toggleRoomActive(room) {
-    if (!canManageFacility) return alert("You don’t have permission to change facility settings.");
-    setRoomSaving(true);
-    try {
-      const updated = await api.patch(`/facility/rooms/${room.id}`, {
-        is_active: !(room.is_active !== false),
-      });
-      setRooms((prev) =>
-        prev
-          .map((r) => (r.id === room.id ? { ...r, ...updated } : r))
-          .sort(sortByOrderThenName)
-      );
-    } catch (e) {
-      alert(e?.response?.data?.error || e?.message || "Failed to update room.");
-    } finally {
-      setRoomSaving(false);
-    }
-  }
-
-  // ==================================================
-  // BEDS ACTIONS
-  // ==================================================
-  async function addBed() {
-    if (!canManageFacility) return alert("You don’t have permission to change facility settings.");
-    if (!selectedRoomId) return alert("Select a room first.");
-    const label = String(bedForm.label || "").trim();
-    if (!label) return;
-    setBedSaving(true);
-    try {
-      const created = await api.post(`/facility/rooms/${selectedRoomId}/beds`, {
-        label,
-        is_active: !!bedForm.is_active,
-      });
-
-      setBeds((prev) => [...prev, created].sort(sortByOrderThenLabel));
-
-      setRooms((prev) =>
-        prev
-          .map((r) => {
-            if (String(r.id) !== String(selectedRoomId)) return r;
-            const nextBeds = Array.isArray(r.beds) ? [...r.beds, created] : [created];
-            return { ...r, beds: nextBeds };
-          })
-          .sort(sortByOrderThenName)
-      );
-
-      setBedForm({ label: "", is_active: true });
-    } catch (e) {
-      alert(e?.response?.data?.error || e?.message || "Failed to add bed.");
-    } finally {
-      setBedSaving(false);
-    }
-  }
-
-  async function saveBed(id) {
-    if (!canManageFacility) return alert("You don’t have permission to change facility settings.");
-    const label = String(bedForm.label || "").trim();
-    if (!label) return;
-    setBedSaving(true);
-    try {
-      const updated = await api.patch(`/facility/beds/${id}`, {
-        label,
-        is_active: !!bedForm.is_active,
-      });
-
-      setBeds((prev) => prev.map((b) => (b.id === id ? updated : b)).sort(sortByOrderThenLabel));
-
-      setRooms((prev) =>
-        prev.map((r) => {
-          if (String(r.id) !== String(selectedRoomId)) return r;
-          const nextBeds = (Array.isArray(r.beds) ? r.beds : []).map((b) => (b.id === id ? updated : b));
-          return { ...r, beds: nextBeds };
-        })
-      );
-
-      setEditingBedId(null);
-      setBedForm({ label: "", is_active: true });
-    } catch (e) {
-      alert(e?.response?.data?.error || e?.message || "Failed to save bed.");
-    } finally {
-      setBedSaving(false);
-    }
-  }
-
-  async function toggleBedActive(bed) {
-    if (!canManageFacility) return alert("You don’t have permission to change facility settings.");
-    setBedSaving(true);
-    try {
-      const updated = await api.patch(`/facility/beds/${bed.id}`, {
-        is_active: !(bed.is_active !== false),
-      });
-
-      setBeds((prev) => prev.map((b) => (b.id === bed.id ? updated : b)).sort(sortByOrderThenLabel));
-
-      setRooms((prev) =>
-        prev.map((r) => {
-          if (String(r.id) !== String(selectedRoomId)) return r;
-          const nextBeds = (Array.isArray(r.beds) ? r.beds : []).map((b) => (b.id === bed.id ? updated : b));
-          return { ...r, beds: nextBeds };
-        })
-      );
-    } catch (e) {
-      alert(e?.response?.data?.error || e?.message || "Failed to update bed.");
-    } finally {
-      setBedSaving(false);
-    }
-  }
-
-  async function persistBedOrder(nextBeds) {
-    if (!canManageFacility) return alert("You don’t have permission to change facility settings.");
-    if (!selectedRoomId) return;
-
-    setBeds(nextBeds);
-    setRooms((prev) =>
-      prev.map((r) => {
-        if (String(r.id) !== String(selectedRoomId)) return r;
-        return { ...r, beds: nextBeds };
-      })
-    );
-
-    try {
-      const bed_ids = nextBeds.map((b) => b.id);
-      await api.post("/facility/beds/reorder", {
-        room_id: selectedRoomId,
-        bed_ids,
-      });
-    } catch (e) {
-      console.error("REORDER SAVE ERROR:", e);
-      alert(e?.response?.data?.error || e?.message || "Failed to save bed order.");
-    }
-  }
-
-  function moveBedByIndex(fromIdx, toIdx) {
-    if (toIdx < 0 || toIdx >= beds.length) return;
-    const next = beds.slice();
-    const [item] = next.splice(fromIdx, 1);
-    next.splice(toIdx, 0, item);
-    persistBedOrder(next);
-  }
-
-  function onBedDragStart(bedId) {
-    dragBedIdRef.current = bedId;
-  }
-
-  function onBedDrop(targetBedId) {
-    const fromId = dragBedIdRef.current;
-    dragBedIdRef.current = null;
-    if (!fromId || fromId === targetBedId) return;
-
-    const fromIdx = beds.findIndex((b) => b.id === fromId);
-    const toIdx = beds.findIndex((b) => b.id === targetBedId);
-    if (fromIdx < 0 || toIdx < 0) return;
-
-    const next = beds.slice();
-    const [item] = next.splice(fromIdx, 1);
-    next.splice(toIdx, 0, item);
-    persistBedOrder(next);
-  }
-
-  const headerSubtitle = useMemo(() => {
-    const roomCount = rooms?.length ? rooms.length : null;
-    const bedCount = beds?.length ? beds.length : null;
-    if (activeTab !== "rooms_beds") return null;
-    const selectedRoom = rooms.find((r) => String(r.id) === String(selectedRoomId));
-    const roomLabel = selectedRoom ? `Room: ${selectedRoom.name}` : "No room selected";
-    const suffix = bedCount !== null ? ` • ${bedCount} beds` : "";
-    return `${roomLabel}${suffix}${roomCount !== null ? ` • ${roomCount} rooms total` : ""}`;
-  }, [activeTab, rooms, beds, selectedRoomId]);
-
-  const filteredAdminMembers = useMemo(() => {
-    const q = String(adminSearch || "").trim().toLowerCase();
-    if (!q) return adminMembers;
-
-    return (adminMembers || []).filter((m) => {
-      const hay = [
-        m.staff_name,
-        m.display_name,
-        m.email,
-        m.phone,
-        m.staff_role,
-        m.role,
-        m.user_id,
-        m.id,
-        m.department_id,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-
-      return hay.includes(q);
-    });
-  }, [adminMembers, adminSearch]);
-
+  // ---------------------------------
+  // Derived lists
+  // ---------------------------------
   const deptOptions = useMemo(() => {
     return (departments || [])
       .slice()
@@ -1065,6 +995,159 @@ export default function AdminPage() {
         })
       );
   }, [departments]);
+
+  const filteredStaff = useMemo(() => {
+    const q = String(staffSearch || "").trim().toLowerCase();
+    if (!q) return staff;
+
+    return (staff || []).filter((s) => {
+      const hay = [s.id, s.name, s.role, s.email, s.phone, s.department_id]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }, [staff, staffSearch]);
+
+  const headerSubtitle = useMemo(() => {
+    const roomCount = rooms?.length ? rooms.length : null;
+    const bedCount = beds?.length ? beds.length : null;
+    if (activeTab !== "rooms_beds") return null;
+    const selectedRoom = rooms.find((r) => r.id === selectedRoomId);
+    const roomLabel = selectedRoom ? `Room: ${selectedRoom.name}` : "No room selected";
+    const suffix = bedCount !== null ? ` • ${bedCount} beds` : "";
+    return `${roomLabel}${suffix}${roomCount !== null ? ` • ${roomCount} rooms total` : ""}`;
+  }, [activeTab, rooms, beds, selectedRoomId]);
+
+  // ---------------------------------
+  // Tabs
+  // ---------------------------------
+  const staffTabs = useMemo(() => [{ key: "staff", label: "Staff" }], []);
+  const facilityTabs = useMemo(
+    () => [
+      { key: "shifts", label: "Shift Settings" },
+      { key: "departments", label: "Departments" },
+      { key: "units", label: "Units" },
+      { key: "rooms_beds", label: "Rooms & Beds" },
+      { key: "privacy", label: "Privacy" },
+      { key: "pay_period", label: "Pay Period" },
+    ],
+    []
+  );
+
+  function setSection(nextSection) {
+    setActiveSection(nextSection);
+    const nextTabs = nextSection === "facility_settings" ? facilityTabs : staffTabs;
+    const safeTab = nextTabs.find((t) => t.key === activeTab)?.key || nextTabs[0]?.key || "staff";
+    setActiveTab(safeTab);
+  }
+
+  // ---------------------------------
+  // Initial loading
+  // ---------------------------------
+  useEffect(() => {
+    if (!orgId) return;
+    loadAll();
+    loadOrgSettings();
+    loadDepartments();
+    loadAdminMembers(); // ✅ staff permissions need this
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgId]);
+
+  useEffect(() => {
+    if (isSuperadmin) loadSuperOrgs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSuperadmin]);
+
+  async function loadAll() {
+    setLoading(true);
+    try {
+      const [s, u, ss] = await Promise.all([
+        api.get("/staff"),
+        api.get("/units"),
+        api.get("/shift-settings"),
+      ]);
+      setStaff(Array.isArray(s) ? s : []);
+      setUnits(Array.isArray(u) ? u : []);
+      setShiftSettings(Array.isArray(ss) ? ss : []);
+    } catch (err) {
+      console.error("ADMIN LOAD ERROR:", err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // On-demand loaders
+  useEffect(() => {
+    if (!orgId) return;
+
+    if (activeTab === "rooms_beds") loadRooms();
+    if (activeTab === "departments") loadDepartments();
+    if (activeTab === "privacy" || activeTab === "pay_period" || activeTab === "shifts") loadOrgSettings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, orgId]);
+
+  useEffect(() => {
+    if (activeTab !== "rooms_beds") return;
+    if (!selectedRoomId) {
+      setBeds([]);
+      return;
+    }
+    setBedsLoading(true);
+    try {
+      syncBedsFromRooms(selectedRoomId);
+    } finally {
+      setBedsLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRoomId, activeTab, rooms]);
+
+  // ---------------------------------
+  // ✅ Permission helpers: Admin -> show census/schedule
+  // ---------------------------------
+  function getMembershipForStaff(staffId) {
+    return memberByStaffId.get(String(staffId)) || null;
+  }
+
+  function isAdminForStaff(staffId) {
+    const m = getMembershipForStaff(staffId);
+    return !!(m?.is_org_admin || m?.can_manage_admins || m?.can_schedule_read || m?.can_schedule_write || m?.can_census_read || m?.can_census_write);
+  }
+
+  async function toggleAdminForStaff(staffId, checked) {
+    const m = getMembershipForStaff(staffId);
+    if (!m?.id) {
+      alert("No permission record found for this staff member yet. (Backend needs to create membership row.)");
+      return;
+    }
+
+    if (checked) {
+      // turning admin ON (defaults: read access)
+      await saveMemberPerms(m.id, {
+        is_org_admin: true,
+        can_census_read: true,
+        can_census_write: false,
+        can_schedule_read: true,
+        can_schedule_write: false,
+      });
+    } else {
+      // turning admin OFF -> clear everything
+      await saveMemberPerms(m.id, {
+        is_org_admin: false,
+        can_manage_admins: false,
+        can_census_read: false,
+        can_census_write: false,
+        can_schedule_read: false,
+        can_schedule_write: false,
+      });
+    }
+  }
+
+  async function setAccess(staffId, patch) {
+    const m = getMembershipForStaff(staffId);
+    if (!m?.id) return alert("No permission record found for this staff member yet.");
+    await saveMemberPerms(m.id, patch);
+  }
 
   // ==================================================
   // RENDER
@@ -1083,14 +1166,13 @@ export default function AdminPage() {
                   <>
                     {" "}
                     •{" "}
-                    <span style={ui.mono}>
-                      {orgCode}
-                    </span>
+                    <span style={ui.mono}>{orgCode}</span>
                   </>
                 ) : null}
               </span>
-
-              {headerSubtitle ? <span style={{ marginLeft: 10, color: "#9CA3AF" }}>{headerSubtitle}</span> : null}
+              {headerSubtitle ? (
+                <span style={{ marginLeft: 10, color: "#9CA3AF" }}>{headerSubtitle}</span>
+              ) : null}
               {loading ? <span style={{ marginLeft: 10, color: "#9CA3AF" }}>Loading…</span> : null}
             </div>
           </div>
@@ -1110,7 +1192,7 @@ export default function AdminPage() {
         </div>
       </div>
 
-      {/* ✅ ORG SWITCHERS */}
+      {/* ORG SWITCHERS */}
       {!isSuperadmin ? (
         <OrgSwitcher open={orgSwitcherOpen} onClose={() => setOrgSwitcherOpen(false)} />
       ) : (
@@ -1126,41 +1208,34 @@ export default function AdminPage() {
         />
       )}
 
-      {/* ✅ NEW: SECTION SWITCHER (Staff Settings vs Facility Settings) */}
+      {/* SECTION PICKER */}
       <div style={ui.sectionRow}>
         <button
-          style={ui.sectionBtn(activeSection === "staff_settings")}
-          onClick={() => setActiveSection("staff_settings")}
           type="button"
+          style={ui.sectionPill(activeSection === "staff_settings")}
+          onClick={() => setSection("staff_settings")}
         >
           Staff Settings
         </button>
         <button
-          style={ui.sectionBtn(activeSection === "facility_settings")}
-          onClick={() => setActiveSection("facility_settings")}
           type="button"
+          style={ui.sectionPill(activeSection === "facility_settings")}
+          onClick={() => setSection("facility_settings")}
         >
           Facility Settings
         </button>
       </div>
 
-      {/* ✅ Tabs (within section) */}
+      {/* Tabs for section */}
       <div style={ui.tabs}>
-        {(SECTION_TABS[activeSection] || [])
-          .filter((t) => {
-            // permission-based visibility
-            if (t.key === "departments") return isOrgAdmin || canManageAdmins || isSuperadmin;
-            if (t.key === "admin_access") return canManageAdmins || isSuperadmin;
-            return true;
-          })
-          .map((t) => (
-            <TabButton
-              key={t.key}
-              active={activeTab === t.key}
-              onClick={() => setActiveTab(t.key)}
-              label={t.label}
-            />
-          ))}
+        {(activeSection === "facility_settings" ? facilityTabs : staffTabs).map((t) => (
+          <TabButton
+            key={t.key}
+            active={activeTab === t.key}
+            onClick={() => setActiveTab(t.key)}
+            label={t.label}
+          />
+        ))}
       </div>
 
       {/* CONTENT */}
@@ -1173,7 +1248,7 @@ export default function AdminPage() {
           </div>
         ) : null}
 
-        {/* ✅ Invite modal (copy link) */}
+        {/* Invite modal */}
         {inviteModal ? (
           <div onMouseDown={() => setInviteModal(null)} style={ui.modalOverlay}>
             <div onMouseDown={(e) => e.stopPropagation()} style={ui.modal}>
@@ -1211,18 +1286,27 @@ export default function AdminPage() {
           </div>
         ) : null}
 
-        {/* =========================
-            STAFF SETTINGS: STAFF
-           ========================= */}
+        {/* ===========================
+            STAFF SETTINGS
+           =========================== */}
         {activeTab === "staff" && orgId && (
           <div style={ui.card}>
             <div style={ui.cardHeader}>
               <div>
                 <div style={ui.cardTitle}>Staff</div>
-                <div style={ui.cardSub}>Manage staff directory for scheduling and assignments.</div>
+                <div style={ui.cardSub}>
+                  Add staff and manage access. When <b>Admin</b> is checked, choose Census/Schedule read/write.
+                </div>
               </div>
 
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <input
+                  style={{ ...ui.input, minWidth: 260 }}
+                  placeholder="Search staff…"
+                  value={staffSearch}
+                  onChange={(e) => setStaffSearch(e.target.value)}
+                />
+
                 <button
                   style={ui.btnPrimary}
                   onClick={() => {
@@ -1248,6 +1332,10 @@ export default function AdminPage() {
                 >
                   {csvUploading ? "Importing…" : "Import CSV"}
                 </button>
+
+                <button style={ui.btnGhost} onClick={loadAdminMembers} disabled={adminMembersLoading}>
+                  {adminMembersLoading ? "Loading Access…" : "Refresh Access"}
+                </button>
               </div>
             </div>
 
@@ -1265,14 +1353,29 @@ export default function AdminPage() {
                     <th style={ui.th}>Department</th>
                     <th style={ui.th}>Email</th>
                     <th style={ui.th}>Phone</th>
+                    <th style={ui.th}>Admin</th>
+                    <th style={ui.th}>Census</th>
+                    <th style={ui.th}>Schedule</th>
                     <th style={{ ...ui.th, textAlign: "right" }}>Actions</th>
                   </tr>
                 </thead>
+
                 <tbody>
-                  {staff.map((s) => {
+                  {filteredStaff.map((s) => {
                     const isEdit = editingStaffId === s.id;
+
                     const deptName =
                       deptOptions.find((d) => String(d.id) === String(s.department_id))?.name || "—";
+
+                    const m = getMembershipForStaff(s.id);
+                    const busy = String(savingMemberId) === String(m?.id);
+
+                    const isAdmin = isAdminForStaff(s.id);
+
+                    const censusRead = !!m?.can_census_read;
+                    const censusWrite = !!m?.can_census_write;
+                    const scheduleRead = !!m?.can_schedule_read;
+                    const scheduleWrite = !!m?.can_schedule_write;
 
                     return (
                       <tr key={s.id} style={ui.tr}>
@@ -1346,6 +1449,73 @@ export default function AdminPage() {
                           )}
                         </td>
 
+                        {/* Admin checkbox */}
+                        <td style={ui.td}>
+                          <input
+                            type="checkbox"
+                            checked={isAdmin}
+                            disabled={busy || (!isOrgAdmin && !canManageAdmins && !isSuperadmin)}
+                            onChange={(e) => toggleAdminForStaff(s.id, e.target.checked)}
+                            title={!m?.id ? "No membership record yet" : "Admin"}
+                          />
+                        </td>
+
+                        {/* Census (only show when admin true) */}
+                        <td style={ui.td}>
+                          {isAdmin ? (
+                            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                              <label style={ui.smallToggle}>
+                                <input
+                                  type="checkbox"
+                                  checked={censusRead}
+                                  disabled={busy}
+                                  onChange={(e) => setAccess(s.id, { can_census_read: e.target.checked })}
+                                />
+                                Read
+                              </label>
+                              <label style={ui.smallToggle}>
+                                <input
+                                  type="checkbox"
+                                  checked={censusWrite}
+                                  disabled={busy}
+                                  onChange={(e) => setAccess(s.id, { can_census_write: e.target.checked })}
+                                />
+                                Write
+                              </label>
+                            </div>
+                          ) : (
+                            <span style={ui.muted}>—</span>
+                          )}
+                        </td>
+
+                        {/* Schedule (only show when admin true) */}
+                        <td style={ui.td}>
+                          {isAdmin ? (
+                            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                              <label style={ui.smallToggle}>
+                                <input
+                                  type="checkbox"
+                                  checked={scheduleRead}
+                                  disabled={busy}
+                                  onChange={(e) => setAccess(s.id, { can_schedule_read: e.target.checked })}
+                                />
+                                Read
+                              </label>
+                              <label style={ui.smallToggle}>
+                                <input
+                                  type="checkbox"
+                                  checked={scheduleWrite}
+                                  disabled={busy}
+                                  onChange={(e) => setAccess(s.id, { can_schedule_write: e.target.checked })}
+                                />
+                                Write
+                              </label>
+                            </div>
+                          ) : (
+                            <span style={ui.muted}>—</span>
+                          )}
+                        </td>
+
                         <td style={{ ...ui.td, textAlign: "right" }}>
                           {isEdit ? (
                             <div style={ui.actions}>
@@ -1389,10 +1559,10 @@ export default function AdminPage() {
                     );
                   })}
 
-                  {staff.length === 0 ? (
+                  {filteredStaff.length === 0 ? (
                     <tr>
-                      <td style={ui.emptyRow} colSpan={7}>
-                        No staff yet.
+                      <td style={ui.emptyRow} colSpan={10}>
+                        No matching staff.
                       </td>
                     </tr>
                   ) : null}
@@ -1477,24 +1647,46 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* =========================
-            STAFF SETTINGS: SHIFTS
-           ========================= */}
+        {/* ===========================
+            FACILITY SETTINGS
+           =========================== */}
+
+        {/* SHIFT SETTINGS (with lunch break minutes) */}
         {activeTab === "shifts" && orgId && (
           <div style={ui.card}>
             <div style={ui.cardHeader}>
               <div>
                 <div style={ui.cardTitle}>Shift Settings</div>
                 <div style={ui.cardSub}>
-                  Default shift start/end times per role. Filter by role using bubbles.
+                  Define shift templates per role. Lunch break minutes are used to make PPD calculations more accurate.
                 </div>
               </div>
 
               <button style={ui.btnGhost} onClick={loadAll} disabled={loading}>
-                {loading ? "Loading…" : "Refresh"}
+                Refresh
               </button>
             </div>
 
+            {/* Lunch break setting */}
+            <div style={{ ...ui.notice, marginBottom: 12 }}>
+              <div style={{ fontWeight: 1000, marginBottom: 8 }}>Lunch Break Length</div>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <input
+                  style={{ ...ui.input, width: 120 }}
+                  type="number"
+                  min={0}
+                  max={240}
+                  value={lunchBreakMins}
+                  onChange={(e) => setLunchBreakMins(e.target.value)}
+                />
+                <span style={ui.muted}>minutes (ex: 30)</span>
+                <button style={ui.btnPrimary} onClick={saveLunchBreakMinutes} disabled={lunchSaving}>
+                  {lunchSaving ? "Saving…" : "Save Lunch"}
+                </button>
+              </div>
+            </div>
+
+            {/* Role bubbles */}
             <div style={ui.roleBubbleWrap}>
               <button
                 type="button"
@@ -1515,15 +1707,23 @@ export default function AdminPage() {
               ))}
             </div>
 
+            {/* Add/Edit shift */}
             <div style={ui.inlineFormWrap}>
-              <input
-                style={ui.input}
-                placeholder="Role (ex: CNA, LPN, RN)"
-                value={shiftForm.role || ""}
-                disabled={selectedShiftRole !== "ALL"}
-                onChange={(e) => setShiftForm((p) => ({ ...p, role: e.target.value }))}
-                title={selectedShiftRole !== "ALL" ? "Role is locked by selected bubble." : ""}
-              />
+              {selectedShiftRole === "ALL" ? (
+                <input
+                  style={ui.input}
+                  placeholder="Role (ex: CNA)"
+                  value={shiftForm.role || ""}
+                  onChange={(e) => setShiftForm((p) => ({ ...p, role: e.target.value }))}
+                />
+              ) : (
+                <div style={ui.roleLockedPill}>
+                  Role: <b>{selectedShiftRole}</b>
+                  <button style={ui.roleUnlockBtn} onClick={() => selectShiftRole("ALL")} type="button">
+                    Unlock
+                  </button>
+                </div>
+              )}
 
               <select
                 style={ui.select}
@@ -1572,53 +1772,48 @@ export default function AdminPage() {
               )}
             </div>
 
+            {/* List */}
             <div style={{ overflowX: "auto" }}>
               <table style={ui.table}>
                 <thead>
                   <tr>
                     <th style={ui.th}>Role</th>
-                    <th style={ui.th}>Shift Type</th>
+                    <th style={ui.th}>Shift</th>
                     <th style={ui.th}>Start</th>
                     <th style={ui.th}>End</th>
                     <th style={{ ...ui.th, textAlign: "right" }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(filteredShiftSettings || []).map((s) => {
-                    const isEdit = editingShiftId === s.id;
-                    return (
-                      <tr key={s.id} style={ui.tr}>
-                        <td style={ui.td}>
-                          <span style={ui.pill}>{s.role}</span>
-                        </td>
-                        <td style={ui.td}>{s.shift_type}</td>
-                        <td style={ui.tdMono}>{s.start_local}</td>
-                        <td style={ui.tdMono}>{s.end_local}</td>
-                        <td style={{ ...ui.td, textAlign: "right" }}>
-                          <div style={ui.actions}>
-                            <button
-                              style={ui.btnGhost}
-                              onClick={() => {
-                                setEditingShiftId(s.id);
-                                setShiftForm({
-                                  role: s.role || "",
-                                  shift_type: s.shift_type || "Day",
-                                  start_local: s.start_local || "07:00",
-                                  end_local: s.end_local || "15:00",
-                                });
-                              }}
-                            >
-                              Edit
-                            </button>
-                            <button style={ui.btnDanger} onClick={() => deleteShift(s.id)}>
-                              Delete
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-
+                  {(filteredShiftSettings || []).map((s) => (
+                    <tr key={s.id} style={ui.tr}>
+                      <td style={ui.td}><span style={ui.pill}>{s.role}</span></td>
+                      <td style={ui.td}>{s.shift_type}</td>
+                      <td style={ui.td}>{s.start_local}</td>
+                      <td style={ui.td}>{s.end_local}</td>
+                      <td style={{ ...ui.td, textAlign: "right" }}>
+                        <div style={ui.actions}>
+                          <button
+                            style={ui.btnGhost}
+                            onClick={() => {
+                              setEditingShiftId(s.id);
+                              setShiftForm({
+                                role: s.role || "",
+                                shift_type: s.shift_type || "Day",
+                                start_local: s.start_local || "07:00",
+                                end_local: s.end_local || "15:00",
+                              });
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button style={ui.btnDanger} onClick={() => deleteShift(s.id)}>
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
                   {(filteredShiftSettings || []).length === 0 ? (
                     <tr>
                       <td style={ui.emptyRow} colSpan={5}>
@@ -1632,17 +1827,13 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* =========================
-            STAFF SETTINGS: DEPARTMENTS
-           ========================= */}
+        {/* DEPARTMENTS */}
         {activeTab === "departments" && orgId && (
           <div style={ui.card}>
             <div style={ui.cardHeader}>
               <div>
                 <div style={ui.cardTitle}>Departments</div>
-                <div style={ui.cardSub}>
-                  Create departments (Nursing, Therapy, Dietary, etc.). Assign members to departments in <b>Admin Access</b>.
-                </div>
+                <div style={ui.cardSub}>Create departments (Nursing, Therapy, Dietary, etc.).</div>
               </div>
 
               <button style={ui.btnGhost} onClick={loadDepartments} disabled={departmentsLoading}>
@@ -1657,7 +1848,7 @@ export default function AdminPage() {
                 <div style={ui.inlineForm}>
                   <input
                     style={ui.input}
-                    placeholder="Department name (ex: Nursing, Rehab, Admin)"
+                    placeholder="Department name"
                     value={deptForm.name}
                     onChange={(e) => setDeptForm((p) => ({ ...p, name: e.target.value }))}
                   />
@@ -1703,7 +1894,7 @@ export default function AdminPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {(deptOptions || []).map((d) => {
+                      {deptOptions.map((d) => {
                         const inactive = d.is_active === false;
                         return (
                           <tr key={d.id} style={ui.tr}>
@@ -1742,7 +1933,7 @@ export default function AdminPage() {
                         );
                       })}
 
-                      {!departmentsLoading && (deptOptions || []).length === 0 ? (
+                      {!departmentsLoading && deptOptions.length === 0 ? (
                         <tr>
                           <td style={ui.emptyRow} colSpan={3}>
                             No departments yet.
@@ -1757,217 +1948,27 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* =========================
-            STAFF SETTINGS: ADMIN ACCESS
-           ========================= */}
-        {activeTab === "admin_access" && orgId && (canManageAdmins || isSuperadmin) && (
-          <div style={ui.card}>
-            <div style={ui.cardHeader}>
-              <div>
-                <div style={ui.cardTitle}>Admin Access</div>
-                <div style={ui.cardSub}>
-                  Manage who can administer this facility, schedule, and privacy/facility settings.
-                </div>
-              </div>
-
-              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <input
-                  style={{ ...ui.input, minWidth: 240 }}
-                  placeholder="Search name, email, role…"
-                  value={adminSearch}
-                  onChange={(e) => setAdminSearch(e.target.value)}
-                />
-                <button style={ui.btnGhost} onClick={loadAdminMembers} disabled={adminMembersLoading}>
-                  {adminMembersLoading ? "Loading…" : "Refresh"}
-                </button>
-              </div>
-            </div>
-
-            <div style={{ overflowX: "auto" }}>
-              <table style={ui.table}>
-                <thead>
-                  <tr>
-                    <th style={ui.th}>Member</th>
-                    <th style={ui.th}>Department</th>
-                    <th style={ui.th}>Org Admin</th>
-                    <th style={ui.th}>Manage Admins</th>
-                    <th style={ui.th}>Schedule Write</th>
-                    <th style={ui.th}>Privacy</th>
-                    <th style={ui.th}>Facility</th>
-                    <th style={{ ...ui.th, textAlign: "right" }}>Save</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(filteredAdminMembers || []).map((m) => {
-                    const busy = String(savingMemberUserId) === String(m.id);
-
-                    const name =
-                      m.staff_name ||
-                      m.display_name ||
-                      m.name ||
-                      (m.email ? m.email.split("@")[0] : "Member");
-
-                    const email = m.email || "";
-                    const phone = m.phone || "";
-                    const staffRole = m.staff_role || m.role || "";
-
-                    const is_org_admin = !!m.is_org_admin;
-                    const can_manage_admins = !!m.can_manage_admins;
-                    const can_schedule_write_member = !!m.can_schedule_write;
-                    const can_manage_privacy_member = !!m.can_manage_privacy;
-                    const can_manage_facility_member = !!m.can_manage_facility;
-
-                    const deptId = m.department_id || "";
-
-                    return (
-                      <tr key={m.id} style={ui.tr}>
-                        <td style={ui.td}>
-                          <div style={ui.cellStrong}>{name}</div>
-                          <div style={{ color: "#9CA3AF", fontSize: 12 }}>
-                            {staffRole ? <span style={ui.pill}>{staffRole}</span> : null}
-                            {email ? <span style={{ marginLeft: 8 }}>{email}</span> : null}
-                            {phone ? <span style={{ marginLeft: 8 }}>• {phone}</span> : null}
-                          </div>
-                        </td>
-
-                        <td style={ui.td}>
-                          <select
-                            style={ui.select}
-                            value={deptId}
-                            onChange={(e) =>
-                              saveMemberPerms(m.id, { department_id: e.target.value || null })
-                            }
-                            disabled={busy}
-                          >
-                            <option value="">No department</option>
-                            {deptOptions.map((d) => (
-                              <option key={d.id} value={d.id}>
-                                {d.name}
-                                {d.is_active === false ? " (inactive)" : ""}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-
-                        <td style={ui.td}>
-                          <label style={ui.toggleCell}>
-                            <input
-                              type="checkbox"
-                              checked={is_org_admin}
-                              onChange={(e) => saveMemberPerms(m.id, { is_org_admin: e.target.checked })}
-                              disabled={busy}
-                            />
-                            <span style={ui.toggleLabel}>{is_org_admin ? "Yes" : "No"}</span>
-                          </label>
-                        </td>
-
-                        <td style={ui.td}>
-                          <label style={ui.toggleCell}>
-                            <input
-                              type="checkbox"
-                              checked={can_manage_admins}
-                              onChange={(e) =>
-                                saveMemberPerms(m.id, { can_manage_admins: e.target.checked })
-                              }
-                              disabled={busy}
-                            />
-                            <span style={ui.toggleLabel}>{can_manage_admins ? "Yes" : "No"}</span>
-                          </label>
-                        </td>
-
-                        <td style={ui.td}>
-                          <label style={ui.toggleCell}>
-                            <input
-                              type="checkbox"
-                              checked={can_schedule_write_member}
-                              onChange={(e) =>
-                                saveMemberPerms(m.id, { can_schedule_write: e.target.checked })
-                              }
-                              disabled={busy}
-                            />
-                            <span style={ui.toggleLabel}>{can_schedule_write_member ? "Yes" : "No"}</span>
-                          </label>
-                        </td>
-
-                        <td style={ui.td}>
-                          <label style={ui.toggleCell}>
-                            <input
-                              type="checkbox"
-                              checked={can_manage_privacy_member}
-                              onChange={(e) =>
-                                saveMemberPerms(m.id, { can_manage_privacy: e.target.checked })
-                              }
-                              disabled={busy}
-                            />
-                            <span style={ui.toggleLabel}>{can_manage_privacy_member ? "Yes" : "No"}</span>
-                          </label>
-                        </td>
-
-                        <td style={ui.td}>
-                          <label style={ui.toggleCell}>
-                            <input
-                              type="checkbox"
-                              checked={can_manage_facility_member}
-                              onChange={(e) =>
-                                saveMemberPerms(m.id, { can_manage_facility: e.target.checked })
-                              }
-                              disabled={busy}
-                            />
-                            <span style={ui.toggleLabel}>{can_manage_facility_member ? "Yes" : "No"}</span>
-                          </label>
-                        </td>
-
-                        <td style={{ ...ui.td, textAlign: "right" }}>
-                          <span style={busy ? ui.badgeOn : ui.muted}>{busy ? "Saving…" : "—"}</span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-
-                  {!adminMembersLoading && (filteredAdminMembers || []).length === 0 ? (
-                    <tr>
-                      <td style={ui.emptyRow} colSpan={8}>
-                        No admin memberships found.
-                      </td>
-                    </tr>
-                  ) : null}
-                </tbody>
-              </table>
-            </div>
-
-            <div style={{ marginTop: 12, color: "#9CA3AF", fontSize: 12, lineHeight: 1.4 }}>
-              Tip: If you want “Org Admin” to automatically imply privacy/facility/admin perms, we can enforce that on the backend
-              and simplify this UI.
-            </div>
-          </div>
-        )}
-
-        {/* =========================
-            FACILITY SETTINGS: UNITS
-           ========================= */}
+        {/* UNITS */}
         {activeTab === "units" && orgId && (
           <div style={ui.card}>
             <div style={ui.cardHeader}>
               <div>
                 <div style={ui.cardTitle}>Units</div>
-                <div style={ui.cardSub}>
-                  Units are used for organizing assignments and dashboards (ex: East Hall, West Hall, Rehab).
-                </div>
+                <div style={ui.cardSub}>Create units/wings used across census and assignments.</div>
               </div>
 
               <button style={ui.btnGhost} onClick={loadAll} disabled={loading}>
-                {loading ? "Loading…" : "Refresh"}
+                Refresh
               </button>
             </div>
 
             <div style={ui.inlineForm}>
               <input
                 style={ui.input}
-                placeholder="Unit name (ex: East Hall)"
+                placeholder="Unit name (ex: North Wing)"
                 value={unitForm.name}
                 onChange={(e) => setUnitForm({ name: e.target.value })}
               />
-
               {editingUnitId ? (
                 <>
                   <button style={ui.btnPrimary} onClick={() => saveUnit(editingUnitId)}>
@@ -1995,17 +1996,15 @@ export default function AdminPage() {
                 <thead>
                   <tr>
                     <th style={ui.th}>ID</th>
-                    <th style={ui.th}>Unit</th>
+                    <th style={ui.th}>Name</th>
                     <th style={{ ...ui.th, textAlign: "right" }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(units || []).map((u) => (
+                  {units.map((u) => (
                     <tr key={u.id} style={ui.tr}>
                       <td style={ui.tdMono}>{u.id}</td>
-                      <td style={ui.td}>
-                        <span style={ui.cellStrong}>{u.name}</span>
-                      </td>
+                      <td style={ui.td}><span style={ui.cellStrong}>{u.name}</span></td>
                       <td style={{ ...ui.td, textAlign: "right" }}>
                         <div style={ui.actions}>
                           <button
@@ -2024,8 +2023,7 @@ export default function AdminPage() {
                       </td>
                     </tr>
                   ))}
-
-                  {(units || []).length === 0 ? (
+                  {units.length === 0 ? (
                     <tr>
                       <td style={ui.emptyRow} colSpan={3}>
                         No units yet.
@@ -2038,17 +2036,13 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* =========================
-            FACILITY SETTINGS: ROOMS & BEDS
-           ========================= */}
+        {/* ROOMS & BEDS */}
         {activeTab === "rooms_beds" && orgId && (
           <div style={ui.card}>
             <div style={ui.cardHeader}>
               <div>
                 <div style={ui.cardTitle}>Rooms & Beds</div>
-                <div style={ui.cardSub}>
-                  Manage rooms and their beds. Drag beds to reorder (or use ▲▼).
-                </div>
+                <div style={ui.cardSub}>Manage rooms, beds, active/inactive, and bed order.</div>
               </div>
 
               <button style={ui.btnGhost} onClick={loadRooms} disabled={roomsLoading}>
@@ -2057,18 +2051,16 @@ export default function AdminPage() {
             </div>
 
             {!canManageFacility ? (
-              <div style={ui.notice}>
-                You don’t have permission to manage facility settings for this organization.
-              </div>
+              <div style={ui.notice}>You don’t have permission to manage facility settings.</div>
             ) : (
               <div style={ui.rbGrid}>
-                {/* LEFT: Rooms */}
+                {/* LEFT: ROOMS */}
                 <div style={ui.rbLeft}>
                   <div style={ui.rbPanelTitle}>Rooms</div>
 
-                  <div style={ui.inlineForm}>
+                  <div style={ui.inlineFormWrap}>
                     <input
-                      style={{ ...ui.input, minWidth: 200 }}
+                      style={{ ...ui.input, minWidth: 180, flex: 1 }}
                       placeholder="Room name (ex: 301)"
                       value={roomForm.name}
                       onChange={(e) => setRoomForm((p) => ({ ...p, name: e.target.value }))}
@@ -2106,60 +2098,51 @@ export default function AdminPage() {
                   </div>
 
                   <div style={ui.rbList}>
-                    {roomsLoading ? (
-                      <div style={ui.empty2}>Loading rooms…</div>
-                    ) : (
-                      (rooms || []).map((r) => {
-                        const selected = String(r.id) === String(selectedRoomId);
-                        const inactive = r.is_active === false;
-                        return (
-                          <div
-                            key={r.id}
-                            style={ui.roomRow(selected, inactive)}
-                            onClick={() => {
-                              setSelectedRoomId(r.id);
-                              syncBedsFromRooms(r.id);
-                            }}
-                            role="button"
-                            tabIndex={0}
-                          >
-                            <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
-                              <div style={{ fontWeight: 1000, color: "white" }}>{r.name}</div>
-                              <div style={{ color: "#9CA3AF", fontSize: 12 }}>
-                                {inactive ? <span style={ui.badgeOff}>Inactive</span> : <span style={ui.badgeOn}>Active</span>}
-                                <span style={{ marginLeft: 8 }}>
-                                  Beds: {Array.isArray(r.beds) ? r.beds.length : 0}
-                                </span>
-                              </div>
-                            </div>
-
-                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                              <button
-                                style={ui.btnMiniGhost}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setEditingRoomId(r.id);
-                                  setRoomForm({ name: r.name || "", is_active: r.is_active !== false });
-                                }}
-                                type="button"
-                              >
-                                Edit
-                              </button>
-                              <button
-                                style={ui.btnMiniGhost}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  toggleRoomActive(r);
-                                }}
-                                type="button"
-                              >
-                                {inactive ? "Activate" : "Deactivate"}
-                              </button>
+                    {(rooms || []).map((r) => {
+                      const selected = String(r.id) === String(selectedRoomId);
+                      const inactive = r.is_active === false;
+                      return (
+                        <div
+                          key={r.id}
+                          style={ui.roomRow(selected, inactive)}
+                          onClick={() => setSelectedRoomId(r.id)}
+                          role="button"
+                          tabIndex={0}
+                        >
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 950, color: "white" }}>{r.name}</div>
+                            <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                              <span style={inactive ? ui.badgeOff : ui.badgeOn}>
+                                {inactive ? "Inactive" : "Active"}
+                              </span>
+                              <span style={ui.orderPill}>Beds: {Array.isArray(r.beds) ? r.beds.length : 0}</span>
                             </div>
                           </div>
-                        );
-                      })
-                    )}
+
+                          <div style={ui.actions}>
+                            <button
+                              style={ui.btnMiniGhost}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditingRoomId(r.id);
+                                setRoomForm({ name: r.name || "", is_active: r.is_active !== false });
+                              }}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              style={ui.btnMiniGhost}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleRoomActive(r);
+                              }}
+                            >
+                              {inactive ? "Activate" : "Deactivate"}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
 
                     {!roomsLoading && (rooms || []).length === 0 ? (
                       <div style={ui.empty2}>No rooms yet.</div>
@@ -2167,18 +2150,18 @@ export default function AdminPage() {
                   </div>
                 </div>
 
-                {/* RIGHT: Beds */}
+                {/* RIGHT: BEDS */}
                 <div style={ui.rbRight}>
                   <div style={ui.rbPanelTitle}>Beds</div>
 
                   {!selectedRoomId ? (
-                    <div style={ui.notice}>Select a room to manage beds.</div>
+                    <div style={ui.notice}>Select a room to manage its beds.</div>
                   ) : (
                     <>
-                      <div style={ui.inlineForm}>
+                      <div style={ui.inlineFormWrap}>
                         <input
-                          style={{ ...ui.input, minWidth: 220 }}
-                          placeholder="Bed label (ex: 301D, 301W)"
+                          style={{ ...ui.input, minWidth: 180, flex: 1 }}
+                          placeholder="Bed label (ex: A, B, Door, Window)"
                           value={bedForm.label}
                           onChange={(e) => setBedForm((p) => ({ ...p, label: e.target.value }))}
                         />
@@ -2215,80 +2198,74 @@ export default function AdminPage() {
                       </div>
 
                       <div style={ui.bedList}>
-                        {bedsLoading ? (
-                          <div style={ui.empty2}>Loading beds…</div>
-                        ) : (
-                          (beds || []).map((b, idx) => {
-                            const inactive = b.is_active === false;
-                            return (
-                              <div
-                                key={b.id}
-                                style={ui.bedRow(inactive)}
-                                draggable
-                                onDragStart={() => onBedDragStart(b.id)}
-                                onDragOver={(e) => e.preventDefault()}
-                                onDrop={() => onBedDrop(b.id)}
-                              >
-                                <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
-                                  <div style={ui.dragHandle} title="Drag to reorder">
-                                    ::
-                                  </div>
-                                  <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-                                    <div style={{ fontWeight: 1000, color: "white" }}>{b.label}</div>
-                                    <div style={{ color: "#9CA3AF", fontSize: 12 }}>
-                                      {inactive ? <span style={ui.badgeOff}>Inactive</span> : <span style={ui.badgeOn}>Active</span>}
-                                      {typeof b.display_order !== "undefined" ? (
-                                        <span style={{ marginLeft: 8 }}>
-                                          Order: <span style={ui.orderPill}>{b.display_order}</span>
-                                        </span>
-                                      ) : null}
-                                    </div>
-                                  </div>
-                                </div>
+                        {bedsLoading ? <div style={ui.empty2}>Loading beds…</div> : null}
 
-                                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                                  <button
-                                    style={ui.btnMiniGhost}
-                                    onClick={() => moveBedByIndex(idx, idx - 1)}
-                                    type="button"
-                                    title="Move up"
-                                  >
-                                    ▲
-                                  </button>
-                                  <button
-                                    style={ui.btnMiniGhost}
-                                    onClick={() => moveBedByIndex(idx, idx + 1)}
-                                    type="button"
-                                    title="Move down"
-                                  >
-                                    ▼
-                                  </button>
-                                  <button
-                                    style={ui.btnMiniGhost}
-                                    onClick={() => {
-                                      setEditingBedId(b.id);
-                                      setBedForm({ label: b.label || "", is_active: b.is_active !== false });
-                                    }}
-                                    type="button"
-                                  >
-                                    Edit
-                                  </button>
-                                  <button
-                                    style={ui.btnMiniGhost}
-                                    onClick={() => toggleBedActive(b)}
-                                    disabled={bedSaving}
-                                    type="button"
-                                  >
-                                    {inactive ? "Activate" : "Deactivate"}
-                                  </button>
+                        {(beds || []).map((b, idx) => {
+                          const inactive = b.is_active === false;
+                          return (
+                            <div
+                              key={b.id}
+                              style={ui.bedRow(inactive)}
+                              draggable
+                              onDragStart={() => onBedDragStart(b.id)}
+                              onDragOver={(e) => e.preventDefault()}
+                              onDrop={() => onBedDrop(b.id)}
+                            >
+                              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                                <div style={ui.dragHandle} title="Drag to reorder">
+                                  ≡
+                                </div>
+                                <div>
+                                  <div style={{ fontWeight: 950, color: "white" }}>{b.label}</div>
+                                  <div style={{ marginTop: 6 }}>
+                                    <span style={inactive ? ui.badgeOff : ui.badgeOn}>
+                                      {inactive ? "Inactive" : "Active"}
+                                    </span>
+                                    <span style={{ marginLeft: 8, ...ui.orderPill }}>#{idx + 1}</span>
+                                  </div>
                                 </div>
                               </div>
-                            );
-                          })
-                        )}
+
+                              <div style={ui.actions}>
+                                <button
+                                  style={ui.btnMiniGhost}
+                                  onClick={() => moveBedByIndex(idx, idx - 1)}
+                                  disabled={idx === 0}
+                                  title="Move up"
+                                >
+                                  ↑
+                                </button>
+                                <button
+                                  style={ui.btnMiniGhost}
+                                  onClick={() => moveBedByIndex(idx, idx + 1)}
+                                  disabled={idx === beds.length - 1}
+                                  title="Move down"
+                                >
+                                  ↓
+                                </button>
+                                <button
+                                  style={ui.btnMiniGhost}
+                                  onClick={() => {
+                                    setEditingBedId(b.id);
+                                    setBedForm({ label: b.label || "", is_active: b.is_active !== false });
+                                  }}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  style={ui.btnMiniGhost}
+                                  onClick={() => toggleBedActive(b)}
+                                  disabled={bedSaving}
+                                >
+                                  {inactive ? "Activate" : "Deactivate"}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
 
                         {!bedsLoading && (beds || []).length === 0 ? (
-                          <div style={ui.empty2}>No beds in this room yet.</div>
+                          <div style={ui.empty2}>No beds yet.</div>
                         ) : null}
                       </div>
                     </>
@@ -2299,17 +2276,13 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* =========================
-            FACILITY SETTINGS: PRIVACY
-           ========================= */}
+        {/* PRIVACY */}
         {activeTab === "privacy" && orgId && (
           <div style={ui.card}>
             <div style={ui.cardHeader}>
               <div>
                 <div style={ui.cardTitle}>Privacy</div>
-                <div style={ui.cardSub}>
-                  Control whether patient identifiers are shown and how names are formatted on dashboards.
-                </div>
+                <div style={ui.cardSub}>Control patient identifiers shown in the app.</div>
               </div>
               <button style={ui.btnGhost} onClick={loadOrgSettings} disabled={privacySaving}>
                 Refresh
@@ -2317,109 +2290,173 @@ export default function AdminPage() {
             </div>
 
             {!canManagePrivacy ? (
-              <div style={ui.notice}>
-                You don’t have permission to manage privacy settings for this organization.
-              </div>
+              <div style={ui.notice}>You don’t have permission to manage privacy settings.</div>
             ) : (
               <>
-                <div style={ui.notice}>
-                  Turning identifiers on can increase privacy risk. Only enable if your facility policy allows it.
+                <div
+                  style={ui.checkRow}
+                  onClick={() =>
+                    setOrgSettings((p) => ({
+                      ...p,
+                      show_patient_identifiers: !p?.show_patient_identifiers,
+                    }))
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={!!orgSettings?.show_patient_identifiers}
+                    onChange={(e) =>
+                      setOrgSettings((p) => ({
+                        ...p,
+                        show_patient_identifiers: e.target.checked,
+                      }))
+                    }
+                  />
+                  <div>
+                    <div style={{ fontWeight: 950 }}>Show patient identifiers</div>
+                    <div style={{ color: "#9CA3AF", fontSize: 12, marginTop: 4 }}>
+                      When enabled, census boards can display patient names/initials based on format below.
+                    </div>
+                  </div>
                 </div>
 
                 <div style={ui.privacyRow}>
-                  <label style={ui.smallCheck}>
-                    <input
-                      type="checkbox"
-                      checked={!!orgSettings?.show_patient_identifiers}
-                      onChange={(e) =>
-                        setOrgSettings((p) => ({ ...(p || {}), show_patient_identifiers: e.target.checked }))
-                      }
-                    />
-                    Show patient identifiers
-                  </label>
-
-                  <div style={{ display: "grid", gap: 6 }}>
+                  <div style={{ minWidth: 260 }}>
                     <div style={ui.label}>Identifier format</div>
                     <select
-                      style={ui.select}
+                      style={{ ...ui.select, minWidth: 260 }}
                       value={orgSettings?.identifier_format || "first_last_initial"}
                       onChange={(e) =>
-                        setOrgSettings((p) => ({ ...(p || {}), identifier_format: e.target.value }))
+                        setOrgSettings((p) => ({ ...p, identifier_format: e.target.value }))
                       }
                       disabled={!orgSettings?.show_patient_identifiers}
                     >
-                      <option value="first_last_initial">First name + last initial (Jane D.)</option>
+                      <option value="first_last_initial">First name + last initial (John D.)</option>
                       <option value="first_initial_last">First initial + last name (J. Doe)</option>
-                      <option value="first_last">First + last (Jane Doe)</option>
                       <option value="initials">Initials only (J.D.)</option>
                     </select>
                   </div>
-                </div>
 
-                <div style={{ marginTop: 12 }}>
-                  <label style={ui.checkRow} onClick={() => setShowAck(true)}>
-                    <input
-                      type="checkbox"
-                      checked={!!orgSettings?.identifiers_acknowledged}
-                      onChange={(e) =>
-                        setOrgSettings((p) => ({ ...(p || {}), identifiers_acknowledged: e.target.checked }))
-                      }
-                    />
-                    <div style={{ display: "grid", gap: 4 }}>
-                      <div style={{ fontWeight: 950 }}>I acknowledge facility privacy policy</div>
-                      <div style={{ color: "#9CA3AF", fontSize: 12 }}>
-                        Enabling identifiers must comply with your internal policy and applicable regulations.
-                      </div>
-                    </div>
-                  </label>
-                </div>
-
-                <div style={{ marginTop: 12, display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
                   <button
                     style={ui.btnPrimary}
                     disabled={privacySaving}
-                    onClick={() =>
+                    onClick={() => {
+                      if (!!orgSettings?.show_patient_identifiers) {
+                        setShowAck(true);
+                        return;
+                      }
                       savePrivacy({
-                        enabled: !!orgSettings?.show_patient_identifiers,
+                        enabled: false,
                         format: orgSettings?.identifier_format || "first_last_initial",
-                        acknowledged: !!orgSettings?.identifiers_acknowledged,
-                      })
-                    }
+                        acknowledged: true,
+                      });
+                    }}
                   >
-                    {privacySaving ? "Saving…" : "Save Privacy Settings"}
+                    {privacySaving ? "Saving…" : "Save"}
                   </button>
                 </div>
+
+                {showAck ? (
+                  <div onMouseDown={() => setShowAck(false)} style={ui.modalOverlay}>
+                    <div onMouseDown={(e) => e.stopPropagation()} style={ui.modal}>
+                      <div style={ui.modalTitle}>Privacy Acknowledgement</div>
+                      <div style={ui.modalBody}>
+                        You’re about to enable patient identifiers. Confirm you have authorization and are following facility policy.
+                      </div>
+                      <div style={ui.modalActions}>
+                        <button style={ui.btnGhost} onClick={() => setShowAck(false)} disabled={privacySaving}>
+                          Cancel
+                        </button>
+                        <button
+                          style={ui.btnPrimary}
+                          onClick={() =>
+                            savePrivacy({
+                              enabled: true,
+                              format: orgSettings?.identifier_format || "first_last_initial",
+                              acknowledged: true,
+                            })
+                          }
+                          disabled={privacySaving}
+                        >
+                          {privacySaving ? "Saving…" : "I Acknowledge & Enable"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               </>
             )}
-
-            {/* optional ack modal */}
-            {showAck ? (
-              <div onMouseDown={() => setShowAck(false)} style={ui.modalOverlay}>
-                <div onMouseDown={(e) => e.stopPropagation()} style={ui.modal}>
-                  <div style={ui.modalTitle}>Privacy Acknowledgement</div>
-                  <div style={ui.modalBody}>
-                    This setting can display patient identifiers on dashboards and reports. Only enable this if your facility policy allows it.
-                  </div>
-                  <div style={ui.modalActions}>
-                    <button style={ui.btnGhost} onClick={() => setShowAck(false)}>
-                      Close
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : null}
           </div>
         )}
 
-        {/* ✅ Safety net: if tab exists but UI isn't mounted */}
-        {orgId &&
-        !["staff", "units", "shifts", "rooms_beds", "privacy", "departments", "admin_access"].includes(activeTab) ? (
+        {/* PAY PERIOD */}
+        {activeTab === "pay_period" && orgId && (
           <div style={ui.card}>
+            <div style={ui.cardHeader}>
+              <div>
+                <div style={ui.cardTitle}>Pay Period</div>
+                <div style={ui.cardSub}>
+                  Configure pay period rules so overtime calculations match facility payroll.
+                </div>
+              </div>
+              <button style={ui.btnGhost} onClick={loadOrgSettings} disabled={payPeriodSaving}>
+                Refresh
+              </button>
+            </div>
+
             <div style={ui.notice}>
-              Unknown tab key: <b>{String(activeTab)}</b>
+              <div style={{ display: "grid", gap: 12 }}>
+                <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+                  <div>
+                    <div style={ui.label}>Pay period length (days)</div>
+                    <input
+                      style={{ ...ui.input, width: 160 }}
+                      type="number"
+                      min={7}
+                      max={31}
+                      value={payPeriod.length_days}
+                      onChange={(e) => setPayPeriod((p) => ({ ...p, length_days: e.target.value }))}
+                    />
+                  </div>
+
+                  <div>
+                    <div style={ui.label}>Week starts on</div>
+                    <select
+                      style={{ ...ui.select, width: 200 }}
+                      value={payPeriod.week_starts_on}
+                      onChange={(e) => setPayPeriod((p) => ({ ...p, week_starts_on: e.target.value }))}
+                    >
+                      {["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"].map((d) => (
+                        <option key={d} value={d}>{d}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <div style={ui.label}>Anchor date (optional)</div>
+                    <input
+                      style={{ ...ui.input, width: 200 }}
+                      type="date"
+                      value={payPeriod.anchor_date || ""}
+                      onChange={(e) => setPayPeriod((p) => ({ ...p, anchor_date: e.target.value }))}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <button style={ui.btnPrimary} onClick={savePayPeriod} disabled={payPeriodSaving}>
+                    {payPeriodSaving ? "Saving…" : "Save Pay Period"}
+                  </button>
+                </div>
+
+                <div style={{ color: "#9CA3AF", fontSize: 12 }}>
+                  If you don’t use an anchor date, ShiftCensus will still use pay period length for overtime windows,
+                  but anchoring makes the boundaries line up exactly with payroll.
+                </div>
+              </div>
             </div>
           </div>
-        ) : null}
+        )}
       </div>
     </div>
   );
@@ -2485,14 +2522,20 @@ function sortByOrderThenName(a, b) {
   const ao = a?.display_order ?? 999999;
   const bo = b?.display_order ?? 999999;
   if (ao !== bo) return ao - bo;
-  return String(a?.name ?? "").localeCompare(String(b?.name ?? ""), undefined, { numeric: true, sensitivity: "base" });
+  return String(a?.name ?? "").localeCompare(String(b?.name ?? ""), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
 }
 
 function sortByOrderThenLabel(a, b) {
   const ao = a?.display_order ?? 999999;
   const bo = b?.display_order ?? 999999;
   if (ao !== bo) return ao - bo;
-  return String(a?.label ?? "").localeCompare(String(b?.label ?? ""), undefined, { numeric: true, sensitivity: "base" });
+  return String(a?.label ?? "").localeCompare(String(b?.label ?? ""), undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
 }
 
 /* ----------------------------- styles ----------------------------- */
@@ -2528,19 +2571,17 @@ const ui = {
 
   topActions: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" },
 
-  // NEW: section row
   sectionRow: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 },
-
-  sectionBtn: (active) => ({
-    height: 40,
-    borderRadius: 14,
-    padding: "10px 14px",
-    background: active ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.06)",
+  sectionPill: (active) => ({
+    height: 38,
+    borderRadius: 999,
+    padding: "8px 12px",
+    border: active ? "1px solid rgba(255,255,255,0.26)" : "1px solid rgba(255,255,255,0.10)",
+    background: active ? "rgba(255,255,255,0.10)" : "rgba(255,255,255,0.04)",
     color: "white",
-    border: active ? "1px solid rgba(255,255,255,0.22)" : "1px solid rgba(255,255,255,0.12)",
+    fontWeight: 1000,
     cursor: "pointer",
-    fontWeight: 950,
-    boxShadow: active ? "0 14px 40px rgba(0,0,0,0.35)" : "0 10px 28px rgba(0,0,0,0.22)",
+    boxShadow: "0 10px 28px rgba(0,0,0,0.28)",
   }),
 
   tabs: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 },
@@ -2592,6 +2633,7 @@ const ui = {
     padding: "10px 10px",
     borderBottom: "1px solid rgba(255,255,255,0.10)",
     background: "rgba(255,255,255,0.03)",
+    whiteSpace: "nowrap",
   },
 
   tr: { borderBottom: "1px solid rgba(255,255,255,0.06)" },
@@ -2650,6 +2692,7 @@ const ui = {
     background: "rgba(255,255,255,0.04)",
     fontWeight: 900,
     fontSize: 12,
+    whiteSpace: "nowrap",
   },
 
   btnPrimary: {
@@ -2737,6 +2780,32 @@ const ui = {
     cursor: "pointer",
     boxShadow: active ? "0 12px 34px rgba(0,0,0,0.35)" : "0 10px 28px rgba(0,0,0,0.22)",
   }),
+
+  roleLockedPill: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 10,
+    height: 40,
+    padding: "10px 12px",
+    borderRadius: 14,
+    border: "1px solid rgba(255,255,255,0.12)",
+    background: "rgba(255,255,255,0.04)",
+    color: "white",
+    fontWeight: 900,
+    minWidth: 200,
+  },
+
+  roleUnlockBtn: {
+    height: 28,
+    borderRadius: 999,
+    padding: "6px 10px",
+    background: "rgba(255,255,255,0.08)",
+    color: "white",
+    border: "1px solid rgba(255,255,255,0.14)",
+    cursor: "pointer",
+    fontWeight: 900,
+    fontSize: 12,
+  },
 
   privacyRow: { display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginTop: 12 },
 
@@ -2901,6 +2970,19 @@ const ui = {
     userSelect: "none",
   },
 
+  smallToggle: {
+    display: "inline-flex",
+    gap: 6,
+    alignItems: "center",
+    padding: "6px 8px",
+    borderRadius: 10,
+    border: "1px solid rgba(255,255,255,0.12)",
+    background: "rgba(255,255,255,0.04)",
+    color: "white",
+    fontWeight: 900,
+    fontSize: 12,
+  },
+
   label: {
     color: "#9CA3AF",
     fontSize: 11,
@@ -2909,10 +2991,7 @@ const ui = {
     marginBottom: 6,
   },
 
-  toggleCell: { display: "flex", gap: 8, alignItems: "center" },
-  toggleLabel: { color: "#E5E7EB", fontSize: 12, fontWeight: 900 },
-
-  // superadmin org picker styles
+  // superadmin org picker
   overlay: {
     position: "fixed",
     inset: 0,
