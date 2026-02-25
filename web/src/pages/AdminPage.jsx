@@ -6,6 +6,20 @@ import OrgSwitcher from "../components/OrgSwitcher";
 
 const SHIFT_TYPES = ["Day", "Evening", "Night"];
 
+const SECTION_TABS = {
+  staff_settings: [
+    { key: "staff", label: "Staff" },
+    { key: "shifts", label: "Shift Settings" },
+    { key: "departments", label: "Departments" },
+    { key: "admin_access", label: "Admin Access" },
+  ],
+  facility_settings: [
+    { key: "units", label: "Units" },
+    { key: "rooms_beds", label: "Rooms & Beds" },
+    { key: "privacy", label: "Privacy" },
+  ],
+};
+
 export default function AdminPage() {
   const {
     orgName,
@@ -21,16 +35,36 @@ export default function AdminPage() {
     canScheduleWrite,
   } = useUser();
 
+  // ---------------------------
+  // ✅ New: Section + Tab (organized)
+  // ---------------------------
+  const [activeSection, setActiveSection] = useState(() => {
+    if (typeof window === "undefined") return "staff_settings";
+    return window.localStorage.getItem("admin_active_section") || "staff_settings";
+  });
+
   const [activeTab, setActiveTab] = useState(() => {
     if (typeof window === "undefined") return "staff";
     return window.localStorage.getItem("admin_active_tab") || "staff";
   });
 
+  // Persist
   useEffect(() => {
     if (typeof window !== "undefined") {
+      window.localStorage.setItem("admin_active_section", activeSection);
       window.localStorage.setItem("admin_active_tab", activeTab);
     }
-  }, [activeTab]);
+  }, [activeSection, activeTab]);
+
+  // Keep tab valid when section changes
+  useEffect(() => {
+    const tabs = SECTION_TABS[activeSection] || [];
+    const isValid = tabs.some((t) => t.key === activeTab);
+    if (!isValid) {
+      setActiveTab(tabs[0]?.key || "staff");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection]);
 
   const [loading, setLoading] = useState(false);
 
@@ -69,7 +103,7 @@ export default function AdminPage() {
     role: "",
     email: "",
     phone: "",
-    department_id: "", // ✅ add to form state
+    department_id: "",
   });
 
   const [unitForm, setUnitForm] = useState({ name: "" });
@@ -89,7 +123,6 @@ export default function AdminPage() {
       await navigator.clipboard.writeText(String(text || ""));
       alert("Copied to clipboard.");
     } catch {
-      // fallback
       const ta = document.createElement("textarea");
       ta.value = String(text || "");
       document.body.appendChild(ta);
@@ -272,8 +305,11 @@ export default function AdminPage() {
     loadAll();
     loadOrgSettings();
     loadDepartments();
+
+    // load tab-specific
     if (activeTab === "rooms_beds") loadRooms();
     if (activeTab === "admin_access" && (canManageAdmins || isSuperadmin)) loadAdminMembers();
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgId]);
 
@@ -310,6 +346,7 @@ export default function AdminPage() {
       setOrgSettings({
         show_patient_identifiers: false,
         identifier_format: "first_last_initial",
+        identifiers_acknowledged: false,
       });
     }
   }
@@ -364,6 +401,7 @@ export default function AdminPage() {
   // ---------------------------
   async function loadRooms() {
     setRoomsLoading(true);
+    setBedsLoading(true);
     try {
       const data = await api.get("/facility/rooms");
       const list = Array.isArray(data) ? data : [];
@@ -381,7 +419,7 @@ export default function AdminPage() {
       const currentRoomId = (selectedRoomId ?? firstActive?.id) || null;
 
       if (currentRoomId) {
-        const room = sorted.find((r) => r.id === currentRoomId);
+        const room = sorted.find((r) => String(r.id) === String(currentRoomId));
         setBeds(Array.isArray(room?.beds) ? room.beds.slice().sort(sortByOrderThenLabel) : []);
       } else {
         setBeds([]);
@@ -400,7 +438,7 @@ export default function AdminPage() {
 
   function syncBedsFromRooms(roomId, roomsList) {
     const list = Array.isArray(roomsList) ? roomsList : rooms;
-    const room = list.find((r) => r.id === roomId);
+    const room = list.find((r) => String(r.id) === String(roomId));
     const nextBeds = Array.isArray(room?.beds) ? room.beds.slice().sort(sortByOrderThenLabel) : [];
     setBeds(nextBeds);
   }
@@ -454,8 +492,9 @@ export default function AdminPage() {
         acknowledged,
       });
       setOrgSettings(updated);
+      alert("Privacy settings saved.");
     } catch (e) {
-      alert(e.message || "Failed to update privacy settings");
+      alert(e?.response?.data?.error || e.message || "Failed to update privacy settings");
     } finally {
       setPrivacySaving(false);
     }
@@ -484,7 +523,7 @@ export default function AdminPage() {
       role: String(staffForm.role || "").trim(),
       email: String(staffForm.email || "").trim() || null,
       phone: String(staffForm.phone || "").trim() || null,
-      department_id: staffForm.department_id ? staffForm.department_id : null, // ✅ send to backend
+      department_id: staffForm.department_id ? staffForm.department_id : null,
     };
 
     if (!payload.name || !payload.role) return alert("Name and Role are required.");
@@ -496,7 +535,6 @@ export default function AdminPage() {
       setStaff((prev) => [...prev, created]);
       setShowAddStaff(false);
 
-      // ✅ if backend returned an actionLink (no phone, or SMS failed), show a modal with copy button
       if (created?.actionLink) {
         setInviteModal({
           name: created?.name || payload.name,
@@ -509,7 +547,6 @@ export default function AdminPage() {
             "Invite link created. Copy and send it to the staff member.",
         });
       } else if (created?.invite_sent === false && created?.login_created) {
-        // still give some feedback even if no link returned
         setInviteModal({
           name: created?.name || payload.name,
           email: created?.email || payload.email,
@@ -522,7 +559,8 @@ export default function AdminPage() {
       setStaffForm({ name: "", role: "", email: "", phone: "", department_id: "" });
     } catch (e) {
       alert(
-        e?.message ||
+        e?.response?.data?.error ||
+          e?.message ||
           "Failed to add staff. If POST /staff isn't wired yet, tell me and I’ll add the backend route."
       );
     } finally {
@@ -536,11 +574,12 @@ export default function AdminPage() {
       role: String(staffForm.role || "").trim(),
       email: String(staffForm.email || "").trim() || null,
       phone: String(staffForm.phone || "").trim() || null,
-      department_id: staffForm.department_id ? staffForm.department_id : null, // ✅
+      department_id: staffForm.department_id ? staffForm.department_id : null,
     };
     const updated = await api.patch(`/staff/${id}`, payload);
     setStaff((prev) => prev.map((s) => (s.id === id ? updated : s)));
     setEditingStaffId(null);
+    setStaffForm({ name: "", role: "", email: "", phone: "", department_id: "" });
   }
 
   async function deleteStaff(id) {
@@ -550,10 +589,7 @@ export default function AdminPage() {
   }
 
   function normalizeHeader(h) {
-    return String(h || "")
-      .trim()
-      .toLowerCase()
-      .replace(/\s+/g, "_");
+    return String(h || "").trim().toLowerCase().replace(/\s+/g, "_");
   }
 
   function parseCsvText(text) {
@@ -615,15 +651,9 @@ export default function AdminPage() {
     const idxName = header.findIndex((h) => h === "name" || h === "full_name");
     const idxRole = header.findIndex((h) => h === "role" || h === "title");
     const idxEmail = header.findIndex((h) => h === "email" || h === "e-mail");
-    const idxPhone = header.findIndex(
-      (h) => h === "phone" || h === "phone_number" || h === "mobile"
-    );
+    const idxPhone = header.findIndex((h) => h === "phone" || h === "phone_number" || h === "mobile");
     const idxDept = header.findIndex(
-      (h) =>
-        h === "department_id" ||
-        h === "department" ||
-        h === "dept" ||
-        h === "department_name"
+      (h) => h === "department_id" || h === "department" || h === "dept" || h === "department_name"
     );
 
     const errors = [];
@@ -631,7 +661,6 @@ export default function AdminPage() {
     if (idxRole < 0) errors.push('Missing required column: "role"');
     if (errors.length) return { staffRows: [], errors };
 
-    // dept lookup map (by name -> id)
     const deptByName = new Map(
       (departments || []).map((d) => [String(d?.name || "").trim().toLowerCase(), d.id])
     );
@@ -645,7 +674,7 @@ export default function AdminPage() {
         const raw = String(r[idxDept] ?? "").trim();
         if (raw) {
           if (raw.includes("-") && raw.length >= 20) {
-            department_id = raw; // might already be an id
+            department_id = raw;
           } else {
             department_id = deptByName.get(raw.toLowerCase()) || null;
           }
@@ -699,7 +728,6 @@ export default function AdminPage() {
         const c = await api.post("/staff", s);
         created.push(c);
 
-        // show invite link per person if returned (optional)
         if (c?.actionLink) {
           // eslint-disable-next-line no-await-in-loop
           await copyToClipboard(c.actionLink);
@@ -724,7 +752,7 @@ export default function AdminPage() {
     const name = String(unitForm.name || "").trim();
     if (!name) return;
     const created = await api.post("/units", { name });
-    setUnits((prev) => [...prev, created]);
+    setUnits((prev) => [...prev, created].sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || ""), undefined, { numeric: true })));
     setUnitForm({ name: "" });
   }
 
@@ -732,8 +760,9 @@ export default function AdminPage() {
     const name = String(unitForm.name || "").trim();
     if (!name) return;
     const updated = await api.patch(`/units/${id}`, { name });
-    setUnits((prev) => prev.map((u) => (u.id === id ? updated : u)));
+    setUnits((prev) => prev.map((u) => (u.id === id ? updated : u)).sort((a, b) => String(a?.name || "").localeCompare(String(b?.name || ""), undefined, { numeric: true })));
     setEditingUnitId(null);
+    setUnitForm({ name: "" });
   }
 
   async function deleteUnit(id) {
@@ -749,7 +778,7 @@ export default function AdminPage() {
     const roleVal =
       selectedShiftRole !== "ALL" ? selectedShiftRole : String(shiftForm.role || "").trim();
 
-    if (!roleVal) return;
+    if (!roleVal) return alert("Role is required.");
 
     const created = await api.post("/shift-settings", { ...shiftForm, role: roleVal });
     setShiftSettings((prev) => [...prev, created]);
@@ -767,7 +796,7 @@ export default function AdminPage() {
     const roleVal =
       selectedShiftRole !== "ALL" ? selectedShiftRole : String(shiftForm.role || "").trim();
 
-    if (!roleVal) return;
+    if (!roleVal) return alert("Role is required.");
 
     const updated = await api.patch(`/shift-settings/${id}`, { ...shiftForm, role: roleVal });
     setShiftSettings((prev) => prev.map((s) => (s.id === id ? updated : s)));
@@ -784,7 +813,7 @@ export default function AdminPage() {
   // ROOMS ACTIONS
   // ==================================================
   async function addRoom() {
-    if (!canManageFacility) return;
+    if (!canManageFacility) return alert("You don’t have permission to change facility settings.");
     const name = String(roomForm.name || "").trim();
     if (!name) return;
     setRoomSaving(true);
@@ -801,17 +830,16 @@ export default function AdminPage() {
       });
 
       setRoomForm({ name: "", is_active: true });
-
       if (!selectedRoomId && created?.id) setBeds([]);
     } catch (e) {
-      alert(e?.message || "Failed to add room.");
+      alert(e?.response?.data?.error || e?.message || "Failed to add room.");
     } finally {
       setRoomSaving(false);
     }
   }
 
   async function saveRoom(id) {
-    if (!canManageFacility) return;
+    if (!canManageFacility) return alert("You don’t have permission to change facility settings.");
     const name = String(roomForm.name || "").trim();
     if (!name) return;
     setRoomSaving(true);
@@ -828,14 +856,14 @@ export default function AdminPage() {
       setEditingRoomId(null);
       setRoomForm({ name: "", is_active: true });
     } catch (e) {
-      alert(e?.message || "Failed to save room.");
+      alert(e?.response?.data?.error || e?.message || "Failed to save room.");
     } finally {
       setRoomSaving(false);
     }
   }
 
   async function toggleRoomActive(room) {
-    if (!canManageFacility) return;
+    if (!canManageFacility) return alert("You don’t have permission to change facility settings.");
     setRoomSaving(true);
     try {
       const updated = await api.patch(`/facility/rooms/${room.id}`, {
@@ -847,7 +875,7 @@ export default function AdminPage() {
           .sort(sortByOrderThenName)
       );
     } catch (e) {
-      alert(e?.message || "Failed to update room.");
+      alert(e?.response?.data?.error || e?.message || "Failed to update room.");
     } finally {
       setRoomSaving(false);
     }
@@ -857,7 +885,7 @@ export default function AdminPage() {
   // BEDS ACTIONS
   // ==================================================
   async function addBed() {
-    if (!canManageFacility) return;
+    if (!canManageFacility) return alert("You don’t have permission to change facility settings.");
     if (!selectedRoomId) return alert("Select a room first.");
     const label = String(bedForm.label || "").trim();
     if (!label) return;
@@ -873,7 +901,7 @@ export default function AdminPage() {
       setRooms((prev) =>
         prev
           .map((r) => {
-            if (r.id !== selectedRoomId) return r;
+            if (String(r.id) !== String(selectedRoomId)) return r;
             const nextBeds = Array.isArray(r.beds) ? [...r.beds, created] : [created];
             return { ...r, beds: nextBeds };
           })
@@ -882,14 +910,14 @@ export default function AdminPage() {
 
       setBedForm({ label: "", is_active: true });
     } catch (e) {
-      alert(e?.message || "Failed to add bed.");
+      alert(e?.response?.data?.error || e?.message || "Failed to add bed.");
     } finally {
       setBedSaving(false);
     }
   }
 
   async function saveBed(id) {
-    if (!canManageFacility) return;
+    if (!canManageFacility) return alert("You don’t have permission to change facility settings.");
     const label = String(bedForm.label || "").trim();
     if (!label) return;
     setBedSaving(true);
@@ -899,16 +927,12 @@ export default function AdminPage() {
         is_active: !!bedForm.is_active,
       });
 
-      setBeds((prev) =>
-        prev.map((b) => (b.id === id ? updated : b)).sort(sortByOrderThenLabel)
-      );
+      setBeds((prev) => prev.map((b) => (b.id === id ? updated : b)).sort(sortByOrderThenLabel));
 
       setRooms((prev) =>
         prev.map((r) => {
-          if (r.id !== selectedRoomId) return r;
-          const nextBeds = (Array.isArray(r.beds) ? r.beds : []).map((b) =>
-            b.id === id ? updated : b
-          );
+          if (String(r.id) !== String(selectedRoomId)) return r;
+          const nextBeds = (Array.isArray(r.beds) ? r.beds : []).map((b) => (b.id === id ? updated : b));
           return { ...r, beds: nextBeds };
         })
       );
@@ -916,49 +940,44 @@ export default function AdminPage() {
       setEditingBedId(null);
       setBedForm({ label: "", is_active: true });
     } catch (e) {
-      alert(e?.message || "Failed to save bed.");
+      alert(e?.response?.data?.error || e?.message || "Failed to save bed.");
     } finally {
       setBedSaving(false);
     }
   }
 
   async function toggleBedActive(bed) {
-    if (!canManageFacility) return;
+    if (!canManageFacility) return alert("You don’t have permission to change facility settings.");
     setBedSaving(true);
     try {
       const updated = await api.patch(`/facility/beds/${bed.id}`, {
         is_active: !(bed.is_active !== false),
       });
 
-      setBeds((prev) =>
-        prev.map((b) => (b.id === bed.id ? updated : b)).sort(sortByOrderThenLabel)
-      );
+      setBeds((prev) => prev.map((b) => (b.id === bed.id ? updated : b)).sort(sortByOrderThenLabel));
 
       setRooms((prev) =>
         prev.map((r) => {
-          if (r.id !== selectedRoomId) return r;
-          const nextBeds = (Array.isArray(r.beds) ? r.beds : []).map((b) =>
-            b.id === bed.id ? updated : b
-          );
+          if (String(r.id) !== String(selectedRoomId)) return r;
+          const nextBeds = (Array.isArray(r.beds) ? r.beds : []).map((b) => (b.id === bed.id ? updated : b));
           return { ...r, beds: nextBeds };
         })
       );
     } catch (e) {
-      alert(e?.message || "Failed to update bed.");
+      alert(e?.response?.data?.error || e?.message || "Failed to update bed.");
     } finally {
       setBedSaving(false);
     }
   }
 
   async function persistBedOrder(nextBeds) {
-    if (!canManageFacility) return;
+    if (!canManageFacility) return alert("You don’t have permission to change facility settings.");
     if (!selectedRoomId) return;
 
     setBeds(nextBeds);
-
     setRooms((prev) =>
       prev.map((r) => {
-        if (r.id !== selectedRoomId) return r;
+        if (String(r.id) !== String(selectedRoomId)) return r;
         return { ...r, beds: nextBeds };
       })
     );
@@ -971,7 +990,7 @@ export default function AdminPage() {
       });
     } catch (e) {
       console.error("REORDER SAVE ERROR:", e);
-      alert(e?.message || "Failed to save bed order.");
+      alert(e?.response?.data?.error || e?.message || "Failed to save bed order.");
     }
   }
 
@@ -1006,7 +1025,7 @@ export default function AdminPage() {
     const roomCount = rooms?.length ? rooms.length : null;
     const bedCount = beds?.length ? beds.length : null;
     if (activeTab !== "rooms_beds") return null;
-    const selectedRoom = rooms.find((r) => r.id === selectedRoomId);
+    const selectedRoom = rooms.find((r) => String(r.id) === String(selectedRoomId));
     const roomLabel = selectedRoom ? `Room: ${selectedRoom.name}` : "No room selected";
     const suffix = bedCount !== null ? ` • ${bedCount} beds` : "";
     return `${roomLabel}${suffix}${roomCount !== null ? ` • ${roomCount} rooms total` : ""}`;
@@ -1064,24 +1083,15 @@ export default function AdminPage() {
                   <>
                     {" "}
                     •{" "}
-                    <span
-                      style={{
-                        fontFamily:
-                          "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-                      }}
-                    >
+                    <span style={ui.mono}>
                       {orgCode}
                     </span>
                   </>
                 ) : null}
               </span>
 
-              {headerSubtitle ? (
-                <span style={{ marginLeft: 10, color: "#9CA3AF" }}>{headerSubtitle}</span>
-              ) : null}
-              {loading ? (
-                <span style={{ marginLeft: 10, color: "#9CA3AF" }}>Loading…</span>
-              ) : null}
+              {headerSubtitle ? <span style={{ marginLeft: 10, color: "#9CA3AF" }}>{headerSubtitle}</span> : null}
+              {loading ? <span style={{ marginLeft: 10, color: "#9CA3AF" }}>Loading…</span> : null}
             </div>
           </div>
         </div>
@@ -1116,38 +1126,41 @@ export default function AdminPage() {
         />
       )}
 
-      {/* TABS */}
+      {/* ✅ NEW: SECTION SWITCHER (Staff Settings vs Facility Settings) */}
+      <div style={ui.sectionRow}>
+        <button
+          style={ui.sectionBtn(activeSection === "staff_settings")}
+          onClick={() => setActiveSection("staff_settings")}
+          type="button"
+        >
+          Staff Settings
+        </button>
+        <button
+          style={ui.sectionBtn(activeSection === "facility_settings")}
+          onClick={() => setActiveSection("facility_settings")}
+          type="button"
+        >
+          Facility Settings
+        </button>
+      </div>
+
+      {/* ✅ Tabs (within section) */}
       <div style={ui.tabs}>
-        <TabButton active={activeTab === "staff"} onClick={() => setActiveTab("staff")} label="Staff" />
-        <TabButton active={activeTab === "units"} onClick={() => setActiveTab("units")} label="Units" />
-        <TabButton
-          active={activeTab === "shifts"}
-          onClick={() => setActiveTab("shifts")}
-          label="Shift Settings"
-        />
-        <TabButton
-          active={activeTab === "rooms_beds"}
-          onClick={() => setActiveTab("rooms_beds")}
-          label="Rooms & Beds"
-        />
-        <TabButton active={activeTab === "privacy"} onClick={() => setActiveTab("privacy")} label="Privacy" />
-
-        {(isOrgAdmin || canManageAdmins || isSuperadmin) ? (
-          <TabButton
-            active={activeTab === "departments"}
-            onClick={() => setActiveTab("departments")}
-            label="Departments"
-          />
-        ) : null}
-
-        {/* ✅ Only show if can_manage_admins */}
-        {canManageAdmins || isSuperadmin ? (
-          <TabButton
-            active={activeTab === "admin_access"}
-            onClick={() => setActiveTab("admin_access")}
-            label="Admin Access"
-          />
-        ) : null}
+        {(SECTION_TABS[activeSection] || [])
+          .filter((t) => {
+            // permission-based visibility
+            if (t.key === "departments") return isOrgAdmin || canManageAdmins || isSuperadmin;
+            if (t.key === "admin_access") return canManageAdmins || isSuperadmin;
+            return true;
+          })
+          .map((t) => (
+            <TabButton
+              key={t.key}
+              active={activeTab === t.key}
+              onClick={() => setActiveTab(t.key)}
+              label={t.label}
+            />
+          ))}
       </div>
 
       {/* CONTENT */}
@@ -1198,7 +1211,430 @@ export default function AdminPage() {
           </div>
         ) : null}
 
-        {/* ✅ DEPARTMENTS */}
+        {/* =========================
+            STAFF SETTINGS: STAFF
+           ========================= */}
+        {activeTab === "staff" && orgId && (
+          <div style={ui.card}>
+            <div style={ui.cardHeader}>
+              <div>
+                <div style={ui.cardTitle}>Staff</div>
+                <div style={ui.cardSub}>Manage staff directory for scheduling and assignments.</div>
+              </div>
+
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <button
+                  style={ui.btnPrimary}
+                  onClick={() => {
+                    setStaffForm({ name: "", role: "", email: "", phone: "", department_id: "" });
+                    setShowAddStaff(true);
+                  }}
+                >
+                  + Add Staff
+                </button>
+
+                <input
+                  ref={csvInputRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  style={{ display: "none" }}
+                  onChange={(e) => onCsvSelected(e.target.files?.[0])}
+                />
+                <button
+                  style={ui.btnGhost}
+                  onClick={() => csvInputRef.current?.click()}
+                  disabled={csvUploading}
+                  title="CSV columns: name, role, email, phone, department (optional)"
+                >
+                  {csvUploading ? "Importing…" : "Import CSV"}
+                </button>
+              </div>
+            </div>
+
+            {csvError ? (
+              <div style={{ ...ui.notice, borderColor: "rgba(239,68,68,0.35)" }}>{csvError}</div>
+            ) : null}
+
+            <div style={{ overflowX: "auto" }}>
+              <table style={ui.table}>
+                <thead>
+                  <tr>
+                    <th style={ui.th}>ID</th>
+                    <th style={ui.th}>Name</th>
+                    <th style={ui.th}>Role</th>
+                    <th style={ui.th}>Department</th>
+                    <th style={ui.th}>Email</th>
+                    <th style={ui.th}>Phone</th>
+                    <th style={{ ...ui.th, textAlign: "right" }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {staff.map((s) => {
+                    const isEdit = editingStaffId === s.id;
+                    const deptName =
+                      deptOptions.find((d) => String(d.id) === String(s.department_id))?.name || "—";
+
+                    return (
+                      <tr key={s.id} style={ui.tr}>
+                        <td style={ui.tdMono}>{s.id}</td>
+
+                        <td style={ui.td}>
+                          {isEdit ? (
+                            <input
+                              style={ui.input}
+                              value={staffForm.name || ""}
+                              onChange={(e) => setStaffForm({ ...staffForm, name: e.target.value })}
+                            />
+                          ) : (
+                            <span style={ui.cellStrong}>{s.name}</span>
+                          )}
+                        </td>
+
+                        <td style={ui.td}>
+                          {isEdit ? (
+                            <input
+                              style={ui.input}
+                              value={staffForm.role || ""}
+                              onChange={(e) => setStaffForm({ ...staffForm, role: e.target.value })}
+                            />
+                          ) : (
+                            <span style={ui.pill}>{s.role}</span>
+                          )}
+                        </td>
+
+                        <td style={ui.td}>
+                          {isEdit ? (
+                            <select
+                              style={ui.select}
+                              value={staffForm.department_id || ""}
+                              onChange={(e) => setStaffForm((p) => ({ ...p, department_id: e.target.value }))}
+                            >
+                              <option value="">No department</option>
+                              {deptOptions.map((d) => (
+                                <option key={d.id} value={d.id}>
+                                  {d.name}
+                                  {d.is_active === false ? " (inactive)" : ""}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <span style={ui.muted}>{deptName}</span>
+                          )}
+                        </td>
+
+                        <td style={ui.td}>
+                          {isEdit ? (
+                            <input
+                              style={ui.input}
+                              value={staffForm.email || ""}
+                              onChange={(e) => setStaffForm({ ...staffForm, email: e.target.value })}
+                            />
+                          ) : (
+                            <span style={ui.muted}>{s.email || "—"}</span>
+                          )}
+                        </td>
+
+                        <td style={ui.td}>
+                          {isEdit ? (
+                            <input
+                              style={ui.input}
+                              value={staffForm.phone || ""}
+                              onChange={(e) => setStaffForm({ ...staffForm, phone: e.target.value })}
+                            />
+                          ) : (
+                            <span style={ui.muted}>{s.phone || "—"}</span>
+                          )}
+                        </td>
+
+                        <td style={{ ...ui.td, textAlign: "right" }}>
+                          {isEdit ? (
+                            <div style={ui.actions}>
+                              <button style={ui.btnPrimary} onClick={() => saveStaff(s.id)}>
+                                Save
+                              </button>
+                              <button
+                                style={ui.btnGhost}
+                                onClick={() => {
+                                  setEditingStaffId(null);
+                                  setStaffForm({ name: "", role: "", email: "", phone: "", department_id: "" });
+                                }}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <div style={ui.actions}>
+                              <button
+                                style={ui.btnGhost}
+                                onClick={() => {
+                                  setEditingStaffId(s.id);
+                                  setStaffForm({
+                                    name: s.name || "",
+                                    role: s.role || "",
+                                    email: s.email || "",
+                                    phone: s.phone || "",
+                                    department_id: s.department_id || "",
+                                  });
+                                }}
+                              >
+                                Edit
+                              </button>
+                              <button style={ui.btnDanger} onClick={() => deleteStaff(s.id)}>
+                                Delete
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {staff.length === 0 ? (
+                    <tr>
+                      <td style={ui.emptyRow} colSpan={7}>
+                        No staff yet.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+
+            {/* ADD STAFF MODAL */}
+            {showAddStaff ? (
+              <div onMouseDown={() => setShowAddStaff(false)} style={ui.modalOverlay}>
+                <div onMouseDown={(e) => e.stopPropagation()} style={ui.modal}>
+                  <div style={ui.modalTitle}>Add Staff Member</div>
+                  <div style={ui.modalBody}>
+                    <div style={{ display: "grid", gap: 10 }}>
+                      <input
+                        style={ui.input}
+                        placeholder="Name *"
+                        value={staffForm.name}
+                        onChange={(e) => setStaffForm((p) => ({ ...p, name: e.target.value }))}
+                      />
+                      <input
+                        style={ui.input}
+                        placeholder="Role * (CNA, LPN, RN, Scheduler, etc.)"
+                        value={staffForm.role}
+                        onChange={(e) => setStaffForm((p) => ({ ...p, role: e.target.value }))}
+                      />
+
+                      <select
+                        style={ui.select}
+                        value={staffForm.department_id || ""}
+                        onChange={(e) => setStaffForm((p) => ({ ...p, department_id: e.target.value }))}
+                      >
+                        <option value="">No department</option>
+                        {deptOptions.map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.name}
+                            {d.is_active === false ? " (inactive)" : ""}
+                          </option>
+                        ))}
+                      </select>
+
+                      <input
+                        style={ui.input}
+                        placeholder="Email"
+                        value={staffForm.email}
+                        onChange={(e) => setStaffForm((p) => ({ ...p, email: e.target.value }))}
+                      />
+                      <input
+                        style={ui.input}
+                        placeholder="Phone (+1... for SMS invites)"
+                        value={staffForm.phone}
+                        onChange={(e) => setStaffForm((p) => ({ ...p, phone: e.target.value }))}
+                      />
+
+                      <div style={{ color: "#9CA3AF", fontSize: 12 }}>
+                        Required: <b>Name</b> and <b>Role</b>.
+                        <br />
+                        If you enter an email, ShiftCensus will create a login and generate an invite link.
+                        If you also enter an E.164 phone (+1...), it will SMS the link.
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={ui.modalActions}>
+                    <button
+                      style={ui.btnGhost}
+                      onClick={() => {
+                        setShowAddStaff(false);
+                        setStaffForm({ name: "", role: "", email: "", phone: "", department_id: "" });
+                      }}
+                      disabled={staffAdding}
+                    >
+                      Cancel
+                    </button>
+                    <button style={ui.btnPrimary} onClick={addStaff} disabled={staffAdding}>
+                      {staffAdding ? "Adding…" : "Add Staff"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        )}
+
+        {/* =========================
+            STAFF SETTINGS: SHIFTS
+           ========================= */}
+        {activeTab === "shifts" && orgId && (
+          <div style={ui.card}>
+            <div style={ui.cardHeader}>
+              <div>
+                <div style={ui.cardTitle}>Shift Settings</div>
+                <div style={ui.cardSub}>
+                  Default shift start/end times per role. Filter by role using bubbles.
+                </div>
+              </div>
+
+              <button style={ui.btnGhost} onClick={loadAll} disabled={loading}>
+                {loading ? "Loading…" : "Refresh"}
+              </button>
+            </div>
+
+            <div style={ui.roleBubbleWrap}>
+              <button
+                type="button"
+                style={ui.roleBubble(selectedShiftRole === "ALL")}
+                onClick={() => selectShiftRole("ALL")}
+              >
+                ALL
+              </button>
+              {roleOptions.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  style={ui.roleBubble(selectedShiftRole === r)}
+                  onClick={() => selectShiftRole(r)}
+                >
+                  {r}
+                </button>
+              ))}
+            </div>
+
+            <div style={ui.inlineFormWrap}>
+              <input
+                style={ui.input}
+                placeholder="Role (ex: CNA, LPN, RN)"
+                value={shiftForm.role || ""}
+                disabled={selectedShiftRole !== "ALL"}
+                onChange={(e) => setShiftForm((p) => ({ ...p, role: e.target.value }))}
+                title={selectedShiftRole !== "ALL" ? "Role is locked by selected bubble." : ""}
+              />
+
+              <select
+                style={ui.select}
+                value={shiftForm.shift_type}
+                onChange={(e) => setShiftForm((p) => ({ ...p, shift_type: e.target.value }))}
+              >
+                {SHIFT_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+
+              <input
+                style={ui.input}
+                type="time"
+                value={shiftForm.start_local}
+                onChange={(e) => setShiftForm((p) => ({ ...p, start_local: e.target.value }))}
+              />
+              <input
+                style={ui.input}
+                type="time"
+                value={shiftForm.end_local}
+                onChange={(e) => setShiftForm((p) => ({ ...p, end_local: e.target.value }))}
+              />
+
+              {editingShiftId ? (
+                <>
+                  <button style={ui.btnPrimary} onClick={() => saveShift(editingShiftId)}>
+                    Save
+                  </button>
+                  <button
+                    style={ui.btnGhost}
+                    onClick={() => {
+                      setEditingShiftId(null);
+                      setShiftForm({ role: "", shift_type: "Day", start_local: "07:00", end_local: "15:00" });
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button style={ui.btnPrimary} onClick={addShift}>
+                  Add
+                </button>
+              )}
+            </div>
+
+            <div style={{ overflowX: "auto" }}>
+              <table style={ui.table}>
+                <thead>
+                  <tr>
+                    <th style={ui.th}>Role</th>
+                    <th style={ui.th}>Shift Type</th>
+                    <th style={ui.th}>Start</th>
+                    <th style={ui.th}>End</th>
+                    <th style={{ ...ui.th, textAlign: "right" }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(filteredShiftSettings || []).map((s) => {
+                    const isEdit = editingShiftId === s.id;
+                    return (
+                      <tr key={s.id} style={ui.tr}>
+                        <td style={ui.td}>
+                          <span style={ui.pill}>{s.role}</span>
+                        </td>
+                        <td style={ui.td}>{s.shift_type}</td>
+                        <td style={ui.tdMono}>{s.start_local}</td>
+                        <td style={ui.tdMono}>{s.end_local}</td>
+                        <td style={{ ...ui.td, textAlign: "right" }}>
+                          <div style={ui.actions}>
+                            <button
+                              style={ui.btnGhost}
+                              onClick={() => {
+                                setEditingShiftId(s.id);
+                                setShiftForm({
+                                  role: s.role || "",
+                                  shift_type: s.shift_type || "Day",
+                                  start_local: s.start_local || "07:00",
+                                  end_local: s.end_local || "15:00",
+                                });
+                              }}
+                            >
+                              Edit
+                            </button>
+                            <button style={ui.btnDanger} onClick={() => deleteShift(s.id)}>
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {(filteredShiftSettings || []).length === 0 ? (
+                    <tr>
+                      <td style={ui.emptyRow} colSpan={5}>
+                        No shift settings yet.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* =========================
+            STAFF SETTINGS: DEPARTMENTS
+           ========================= */}
         {activeTab === "departments" && orgId && (
           <div style={ui.card}>
             <div style={ui.cardHeader}>
@@ -1321,196 +1757,177 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* ✅ ADMIN ACCESS */}
-        {activeTab === "admin_access" && orgId && (
-          <div style={ui.card}>
-            {/* ... unchanged from your version ... */}
-            {/* (left as-is to keep this response readable; your existing block works fine) */}
-          </div>
-        )}
-
-        {/* STAFF */}
-        {activeTab === "staff" && orgId && (
+        {/* =========================
+            STAFF SETTINGS: ADMIN ACCESS
+           ========================= */}
+        {activeTab === "admin_access" && orgId && (canManageAdmins || isSuperadmin) && (
           <div style={ui.card}>
             <div style={ui.cardHeader}>
               <div>
-                <div style={ui.cardTitle}>Staff</div>
-                <div style={ui.cardSub}>Manage staff directory for scheduling and assignments.</div>
+                <div style={ui.cardTitle}>Admin Access</div>
+                <div style={ui.cardSub}>
+                  Manage who can administer this facility, schedule, and privacy/facility settings.
+                </div>
               </div>
 
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <button
-                  style={ui.btnPrimary}
-                  onClick={() => {
-                    setStaffForm({ name: "", role: "", email: "", phone: "", department_id: "" });
-                    setShowAddStaff(true);
-                  }}
-                >
-                  + Add Staff
-                </button>
-
                 <input
-                  ref={csvInputRef}
-                  type="file"
-                  accept=".csv,text/csv"
-                  style={{ display: "none" }}
-                  onChange={(e) => onCsvSelected(e.target.files?.[0])}
+                  style={{ ...ui.input, minWidth: 240 }}
+                  placeholder="Search name, email, role…"
+                  value={adminSearch}
+                  onChange={(e) => setAdminSearch(e.target.value)}
                 />
-                <button
-                  style={ui.btnGhost}
-                  onClick={() => csvInputRef.current?.click()}
-                  disabled={csvUploading}
-                  title="CSV columns: name, role, email, phone, department (optional)"
-                >
-                  {csvUploading ? "Importing…" : "Import CSV"}
+                <button style={ui.btnGhost} onClick={loadAdminMembers} disabled={adminMembersLoading}>
+                  {adminMembersLoading ? "Loading…" : "Refresh"}
                 </button>
               </div>
             </div>
-
-            {csvError ? (
-              <div style={{ ...ui.notice, borderColor: "rgba(239,68,68,0.35)" }}>{csvError}</div>
-            ) : null}
 
             <div style={{ overflowX: "auto" }}>
               <table style={ui.table}>
                 <thead>
                   <tr>
-                    <th style={ui.th}>ID</th>
-                    <th style={ui.th}>Name</th>
-                    <th style={ui.th}>Role</th>
+                    <th style={ui.th}>Member</th>
                     <th style={ui.th}>Department</th>
-                    <th style={ui.th}>Email</th>
-                    <th style={ui.th}>Phone</th>
-                    <th style={{ ...ui.th, textAlign: "right" }}>Actions</th>
+                    <th style={ui.th}>Org Admin</th>
+                    <th style={ui.th}>Manage Admins</th>
+                    <th style={ui.th}>Schedule Write</th>
+                    <th style={ui.th}>Privacy</th>
+                    <th style={ui.th}>Facility</th>
+                    <th style={{ ...ui.th, textAlign: "right" }}>Save</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {staff.map((s) => {
-                    const isEdit = editingStaffId === s.id;
-                    const deptName =
-                      deptOptions.find((d) => String(d.id) === String(s.department_id))?.name || "—";
+                  {(filteredAdminMembers || []).map((m) => {
+                    const busy = String(savingMemberUserId) === String(m.id);
+
+                    const name =
+                      m.staff_name ||
+                      m.display_name ||
+                      m.name ||
+                      (m.email ? m.email.split("@")[0] : "Member");
+
+                    const email = m.email || "";
+                    const phone = m.phone || "";
+                    const staffRole = m.staff_role || m.role || "";
+
+                    const is_org_admin = !!m.is_org_admin;
+                    const can_manage_admins = !!m.can_manage_admins;
+                    const can_schedule_write_member = !!m.can_schedule_write;
+                    const can_manage_privacy_member = !!m.can_manage_privacy;
+                    const can_manage_facility_member = !!m.can_manage_facility;
+
+                    const deptId = m.department_id || "";
 
                     return (
-                      <tr key={s.id} style={ui.tr}>
-                        <td style={ui.tdMono}>{s.id}</td>
-
+                      <tr key={m.id} style={ui.tr}>
                         <td style={ui.td}>
-                          {isEdit ? (
-                            <input
-                              style={ui.input}
-                              value={staffForm.name || ""}
-                              onChange={(e) => setStaffForm({ ...staffForm, name: e.target.value })}
-                            />
-                          ) : (
-                            <span style={ui.cellStrong}>{s.name}</span>
-                          )}
+                          <div style={ui.cellStrong}>{name}</div>
+                          <div style={{ color: "#9CA3AF", fontSize: 12 }}>
+                            {staffRole ? <span style={ui.pill}>{staffRole}</span> : null}
+                            {email ? <span style={{ marginLeft: 8 }}>{email}</span> : null}
+                            {phone ? <span style={{ marginLeft: 8 }}>• {phone}</span> : null}
+                          </div>
                         </td>
 
                         <td style={ui.td}>
-                          {isEdit ? (
-                            <input
-                              style={ui.input}
-                              value={staffForm.role || ""}
-                              onChange={(e) => setStaffForm({ ...staffForm, role: e.target.value })}
-                            />
-                          ) : (
-                            <span style={ui.pill}>{s.role}</span>
-                          )}
+                          <select
+                            style={ui.select}
+                            value={deptId}
+                            onChange={(e) =>
+                              saveMemberPerms(m.id, { department_id: e.target.value || null })
+                            }
+                            disabled={busy}
+                          >
+                            <option value="">No department</option>
+                            {deptOptions.map((d) => (
+                              <option key={d.id} value={d.id}>
+                                {d.name}
+                                {d.is_active === false ? " (inactive)" : ""}
+                              </option>
+                            ))}
+                          </select>
                         </td>
 
                         <td style={ui.td}>
-                          {isEdit ? (
-                            <select
-                              style={ui.select}
-                              value={staffForm.department_id || ""}
+                          <label style={ui.toggleCell}>
+                            <input
+                              type="checkbox"
+                              checked={is_org_admin}
+                              onChange={(e) => saveMemberPerms(m.id, { is_org_admin: e.target.checked })}
+                              disabled={busy}
+                            />
+                            <span style={ui.toggleLabel}>{is_org_admin ? "Yes" : "No"}</span>
+                          </label>
+                        </td>
+
+                        <td style={ui.td}>
+                          <label style={ui.toggleCell}>
+                            <input
+                              type="checkbox"
+                              checked={can_manage_admins}
                               onChange={(e) =>
-                                setStaffForm((p) => ({ ...p, department_id: e.target.value }))
+                                saveMemberPerms(m.id, { can_manage_admins: e.target.checked })
                               }
-                            >
-                              <option value="">No department</option>
-                              {deptOptions.map((d) => (
-                                <option key={d.id} value={d.id}>
-                                  {d.name}
-                                  {d.is_active === false ? " (inactive)" : ""}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <span style={ui.muted}>{deptName}</span>
-                          )}
+                              disabled={busy}
+                            />
+                            <span style={ui.toggleLabel}>{can_manage_admins ? "Yes" : "No"}</span>
+                          </label>
                         </td>
 
                         <td style={ui.td}>
-                          {isEdit ? (
+                          <label style={ui.toggleCell}>
                             <input
-                              style={ui.input}
-                              value={staffForm.email || ""}
-                              onChange={(e) => setStaffForm({ ...staffForm, email: e.target.value })}
+                              type="checkbox"
+                              checked={can_schedule_write_member}
+                              onChange={(e) =>
+                                saveMemberPerms(m.id, { can_schedule_write: e.target.checked })
+                              }
+                              disabled={busy}
                             />
-                          ) : (
-                            <span style={ui.muted}>{s.email || "—"}</span>
-                          )}
+                            <span style={ui.toggleLabel}>{can_schedule_write_member ? "Yes" : "No"}</span>
+                          </label>
                         </td>
 
                         <td style={ui.td}>
-                          {isEdit ? (
+                          <label style={ui.toggleCell}>
                             <input
-                              style={ui.input}
-                              value={staffForm.phone || ""}
-                              onChange={(e) => setStaffForm({ ...staffForm, phone: e.target.value })}
+                              type="checkbox"
+                              checked={can_manage_privacy_member}
+                              onChange={(e) =>
+                                saveMemberPerms(m.id, { can_manage_privacy: e.target.checked })
+                              }
+                              disabled={busy}
                             />
-                          ) : (
-                            <span style={ui.muted}>{s.phone || "—"}</span>
-                          )}
+                            <span style={ui.toggleLabel}>{can_manage_privacy_member ? "Yes" : "No"}</span>
+                          </label>
+                        </td>
+
+                        <td style={ui.td}>
+                          <label style={ui.toggleCell}>
+                            <input
+                              type="checkbox"
+                              checked={can_manage_facility_member}
+                              onChange={(e) =>
+                                saveMemberPerms(m.id, { can_manage_facility: e.target.checked })
+                              }
+                              disabled={busy}
+                            />
+                            <span style={ui.toggleLabel}>{can_manage_facility_member ? "Yes" : "No"}</span>
+                          </label>
                         </td>
 
                         <td style={{ ...ui.td, textAlign: "right" }}>
-                          {isEdit ? (
-                            <div style={ui.actions}>
-                              <button style={ui.btnPrimary} onClick={() => saveStaff(s.id)}>
-                                Save
-                              </button>
-                              <button
-                                style={ui.btnGhost}
-                                onClick={() => {
-                                  setEditingStaffId(null);
-                                  setStaffForm({ name: "", role: "", email: "", phone: "", department_id: "" });
-                                }}
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          ) : (
-                            <div style={ui.actions}>
-                              <button
-                                style={ui.btnGhost}
-                                onClick={() => {
-                                  setEditingStaffId(s.id);
-                                  setStaffForm({
-                                    name: s.name || "",
-                                    role: s.role || "",
-                                    email: s.email || "",
-                                    phone: s.phone || "",
-                                    department_id: s.department_id || "",
-                                  });
-                                }}
-                              >
-                                Edit
-                              </button>
-                              <button style={ui.btnDanger} onClick={() => deleteStaff(s.id)}>
-                                Delete
-                              </button>
-                            </div>
-                          )}
+                          <span style={busy ? ui.badgeOn : ui.muted}>{busy ? "Saving…" : "—"}</span>
                         </td>
                       </tr>
                     );
                   })}
 
-                  {staff.length === 0 ? (
+                  {!adminMembersLoading && (filteredAdminMembers || []).length === 0 ? (
                     <tr>
-                      <td style={ui.emptyRow} colSpan={7}>
-                        No staff yet.
+                      <td style={ui.emptyRow} colSpan={8}>
+                        No admin memberships found.
                       </td>
                     </tr>
                   ) : null}
@@ -1518,76 +1935,474 @@ export default function AdminPage() {
               </table>
             </div>
 
-            {/* ADD STAFF MODAL */}
-            {showAddStaff ? (
-              <div onMouseDown={() => setShowAddStaff(false)} style={ui.modalOverlay}>
-                <div onMouseDown={(e) => e.stopPropagation()} style={ui.modal}>
-                  <div style={ui.modalTitle}>Add Staff Member</div>
-                  <div style={ui.modalBody}>
-                    <div style={{ display: "grid", gap: 10 }}>
-                      <input
-                        style={ui.input}
-                        placeholder="Name *"
-                        value={staffForm.name}
-                        onChange={(e) => setStaffForm((p) => ({ ...p, name: e.target.value }))}
-                      />
-                      <input
-                        style={ui.input}
-                        placeholder="Role * (CNA, LPN, RN, Scheduler, etc.)"
-                        value={staffForm.role}
-                        onChange={(e) => setStaffForm((p) => ({ ...p, role: e.target.value }))}
-                      />
+            <div style={{ marginTop: 12, color: "#9CA3AF", fontSize: 12, lineHeight: 1.4 }}>
+              Tip: If you want “Org Admin” to automatically imply privacy/facility/admin perms, we can enforce that on the backend
+              and simplify this UI.
+            </div>
+          </div>
+        )}
 
-                      {/* ✅ Department select */}
-                      <select
-                        style={ui.select}
-                        value={staffForm.department_id || ""}
-                        onChange={(e) => setStaffForm((p) => ({ ...p, department_id: e.target.value }))}
-                      >
-                        <option value="">No department</option>
-                        {deptOptions.map((d) => (
-                          <option key={d.id} value={d.id}>
-                            {d.name}
-                            {d.is_active === false ? " (inactive)" : ""}
-                          </option>
-                        ))}
-                      </select>
+        {/* =========================
+            FACILITY SETTINGS: UNITS
+           ========================= */}
+        {activeTab === "units" && orgId && (
+          <div style={ui.card}>
+            <div style={ui.cardHeader}>
+              <div>
+                <div style={ui.cardTitle}>Units</div>
+                <div style={ui.cardSub}>
+                  Units are used for organizing assignments and dashboards (ex: East Hall, West Hall, Rehab).
+                </div>
+              </div>
 
-                      <input
-                        style={ui.input}
-                        placeholder="Email"
-                        value={staffForm.email}
-                        onChange={(e) => setStaffForm((p) => ({ ...p, email: e.target.value }))}
-                      />
-                      <input
-                        style={ui.input}
-                        placeholder="Phone (+1... for SMS invites)"
-                        value={staffForm.phone}
-                        onChange={(e) => setStaffForm((p) => ({ ...p, phone: e.target.value }))}
-                      />
+              <button style={ui.btnGhost} onClick={loadAll} disabled={loading}>
+                {loading ? "Loading…" : "Refresh"}
+              </button>
+            </div>
 
-                      <div style={{ color: "#9CA3AF", fontSize: 12 }}>
-                        Required: <b>Name</b> and <b>Role</b>.
-                        <br />
-                        If you enter an email, ShiftCensus will create a login and generate an invite link.
-                        If you also enter an E.164 phone (+1...), it will SMS the link.
-                      </div>
-                    </div>
+            <div style={ui.inlineForm}>
+              <input
+                style={ui.input}
+                placeholder="Unit name (ex: East Hall)"
+                value={unitForm.name}
+                onChange={(e) => setUnitForm({ name: e.target.value })}
+              />
+
+              {editingUnitId ? (
+                <>
+                  <button style={ui.btnPrimary} onClick={() => saveUnit(editingUnitId)}>
+                    Save
+                  </button>
+                  <button
+                    style={ui.btnGhost}
+                    onClick={() => {
+                      setEditingUnitId(null);
+                      setUnitForm({ name: "" });
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button style={ui.btnPrimary} onClick={addUnit}>
+                  Add
+                </button>
+              )}
+            </div>
+
+            <div style={{ overflowX: "auto" }}>
+              <table style={ui.table}>
+                <thead>
+                  <tr>
+                    <th style={ui.th}>ID</th>
+                    <th style={ui.th}>Unit</th>
+                    <th style={{ ...ui.th, textAlign: "right" }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(units || []).map((u) => (
+                    <tr key={u.id} style={ui.tr}>
+                      <td style={ui.tdMono}>{u.id}</td>
+                      <td style={ui.td}>
+                        <span style={ui.cellStrong}>{u.name}</span>
+                      </td>
+                      <td style={{ ...ui.td, textAlign: "right" }}>
+                        <div style={ui.actions}>
+                          <button
+                            style={ui.btnGhost}
+                            onClick={() => {
+                              setEditingUnitId(u.id);
+                              setUnitForm({ name: u.name || "" });
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button style={ui.btnDanger} onClick={() => deleteUnit(u.id)}>
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+
+                  {(units || []).length === 0 ? (
+                    <tr>
+                      <td style={ui.emptyRow} colSpan={3}>
+                        No units yet.
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* =========================
+            FACILITY SETTINGS: ROOMS & BEDS
+           ========================= */}
+        {activeTab === "rooms_beds" && orgId && (
+          <div style={ui.card}>
+            <div style={ui.cardHeader}>
+              <div>
+                <div style={ui.cardTitle}>Rooms & Beds</div>
+                <div style={ui.cardSub}>
+                  Manage rooms and their beds. Drag beds to reorder (or use ▲▼).
+                </div>
+              </div>
+
+              <button style={ui.btnGhost} onClick={loadRooms} disabled={roomsLoading}>
+                {roomsLoading ? "Loading…" : "Refresh"}
+              </button>
+            </div>
+
+            {!canManageFacility ? (
+              <div style={ui.notice}>
+                You don’t have permission to manage facility settings for this organization.
+              </div>
+            ) : (
+              <div style={ui.rbGrid}>
+                {/* LEFT: Rooms */}
+                <div style={ui.rbLeft}>
+                  <div style={ui.rbPanelTitle}>Rooms</div>
+
+                  <div style={ui.inlineForm}>
+                    <input
+                      style={{ ...ui.input, minWidth: 200 }}
+                      placeholder="Room name (ex: 301)"
+                      value={roomForm.name}
+                      onChange={(e) => setRoomForm((p) => ({ ...p, name: e.target.value }))}
+                    />
+                    <label style={ui.smallCheck}>
+                      <input
+                        type="checkbox"
+                        checked={!!roomForm.is_active}
+                        onChange={(e) => setRoomForm((p) => ({ ...p, is_active: e.target.checked }))}
+                      />
+                      Active
+                    </label>
+
+                    {editingRoomId ? (
+                      <>
+                        <button style={ui.btnMini} onClick={() => saveRoom(editingRoomId)} disabled={roomSaving}>
+                          {roomSaving ? "Saving…" : "Save"}
+                        </button>
+                        <button
+                          style={ui.btnMiniGhost}
+                          onClick={() => {
+                            setEditingRoomId(null);
+                            setRoomForm({ name: "", is_active: true });
+                          }}
+                          disabled={roomSaving}
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button style={ui.btnMini} onClick={addRoom} disabled={roomSaving}>
+                        {roomSaving ? "Adding…" : "Add"}
+                      </button>
+                    )}
                   </div>
 
-                  <div style={ui.modalActions}>
-                    <button
-                      style={ui.btnGhost}
-                      onClick={() => {
-                        setShowAddStaff(false);
-                        setStaffForm({ name: "", role: "", email: "", phone: "", department_id: "" });
-                      }}
-                      disabled={staffAdding}
+                  <div style={ui.rbList}>
+                    {roomsLoading ? (
+                      <div style={ui.empty2}>Loading rooms…</div>
+                    ) : (
+                      (rooms || []).map((r) => {
+                        const selected = String(r.id) === String(selectedRoomId);
+                        const inactive = r.is_active === false;
+                        return (
+                          <div
+                            key={r.id}
+                            style={ui.roomRow(selected, inactive)}
+                            onClick={() => {
+                              setSelectedRoomId(r.id);
+                              syncBedsFromRooms(r.id);
+                            }}
+                            role="button"
+                            tabIndex={0}
+                          >
+                            <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+                              <div style={{ fontWeight: 1000, color: "white" }}>{r.name}</div>
+                              <div style={{ color: "#9CA3AF", fontSize: 12 }}>
+                                {inactive ? <span style={ui.badgeOff}>Inactive</span> : <span style={ui.badgeOn}>Active</span>}
+                                <span style={{ marginLeft: 8 }}>
+                                  Beds: {Array.isArray(r.beds) ? r.beds.length : 0}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                              <button
+                                style={ui.btnMiniGhost}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setEditingRoomId(r.id);
+                                  setRoomForm({ name: r.name || "", is_active: r.is_active !== false });
+                                }}
+                                type="button"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                style={ui.btnMiniGhost}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleRoomActive(r);
+                                }}
+                                type="button"
+                              >
+                                {inactive ? "Activate" : "Deactivate"}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+
+                    {!roomsLoading && (rooms || []).length === 0 ? (
+                      <div style={ui.empty2}>No rooms yet.</div>
+                    ) : null}
+                  </div>
+                </div>
+
+                {/* RIGHT: Beds */}
+                <div style={ui.rbRight}>
+                  <div style={ui.rbPanelTitle}>Beds</div>
+
+                  {!selectedRoomId ? (
+                    <div style={ui.notice}>Select a room to manage beds.</div>
+                  ) : (
+                    <>
+                      <div style={ui.inlineForm}>
+                        <input
+                          style={{ ...ui.input, minWidth: 220 }}
+                          placeholder="Bed label (ex: 301D, 301W)"
+                          value={bedForm.label}
+                          onChange={(e) => setBedForm((p) => ({ ...p, label: e.target.value }))}
+                        />
+                        <label style={ui.smallCheck}>
+                          <input
+                            type="checkbox"
+                            checked={!!bedForm.is_active}
+                            onChange={(e) => setBedForm((p) => ({ ...p, is_active: e.target.checked }))}
+                          />
+                          Active
+                        </label>
+
+                        {editingBedId ? (
+                          <>
+                            <button style={ui.btnMini} onClick={() => saveBed(editingBedId)} disabled={bedSaving}>
+                              {bedSaving ? "Saving…" : "Save"}
+                            </button>
+                            <button
+                              style={ui.btnMiniGhost}
+                              onClick={() => {
+                                setEditingBedId(null);
+                                setBedForm({ label: "", is_active: true });
+                              }}
+                              disabled={bedSaving}
+                            >
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <button style={ui.btnMini} onClick={addBed} disabled={bedSaving}>
+                            {bedSaving ? "Adding…" : "Add"}
+                          </button>
+                        )}
+                      </div>
+
+                      <div style={ui.bedList}>
+                        {bedsLoading ? (
+                          <div style={ui.empty2}>Loading beds…</div>
+                        ) : (
+                          (beds || []).map((b, idx) => {
+                            const inactive = b.is_active === false;
+                            return (
+                              <div
+                                key={b.id}
+                                style={ui.bedRow(inactive)}
+                                draggable
+                                onDragStart={() => onBedDragStart(b.id)}
+                                onDragOver={(e) => e.preventDefault()}
+                                onDrop={() => onBedDrop(b.id)}
+                              >
+                                <div style={{ display: "flex", gap: 10, alignItems: "center", minWidth: 0 }}>
+                                  <div style={ui.dragHandle} title="Drag to reorder">
+                                    ::
+                                  </div>
+                                  <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                                    <div style={{ fontWeight: 1000, color: "white" }}>{b.label}</div>
+                                    <div style={{ color: "#9CA3AF", fontSize: 12 }}>
+                                      {inactive ? <span style={ui.badgeOff}>Inactive</span> : <span style={ui.badgeOn}>Active</span>}
+                                      {typeof b.display_order !== "undefined" ? (
+                                        <span style={{ marginLeft: 8 }}>
+                                          Order: <span style={ui.orderPill}>{b.display_order}</span>
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                  <button
+                                    style={ui.btnMiniGhost}
+                                    onClick={() => moveBedByIndex(idx, idx - 1)}
+                                    type="button"
+                                    title="Move up"
+                                  >
+                                    ▲
+                                  </button>
+                                  <button
+                                    style={ui.btnMiniGhost}
+                                    onClick={() => moveBedByIndex(idx, idx + 1)}
+                                    type="button"
+                                    title="Move down"
+                                  >
+                                    ▼
+                                  </button>
+                                  <button
+                                    style={ui.btnMiniGhost}
+                                    onClick={() => {
+                                      setEditingBedId(b.id);
+                                      setBedForm({ label: b.label || "", is_active: b.is_active !== false });
+                                    }}
+                                    type="button"
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    style={ui.btnMiniGhost}
+                                    onClick={() => toggleBedActive(b)}
+                                    disabled={bedSaving}
+                                    type="button"
+                                  >
+                                    {inactive ? "Activate" : "Deactivate"}
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+
+                        {!bedsLoading && (beds || []).length === 0 ? (
+                          <div style={ui.empty2}>No beds in this room yet.</div>
+                        ) : null}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* =========================
+            FACILITY SETTINGS: PRIVACY
+           ========================= */}
+        {activeTab === "privacy" && orgId && (
+          <div style={ui.card}>
+            <div style={ui.cardHeader}>
+              <div>
+                <div style={ui.cardTitle}>Privacy</div>
+                <div style={ui.cardSub}>
+                  Control whether patient identifiers are shown and how names are formatted on dashboards.
+                </div>
+              </div>
+              <button style={ui.btnGhost} onClick={loadOrgSettings} disabled={privacySaving}>
+                Refresh
+              </button>
+            </div>
+
+            {!canManagePrivacy ? (
+              <div style={ui.notice}>
+                You don’t have permission to manage privacy settings for this organization.
+              </div>
+            ) : (
+              <>
+                <div style={ui.notice}>
+                  Turning identifiers on can increase privacy risk. Only enable if your facility policy allows it.
+                </div>
+
+                <div style={ui.privacyRow}>
+                  <label style={ui.smallCheck}>
+                    <input
+                      type="checkbox"
+                      checked={!!orgSettings?.show_patient_identifiers}
+                      onChange={(e) =>
+                        setOrgSettings((p) => ({ ...(p || {}), show_patient_identifiers: e.target.checked }))
+                      }
+                    />
+                    Show patient identifiers
+                  </label>
+
+                  <div style={{ display: "grid", gap: 6 }}>
+                    <div style={ui.label}>Identifier format</div>
+                    <select
+                      style={ui.select}
+                      value={orgSettings?.identifier_format || "first_last_initial"}
+                      onChange={(e) =>
+                        setOrgSettings((p) => ({ ...(p || {}), identifier_format: e.target.value }))
+                      }
+                      disabled={!orgSettings?.show_patient_identifiers}
                     >
-                      Cancel
-                    </button>
-                    <button style={ui.btnPrimary} onClick={addStaff} disabled={staffAdding}>
-                      {staffAdding ? "Adding…" : "Add Staff"}
+                      <option value="first_last_initial">First name + last initial (Jane D.)</option>
+                      <option value="first_initial_last">First initial + last name (J. Doe)</option>
+                      <option value="first_last">First + last (Jane Doe)</option>
+                      <option value="initials">Initials only (J.D.)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div style={{ marginTop: 12 }}>
+                  <label style={ui.checkRow} onClick={() => setShowAck(true)}>
+                    <input
+                      type="checkbox"
+                      checked={!!orgSettings?.identifiers_acknowledged}
+                      onChange={(e) =>
+                        setOrgSettings((p) => ({ ...(p || {}), identifiers_acknowledged: e.target.checked }))
+                      }
+                    />
+                    <div style={{ display: "grid", gap: 4 }}>
+                      <div style={{ fontWeight: 950 }}>I acknowledge facility privacy policy</div>
+                      <div style={{ color: "#9CA3AF", fontSize: 12 }}>
+                        Enabling identifiers must comply with your internal policy and applicable regulations.
+                      </div>
+                    </div>
+                  </label>
+                </div>
+
+                <div style={{ marginTop: 12, display: "flex", gap: 10, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                  <button
+                    style={ui.btnPrimary}
+                    disabled={privacySaving}
+                    onClick={() =>
+                      savePrivacy({
+                        enabled: !!orgSettings?.show_patient_identifiers,
+                        format: orgSettings?.identifier_format || "first_last_initial",
+                        acknowledged: !!orgSettings?.identifiers_acknowledged,
+                      })
+                    }
+                  >
+                    {privacySaving ? "Saving…" : "Save Privacy Settings"}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* optional ack modal */}
+            {showAck ? (
+              <div onMouseDown={() => setShowAck(false)} style={ui.modalOverlay}>
+                <div onMouseDown={(e) => e.stopPropagation()} style={ui.modal}>
+                  <div style={ui.modalTitle}>Privacy Acknowledgement</div>
+                  <div style={ui.modalBody}>
+                    This setting can display patient identifiers on dashboards and reports. Only enable this if your facility policy allows it.
+                  </div>
+                  <div style={ui.modalActions}>
+                    <button style={ui.btnGhost} onClick={() => setShowAck(false)}>
+                      Close
                     </button>
                   </div>
                 </div>
@@ -1596,8 +2411,15 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* UNITS / SHIFTS / ROOMS_BEDS / PRIVACY */}
-        {/* ✅ Keep the rest of your file the same as-is (your existing sections are fine). */}
+        {/* ✅ Safety net: if tab exists but UI isn't mounted */}
+        {orgId &&
+        !["staff", "units", "shifts", "rooms_beds", "privacy", "departments", "admin_access"].includes(activeTab) ? (
+          <div style={ui.card}>
+            <div style={ui.notice}>
+              Unknown tab key: <b>{String(activeTab)}</b>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -1705,6 +2527,21 @@ const ui = {
   },
 
   topActions: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" },
+
+  // NEW: section row
+  sectionRow: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 },
+
+  sectionBtn: (active) => ({
+    height: 40,
+    borderRadius: 14,
+    padding: "10px 14px",
+    background: active ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.06)",
+    color: "white",
+    border: active ? "1px solid rgba(255,255,255,0.22)" : "1px solid rgba(255,255,255,0.12)",
+    cursor: "pointer",
+    fontWeight: 950,
+    boxShadow: active ? "0 14px 40px rgba(0,0,0,0.35)" : "0 10px 28px rgba(0,0,0,0.22)",
+  }),
 
   tabs: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 },
 
@@ -1901,32 +2738,6 @@ const ui = {
     boxShadow: active ? "0 12px 34px rgba(0,0,0,0.35)" : "0 10px 28px rgba(0,0,0,0.22)",
   }),
 
-  roleLockedPill: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 10,
-    height: 40,
-    padding: "10px 12px",
-    borderRadius: 14,
-    border: "1px solid rgba(255,255,255,0.12)",
-    background: "rgba(255,255,255,0.04)",
-    color: "white",
-    fontWeight: 900,
-    minWidth: 200,
-  },
-
-  roleUnlockBtn: {
-    height: 28,
-    borderRadius: 999,
-    padding: "6px 10px",
-    background: "rgba(255,255,255,0.08)",
-    color: "white",
-    border: "1px solid rgba(255,255,255,0.14)",
-    cursor: "pointer",
-    fontWeight: 900,
-    fontSize: 12,
-  },
-
   privacyRow: { display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap", marginTop: 12 },
 
   checkRow: {
@@ -2097,6 +2908,9 @@ const ui = {
     textTransform: "uppercase",
     marginBottom: 6,
   },
+
+  toggleCell: { display: "flex", gap: 8, alignItems: "center" },
+  toggleLabel: { color: "#E5E7EB", fontSize: 12, fontWeight: 900 },
 
   // superadmin org picker styles
   overlay: {
