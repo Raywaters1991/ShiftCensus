@@ -926,24 +926,35 @@ export default function AdminPage() {
 
   const canManageStaffSettings = !!(isOrgAdmin || canManageAdmins || isSuperadmin);
 
-  async function loadAdminMembers() {
-    if (!orgId) return;
-    if (!canManageStaffSettings) return;
 
-    setAdminMembersLoading(true);
-    try {
-      const q = String(adminSearch || "").trim();
-      const data = await api.get(`/adminmanagement/list${q ? `?q=${encodeURIComponent(q)}` : ""}`);
-      const list = Array.isArray(data?.memberships) ? data.memberships : [];
-      setAdminMembers(list);
-    } catch (e) {
-      console.error("LOAD ADMIN MEMBERS ERROR:", e);
-      alert(e?.response?.data?.error || e?.message || "Failed to load staff settings.");
-      setAdminMembers([]);
-    } finally {
-      setAdminMembersLoading(false);
-    }
+    async function loadAdminMembers() {
+  if (!orgId) return;
+  if (!canManageStaffSettings) return;
+
+  setAdminMembersLoading(true);
+  try {
+    const q = String(adminSearch || "").trim();
+    const data = await api.get(`/adminmanagement/list${q ? `?q=${encodeURIComponent(q)}` : ""}`);
+
+    // ✅ normalize shape
+    const list =
+      (Array.isArray(data) && data) ||
+      (Array.isArray(data?.memberships) && data.memberships) ||
+      (Array.isArray(data?.data) && data.data) ||
+      (Array.isArray(data?.data?.memberships) && data.data.memberships) ||
+      (Array.isArray(data?.rows) && data.rows) ||
+      (Array.isArray(data?.items) && data.items) ||
+      [];
+
+    setAdminMembers(list);
+  } catch (e) {
+    console.error("LOAD ADMIN MEMBERS ERROR:", e);
+    alert(e?.response?.data?.error || e?.message || "Failed to load staff settings.");
+    setAdminMembers([]);
+  } finally {
+    setAdminMembersLoading(false);
   }
+}
 
   async function saveMemberPerms(userId, patch) {
     setSavingMemberUserId(userId);
@@ -992,7 +1003,14 @@ export default function AdminPage() {
         api.get("/units"),
         api.get("/shift-settings"),
       ]);
-      setStaff(Array.isArray(s) ? s : []);
+      const staffList =
+  (Array.isArray(s) && s) ||
+  (Array.isArray(s?.staff) && s.staff) ||
+  (Array.isArray(s?.data) && s.data) ||
+  (Array.isArray(s?.data?.staff) && s.data.staff) ||
+  [];
+
+setStaff(staffList);
       setUnits(Array.isArray(u) ? u : []);
       setShiftSettings(Array.isArray(ss) ? ss : []);
     } catch (err) {
