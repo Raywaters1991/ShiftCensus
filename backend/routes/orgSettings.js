@@ -22,7 +22,7 @@ function clampInt(v, min, max, fallback) {
   return Math.max(min, Math.min(max, n));
 }
 
-// GET /api/org-settings (org-scoped)
+// GET /api/org-settings
 router.get("/", async (req, res) => {
   const orgId = req.orgId;
 
@@ -42,8 +42,6 @@ router.get("/", async (req, res) => {
       updated_at: null,
       room_count: null,
       beds_per_room: null,
-
-      // ✅ NEW
       lunch_break_minutes: 30,
       pay_period_length_days: 14,
       pay_period_anchor_date: null,
@@ -54,8 +52,6 @@ router.get("/", async (req, res) => {
     ...data,
     room_count: data.room_count ?? null,
     beds_per_room: data.beds_per_room ?? null,
-
-    // ✅ NEW
     lunch_break_minutes: data.lunch_break_minutes ?? 30,
     pay_period_length_days: data.pay_period_length_days ?? 14,
     pay_period_anchor_date: data.pay_period_anchor_date ?? null,
@@ -88,7 +84,11 @@ router.put("/identifiers", async (req, res) => {
     updated_at: new Date().toISOString(),
   };
 
-  const { data, error } = await supabaseAdmin.from("org_settings").upsert(payload).select().single();
+  const { data, error } = await supabaseAdmin
+    .from("org_settings")
+    .upsert(payload)
+    .select()
+    .single();
 
   if (error) {
     console.error("ORG SETTINGS UPDATE ERROR:", error);
@@ -150,10 +150,6 @@ router.put("/layout", async (req, res) => {
   res.json(data);
 });
 
-// =====================================================
-// ✅ NEW: Lunch Break Minutes
-// =====================================================
-
 // GET /api/org-settings/lunch-break
 router.get("/lunch-break", async (req, res) => {
   const orgId = req.orgId;
@@ -200,10 +196,6 @@ router.put("/lunch-break", async (req, res) => {
 
   res.json(data);
 });
-
-// =====================================================
-// ✅ NEW: Pay Period Settings
-// =====================================================
 
 // GET /api/org-settings/pay-period
 router.get("/pay-period", async (req, res) => {

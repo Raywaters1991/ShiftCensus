@@ -25,126 +25,66 @@ function toBool(v, fallback = false) {
   return fallback;
 }
 
-// GET /api/adminmanagement/list?q=...
+// GET /api/adminmanagement/list?q=
 router.get("/list", async (req, res) => {
   const orgId = req.orgId;
+  const q = String(req.query.q || "").trim().toLowerCase();
 
-  // Gate: only privileged roles for now (you can tighten later to can_manage_admins)
-  if (!isPrivileged(req.role)) {
-    return res.status(403).json({ error: "Insufficient role" });
-  }
+  try {
+    if (!isPrivileged(req.role)) {
+      return res.status(403).json({ error: "Insufficient role" });
+    }
 
-  const q = String(req.query?.q || "").trim().toLowerCase();
+    const { data: memberships, error: memErr } = await supabaseAdmin
+      .from("org_memberships")
+      .select("*")
+      .eq("org_id", orgId)
+      .eq("is_active", true);
 
-  // Load memberships for org
-  const { data: memberships, error: mErr } = await supabaseAdmin
-    .from("org_memberships")
-    .select(
-      "user_id,org_id,role,is_active,is_admin,can_manage_admins,can_schedule_read,can_schedule_write,can_census_read,can_census_write,department_id,department_locked,created_at"
-    )
-    .eq("org_id", orgId);
+    if (memErr) throw memErr;
+    if (!memberships?.length) return res.json({ memberships: [] });
 
-  if (mErr) {
-    console.error("ADMINMGMT LIST memberships ERROR:", mErr);
-    return res.status(500).json({ error: "Failed to load memberships" });
-  }
+    const userIds = memberships.map((m) => m.user_id);
 
-  // Load staff for org
-  const { data: staff, error: sErr } = await supabaseAdmin
-    .from("staff")
-    .select("id,name,role,email,phone,department_id,user_id,org_id,org_code,employee_no")
-    .eq("org_id", orgId);
+    const { data: staffRows, error: staffErr } = await supabaseAdmin
+      .from("staff")
+      .select("id,name,role,email,phone,department_id,user_id,employee_no")
+      .in("user_id", userIds)
+      .eq("org_id", orgId);
 
-  if (sErr) {
-    console.error("ADMINMGMT LIST staff ERROR:", sErr);
-    return res.status(500).json({ error: "Failed to load staff" });
-  }
+    if (staffErr) throw staffErr;
 
-  const memByUser = new Map((memberships || []).map((m) => [String(m.user_id), m]));
+    const staffByUser = new Map((staffRows || []).map((s) => [String(s.user_id), s]));
 
-  // Combine: prioritize staff rows, but include memberships even if no staff row exists
-  const combined = [];
-
-  (staff || []).forEach((st) => {
-    const uid = st.user_id ? String(st.user_id) : null;
-    const mem = uid ? memByUser.get(uid) : null;
-
-    combined.push({
-      // staff identity
-      staff_id: st.id,
-      staff_name: st.name,
-      staff_role: st.role,
-      email: st.email,
-      phone: st.phone,
-      staff_department_id: st.department_id ?? null,
-      employee_no: st.employee_no ?? null,
-
-      // membership identity
-      user_id: st.user_id ?? null,
-      membership: mem
-        ? {
-            ...mem,
-            is_admin: mem.is_admin ?? false,
-            can_manage_admins: mem.can_manage_admins ?? false,
-            can_schedule_read: mem.can_schedule_read ?? false,
-            can_schedule_write: mem.can_schedule_write ?? false,
-            can_census_read: mem.can_census_read ?? false,
-            can_census_write: mem.can_census_write ?? false,
-            department_locked: mem.department_locked ?? false,
-          }
-        : null,
+    const rows = memberships.map((m) => {
+      const s = staffByUser.get(String(m.user_id));
+      return {
+        user_id: m.user_id,
+        staff_id: s?.id ?? null,
+        staff_name: s?.name ?? "—",
+        staff_role: s?.role ?? "—",
+        staff_department_id: s?.department_id ?? null,
+        email: s?.email ?? null,
+        phone: s?.phone ?? null,
+        employee_no: s?.employee_no ?? null,
+        membership: m,
+      };
     });
-  });
 
-  // Add memberships not tied to staff
-  (memberships || []).forEach((m) => {
-    const uid = String(m.user_id);
-    const already = combined.some((x) => String(x.user_id || "") === uid);
-    if (already) return;
+    const filtered = q
+      ? rows.filter((r) => {
+          const hay = `${r.staff_name} ${r.staff_role} ${r.email || ""} ${r.phone || ""} ${
+            r.employee_no || ""
+          }`.toLowerCase();
+          return hay.includes(q);
+        })
+      : rows;
 
-    combined.push({
-      staff_id: null,
-      staff_name: null,
-      staff_role: null,
-      email: null,
-      phone: null,
-      staff_department_id: null,
-      employee_no: null,
-      user_id: m.user_id,
-      membership: {
-        ...m,
-        is_admin: m.is_admin ?? false,
-        can_manage_admins: m.can_manage_admins ?? false,
-        can_schedule_read: m.can_schedule_read ?? false,
-        can_schedule_write: m.can_schedule_write ?? false,
-        can_census_read: m.can_census_read ?? false,
-        can_census_write: m.can_census_write ?? false,
-        department_locked: m.department_locked ?? false,
-      },
-    });
-  });
-
-  const filtered = !q
-    ? combined
-    : combined.filter((x) => {
-        const hay = [
-          x.staff_name,
-          x.staff_role,
-          x.email,
-          x.phone,
-          x.employee_no,
-          x.user_id,
-          x.staff_id,
-          x.membership?.role,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .toLowerCase();
-
-        return hay.includes(q);
-      });
-
-  res.json({ memberships: filtered });
+    res.json({ memberships: filtered });
+  } catch (err) {
+    console.error("ADMIN LIST ERROR:", err);
+    res.status(500).json({ error: "Failed to load memberships" });
+  }
 });
 
 // PATCH /api/adminmanagement/:userId
@@ -153,14 +93,10 @@ router.patch("/:userId", async (req, res) => {
   const userId = String(req.params.userId || "").trim();
 
   if (!userId) return res.status(400).json({ error: "Missing userId" });
-
-  if (!isPrivileged(req.role)) {
-    return res.status(403).json({ error: "Insufficient role" });
-  }
+  if (!isPrivileged(req.role)) return res.status(403).json({ error: "Insufficient role" });
 
   const patch = req.body || {};
 
-  // If is_admin is false, force all perms off
   const is_admin = toBool(patch.is_admin, false);
 
   const payload = {
@@ -188,10 +124,7 @@ router.patch("/:userId", async (req, res) => {
     console.error("ADMINMGMT PATCH ERROR:", error);
     return res.status(500).json({ error: "Failed to update membership" });
   }
-
-  if (!data) {
-    return res.status(404).json({ error: "Membership not found for this org/user" });
-  }
+  if (!data) return res.status(404).json({ error: "Membership not found for this org/user" });
 
   res.json({ membership: data });
 });
