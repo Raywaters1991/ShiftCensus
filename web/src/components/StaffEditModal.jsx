@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 const permissionFields = [
+  ["can_dashboard_read", "Dashboard / Wallboard"],
   ["can_schedule_read", "View Schedule"],
   ["can_schedule_write", "Edit Schedule"],
   ["can_census_read", "View Census"],
@@ -8,7 +9,7 @@ const permissionFields = [
   ["can_manage_admins", "Staff Management"],
   ["is_admin", "Facility Settings"],
 ];
-const normalDefaults = { can_schedule_read:true, can_schedule_write:false, can_census_read:true, can_census_write:false, can_manage_admins:false, is_admin:false };
+const normalDefaults = { can_dashboard_read:false, can_schedule_read:true, can_schedule_write:false, can_census_read:true, can_census_write:false, can_manage_admins:false, is_admin:false };
 
 export default function StaffEditModal({ staff, departments, onClose, onSave, onProvisionLogin, mode="edit" }) {
   const isCreate=mode==="create";
@@ -28,7 +29,7 @@ export default function StaffEditModal({ staff, departments, onClose, onSave, on
       <label style={ui.label}>Email<input style={ui.input} type="email" value={form.email} onChange={e=>setForm(p=>({...p,email:e.target.value}))}/></label>
       <label style={ui.label}>Phone<input style={ui.input} value={form.phone} onChange={e=>setForm(p=>({...p,phone:e.target.value}))}/></label>
     </div>
-    <div style={ui.permissions}><div style={ui.permissionTitle}>Access & Permissions</div><div style={ui.permissionHelp}>Job title identifies the employee. These controls determine what they can access at this facility.</div><div style={ui.permissionGrid}>{permissionFields.map(([key,label])=><label key={key} style={ui.check}><input type="checkbox" checked={!!form.permissions[key]} onChange={()=>toggle(key)}/><span>{label}</span></label>)}</div></div>
+    <div style={ui.permissions}><div style={ui.permissionTitle}>Access & Permissions</div><div style={ui.permissionHelp}>Job title identifies the employee. These controls determine what they can access at this facility. Dashboard / Wallboard should only be enabled for specifically selected users or the dedicated display account.</div><div style={ui.permissionGrid}>{permissionFields.map(([key,label])=><label key={key} style={ui.check}><input type="checkbox" checked={!!form.permissions[key]} onChange={()=>toggle(key)}/><span>{label}</span></label>)}</div></div>
     {isCreate?<div style={ui.notice}>If you enter an email address, ShiftCensus will create the employee account automatically. They will verify their email and create their own password.</div>:!staff?.user_id?<div style={ui.notice}>No ShiftCensus account yet. Save any email changes first, then choose Create Account.</div>:staff?.setup_pending?<div style={ui.notice}>Account created. Employee setup is still pending.</div>:<div style={ui.good}>Account active.</div>}
     <div style={ui.actions}>{!isCreate&&!staff?.user_id?<button style={ui.secondary} disabled={provisioning} onClick={provision}>{provisioning?"Creating…":"Create Account"}</button>:null}<button style={ui.ghost} onClick={()=>onClose?.()} disabled={saving||provisioning}>Cancel</button><button style={ui.primary} onClick={save} disabled={saving||provisioning}>{saving?"Saving…":isCreate?"Add Staff":"Save Changes"}</button></div>
   </div></div>;
