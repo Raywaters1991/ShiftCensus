@@ -179,9 +179,10 @@ function FacilityAdminPage() {
     const root = rootRef.current;
     if (!root) return undefined;
 
-    const hideLegacyStaffTab = () => {
+    const hideLegacyPrimaryTabs = () => {
       root.querySelectorAll("button").forEach((button) => {
-        if (button.textContent?.trim() === "Staff Settings") {
+        const label = button.textContent?.trim();
+        if (label === "Staff Settings" || label === "Facility Settings") {
           button.style.display = "none";
           button.setAttribute("aria-hidden", "true");
           button.tabIndex = -1;
@@ -189,8 +190,8 @@ function FacilityAdminPage() {
       });
     };
 
-    hideLegacyStaffTab();
-    const observer = new MutationObserver(hideLegacyStaffTab);
+    hideLegacyPrimaryTabs();
+    const observer = new MutationObserver(hideLegacyPrimaryTabs);
     observer.observe(root, { childList: true, subtree: true });
     return () => observer.disconnect();
   }, []);
