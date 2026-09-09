@@ -5,18 +5,18 @@ const supabaseAdmin = require("../supabaseAdmin");
 const { requireAuth } = require("../middleware/auth");
 const { requireOrg } = require("../middleware/orgGuard");
 
-const PERMISSION_KEYS = ["is_admin","can_manage_admins","can_schedule_read","can_schedule_write","can_census_read","can_census_write"];
+const PERMISSION_KEYS = ["is_admin","can_manage_admins","can_dashboard_read","can_schedule_read","can_schedule_write","can_census_read","can_census_write"];
 
 function normalizeRole(value) { return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]/g, ""); }
 function accessForStaffRole(staffRole) {
   const key = normalizeRole(staffRole);
-  const base = { role: "staff", is_admin: false, can_manage_admins: false, can_schedule_read: true, can_schedule_write: false, can_census_read: true, can_census_write: false };
+  const base = { role: "staff", is_admin: false, can_manage_admins: false, can_dashboard_read: false, can_schedule_read: true, can_schedule_write: false, can_census_read: true, can_census_write: false };
   if (["admin","administrator"].includes(key)) return { ...base, role:"admin", is_admin:true, can_manage_admins:true, can_schedule_write:true, can_census_write:true };
   if (["don","directorofnursing"].includes(key)) return { ...base, role:"don", is_admin:true, can_manage_admins:true, can_schedule_write:true, can_census_write:true };
   if (["ed","executivedirector"].includes(key)) return { ...base, role:"ed", is_admin:true, can_manage_admins:true, can_schedule_write:true, can_census_write:true };
   if (["scheduler","staffingscheduler"].includes(key)) return { ...base, role:"scheduler", can_schedule_write:true };
   if (["admissions","admissionsdirector","admissionscoordinator"].includes(key)) return { ...base, role:"admissions", can_census_write:true };
-  if (key === "wallboard") return { ...base, role:"wallboard" };
+  if (key === "wallboard") return { ...base, role:"wallboard", can_dashboard_read:true };
   return base;
 }
 function cleanPermissions(input, defaults) {
@@ -35,7 +35,7 @@ async function getAuthUserByEmail(email) {
 }
 async function getMyMembership(req) {
   if(req._myMembership)return req._myMembership; const userId=req.user?.id||req.userId; if(!userId||!req.orgId)return null;
-  const {data,error}=await supabaseAdmin.from("org_memberships").select("role,is_active,is_admin,can_manage_admins,can_schedule_write,can_schedule_read,can_census_write,can_census_read,department_id,department_locked").eq("user_id",userId).eq("org_id",req.orgId).maybeSingle();
+  const {data,error}=await supabaseAdmin.from("org_memberships").select("role,is_active,is_admin,can_manage_admins,can_dashboard_read,can_schedule_write,can_schedule_read,can_census_write,can_census_read,department_id,department_locked").eq("user_id",userId).eq("org_id",req.orgId).maybeSingle();
   if(error){console.error("GET MY MEMBERSHIP ERROR:",error);return null;} req._myMembership=data||null; return req._myMembership;
 }
 async function canManageStaff(req) {
@@ -61,7 +61,7 @@ router.get("/",async(req,res)=>{try{
   const orgCode=req.orgCode||req.org_code; const {data,error}=await supabaseAdmin.from("staff").select("*").eq("org_code",orgCode).order("name"); if(error)throw error;
   let users=[]; try{const {data:u}=await supabaseAdmin.auth.admin.listUsers({perPage:500});users=u?.users||[];}catch{}
   const authById=new Map(users.map(u=>[String(u.id),u])); const userIds=(data||[]).map(s=>s.user_id).filter(Boolean);
-  let memberships=[]; if(userIds.length){const {data:m,error:me}=await supabaseAdmin.from("org_memberships").select("user_id,role,is_active,is_admin,can_manage_admins,can_schedule_read,can_schedule_write,can_census_read,can_census_write").eq("org_id",req.orgId).in("user_id",userIds);if(!me)memberships=m||[];}
+  let memberships=[]; if(userIds.length){const {data:m,error:me}=await supabaseAdmin.from("org_memberships").select("user_id,role,is_active,is_admin,can_manage_admins,can_dashboard_read,can_schedule_read,can_schedule_write,can_census_read,can_census_write").eq("org_id",req.orgId).in("user_id",userIds);if(!me)memberships=m||[];}
   const memById=new Map(memberships.map(m=>[String(m.user_id),m]));
   return res.json((data||[]).map(s=>({...s,setup_pending:s.user_id?authById.get(String(s.user_id))?.user_metadata?.setup_pending===true:false,permissions:s.user_id?memById.get(String(s.user_id))||null:null})));
 }catch(e){console.error("STAFF GET ERROR:",e);return res.status(500).json({error:"Failed to load staff"});}});
@@ -86,7 +86,7 @@ async function handleUpdate(req,res){try{
   if(name!==undefined)updates.name=name;if(role!==undefined)updates.role=role;if(email!==undefined)updates.email=email?String(email).trim().toLowerCase():null;if(phone!==undefined)updates.phone=phone||null;if(department_id!==undefined)updates.department_id=department_id||null;
   let data; if(Object.keys(updates).length){const r=await supabaseAdmin.from("staff").update(updates).eq("id",req.params.id).eq("org_code",orgCode).select().single();if(r.error)throw r.error;data=r.data;}else{const r=await supabaseAdmin.from("staff").select("*").eq("id",req.params.id).eq("org_code",orgCode).single();if(r.error)throw r.error;data=r.data;}
   let membership=null; if(data?.user_id&&(role!==undefined||department_id!==undefined||permissions!==undefined)){
-    let effective=permissions; if(permissions===undefined&&role===undefined){const {data:m}=await supabaseAdmin.from("org_memberships").select("is_admin,can_manage_admins,can_schedule_read,can_schedule_write,can_census_read,can_census_write").eq("user_id",data.user_id).eq("org_id",orgId).maybeSingle();effective=m||null;}
+    let effective=permissions; if(permissions===undefined&&role===undefined){const {data:m}=await supabaseAdmin.from("org_memberships").select("is_admin,can_manage_admins,can_dashboard_read,can_schedule_read,can_schedule_write,can_census_read,can_census_write").eq("user_id",data.user_id).eq("org_id",orgId).maybeSingle();effective=m||null;}
     membership=await ensureProfileAndMembership({userId:data.user_id,orgId,orgCode,staffRole:data.role,departmentId:data.department_id||null,permissions:effective});
   }
   return res.json({...data,permissions:membership||permissions});
