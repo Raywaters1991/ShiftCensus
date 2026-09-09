@@ -1,22 +1,30 @@
 import { useEffect, useState } from "react";
 
-export default function StaffEditModal({ staff, departments, onClose, onSave, onProvisionLogin }) {
+export default function StaffEditModal({
+  staff,
+  departments,
+  onClose,
+  onSave,
+  onProvisionLogin,
+  mode = "edit",
+}) {
+  const isCreate = mode === "create";
   const [form, setForm] = useState({ name: "", role: "", email: "", phone: "", department_id: "" });
   const [saving, setSaving] = useState(false);
   const [provisioning, setProvisioning] = useState(false);
 
   useEffect(() => {
-    if (!staff) return;
+    if (!staff && !isCreate) return;
     setForm({
-      name: staff.name || "",
-      role: staff.role || "",
-      email: staff.email || "",
-      phone: staff.phone || "",
-      department_id: staff.department_id || "",
+      name: staff?.name || "",
+      role: staff?.role || "",
+      email: staff?.email || "",
+      phone: staff?.phone || "",
+      department_id: staff?.department_id || "",
     });
-  }, [staff]);
+  }, [staff, isCreate]);
 
-  if (!staff) return null;
+  if (!staff && !isCreate) return null;
 
   async function save() {
     const payload = {
@@ -50,7 +58,7 @@ export default function StaffEditModal({ staff, departments, onClose, onSave, on
   return (
     <div style={ui.overlay} onMouseDown={() => onClose?.()}>
       <div style={ui.modal} onMouseDown={(e) => e.stopPropagation()}>
-        <div style={ui.title}>Edit Staff Member</div>
+        <div style={ui.title}>{isCreate ? "Add Staff Member" : "Edit Staff Member"}</div>
         <div style={ui.grid}>
           <label style={ui.label}>Name<input style={ui.input} value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} /></label>
           <label style={ui.label}>Role<input style={ui.input} value={form.role} onChange={(e) => setForm((p) => ({ ...p, role: e.target.value }))} /></label>
@@ -58,11 +66,19 @@ export default function StaffEditModal({ staff, departments, onClose, onSave, on
           <label style={ui.label}>Email<input style={ui.input} type="email" value={form.email} onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))} /></label>
           <label style={ui.label}>Phone<input style={ui.input} value={form.phone} onChange={(e) => setForm((p) => ({ ...p, phone: e.target.value }))} /></label>
         </div>
-        {!staff.user_id ? <div style={ui.notice}>This staff record does not have a ShiftCensus login yet. Save any email changes first, then use Create Login / Send Invite.</div> : <div style={ui.good}>Login linked.</div>}
+
+        {isCreate ? (
+          <div style={ui.notice}>If you enter an email address, ShiftCensus will create a login and generate a set-password invite when the staff member is added.</div>
+        ) : !staff?.user_id ? (
+          <div style={ui.notice}>This staff record does not have a ShiftCensus login yet. Save any email changes first, then use Create Login / Send Invite.</div>
+        ) : (
+          <div style={ui.good}>Login linked.</div>
+        )}
+
         <div style={ui.actions}>
-          {!staff.user_id ? <button style={ui.secondary} disabled={provisioning} onClick={provision}>{provisioning ? "Creating…" : "Create Login / Send Invite"}</button> : null}
+          {!isCreate && !staff?.user_id ? <button style={ui.secondary} disabled={provisioning} onClick={provision}>{provisioning ? "Creating…" : "Create Login / Send Invite"}</button> : null}
           <button style={ui.ghost} onClick={() => onClose?.()} disabled={saving || provisioning}>Cancel</button>
-          <button style={ui.primary} onClick={save} disabled={saving || provisioning}>{saving ? "Saving…" : "Save Changes"}</button>
+          <button style={ui.primary} onClick={save} disabled={saving || provisioning}>{saving ? "Saving…" : isCreate ? "Add Staff" : "Save Changes"}</button>
         </div>
       </div>
     </div>
