@@ -25,7 +25,7 @@ async function requireOrg(req, res, next) {
       return res.status(400).json({ error: "Missing org context (x-org-id or x-org-code)" });
     }
 
-    // Resolve orgId from orgCode if needed
+    // Resolve orgId from orgCode if needed.
     if (!orgId && orgCode) {
       const { data: org, error: orgErr } = await supabaseAdmin
         .from("orgs")
@@ -44,12 +44,29 @@ async function requireOrg(req, res, next) {
       return res.status(400).json({ error: "Invalid org id" });
     }
 
-    // ✅ Superadmin bypass
+    // Resolve orgCode from orgId for every caller, including superadmins.
+    // Several legacy routes still scope by org_code, so allowing a superadmin
+    // through with only x-org-id left those routes with a null orgCode.
+    if (orgId && !orgCode) {
+      const { data: org, error: orgErr } = await supabaseAdmin
+        .from("orgs")
+        .select("org_code")
+        .eq("id", orgId)
+        .maybeSingle();
+
+      if (orgErr || !org?.org_code) {
+        return res.status(400).json({ error: "Invalid org (cannot resolve org_code)" });
+      }
+
+      orgCode = String(org.org_code);
+    }
+
+    // Superadmins may select any valid org without requiring a membership row.
     if (role === "superadmin") {
       req.orgId = orgId || null;
       req.orgCode = orgCode || null;
 
-      // legacy aliases (your older routes use these)
+      // legacy aliases (older routes use these)
       req.org_id = req.orgId;
       req.org_code = req.orgCode;
 
@@ -67,20 +84,6 @@ async function requireOrg(req, res, next) {
       .maybeSingle();
 
     if (memErr || !mem) return res.status(403).json({ error: "No access to this org" });
-
-    // Resolve orgCode if missing
-    if (!orgCode) {
-      const { data: org, error: orgErr } = await supabaseAdmin
-        .from("orgs")
-        .select("org_code")
-        .eq("id", orgId)
-        .maybeSingle();
-
-      if (orgErr || !org?.org_code) {
-        return res.status(400).json({ error: "Invalid org (cannot resolve org_code)" });
-      }
-      orgCode = org.org_code;
-    }
 
     req.orgId = String(orgId);
     req.orgCode = String(orgCode);
