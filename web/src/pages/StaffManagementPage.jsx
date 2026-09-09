@@ -48,6 +48,16 @@ export default function StaffManagementPage() {
     return departments.find((d) => String(d.id) === String(id))?.name || "—";
   }
 
+  function accountStatus(staffMember) {
+    if (!staffMember?.user_id) {
+      return { label: "No Account", detail: "No login created", style: ui.unlinked };
+    }
+    if (staffMember?.setup_pending) {
+      return { label: "Setup Pending", detail: "Waiting for employee setup", style: ui.pending };
+    }
+    return { label: "Active", detail: "Password setup complete", style: ui.linked };
+  }
+
   function showAccountNotice(result, fallbackName, fallbackEmail) {
     if (!result?.login_created) return;
     setAccountNotice({
@@ -130,30 +140,32 @@ export default function StaffManagementPage() {
                     <th style={ui.th}>Staff</th>
                     <th style={ui.th}>Department</th>
                     <th style={ui.th}>Contact</th>
-                    <th style={ui.th}>Account</th>
+                    <th style={ui.th}>Account Status</th>
                     <th style={{ ...ui.th, textAlign: "right" }}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((s) => (
-                    <tr key={s.id}>
-                      <td style={ui.td}><b>{s.name || "—"}</b><div style={ui.muted}>{s.role || "—"}</div>{s.employee_no ? <div style={ui.muted}>Employee #: {s.employee_no}</div> : null}</td>
-                      <td style={ui.td}>{departmentName(s.department_id)}</td>
-                      <td style={ui.td}><div>{s.email || "—"}</div><div style={ui.muted}>{s.phone || "—"}</div></td>
-                      <td style={ui.td}>
-                        {!s.user_id ? <span style={ui.unlinked}>No account</span> : null}
-                        {s.user_id && s.setup_pending ? <span style={ui.pending}>Setup Pending</span> : null}
-                        {s.user_id && !s.setup_pending ? <span style={ui.linked}>Active</span> : null}
-                      </td>
-                      <td style={{ ...ui.td, textAlign: "right" }}>
-                        <div style={ui.actions}>
-                          <button style={ui.ghost} onClick={() => setEditing(s)}>Edit</button>
-                          {!s.user_id ? <button style={ui.primary} onClick={() => provisionLogin(s.id)}>Create Account</button> : null}
-                          <button style={ui.danger} onClick={() => deleteStaff(s.id)}>Delete</button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {filtered.map((s) => {
+                    const status = accountStatus(s);
+                    return (
+                      <tr key={s.id}>
+                        <td style={ui.td}><b>{s.name || "—"}</b><div style={ui.muted}>{s.role || "—"}</div>{s.employee_no ? <div style={ui.muted}>Employee #: {s.employee_no}</div> : null}</td>
+                        <td style={ui.td}>{departmentName(s.department_id)}</td>
+                        <td style={ui.td}><div>{s.email || "—"}</div><div style={ui.muted}>{s.phone || "—"}</div></td>
+                        <td style={ui.td}>
+                          <span style={status.style}>{status.label}</span>
+                          <div style={ui.statusDetail}>{status.detail}</div>
+                        </td>
+                        <td style={{ ...ui.td, textAlign: "right" }}>
+                          <div style={ui.actions}>
+                            <button style={ui.ghost} onClick={() => setEditing(s)}>Edit</button>
+                            {!s.user_id ? <button style={ui.primary} onClick={() => provisionLogin(s.id)}>Create Account</button> : null}
+                            <button style={ui.danger} onClick={() => deleteStaff(s.id)}>Delete</button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                   {!loading && filtered.length === 0 ? <tr><td style={ui.empty} colSpan={5}>No staff found.</td></tr> : null}
                 </tbody>
               </table>
@@ -211,6 +223,7 @@ const ui = {
   th: { padding: 10, textAlign: "left", color: "#9CA3AF", fontSize: 11, textTransform: "uppercase", borderBottom: "1px solid rgba(255,255,255,.1)" },
   td: { padding: 10, borderBottom: "1px solid rgba(255,255,255,.08)", verticalAlign: "top" },
   muted: { color: "#9CA3AF", fontSize: 12, marginTop: 3 },
+  statusDetail: { color: "#9CA3AF", fontSize: 11, marginTop: 3 },
   actions: { display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap", marginTop: 8 },
   primary: { height: 38, borderRadius: 10, padding: "0 12px", border: 0, fontWeight: 900, cursor: "pointer" },
   ghost: { height: 38, borderRadius: 10, padding: "0 12px", border: "1px solid rgba(255,255,255,.15)", background: "rgba(255,255,255,.05)", color: "white", fontWeight: 900, cursor: "pointer" },
