@@ -4,13 +4,113 @@ const router = express.Router();
 const supabaseAdmin = require("../supabaseAdmin");
 const { requireAuth } = require("../middleware/auth");
 const { requireOrg } = require("../middleware/orgGuard");
-const { sendSms } = require("../services/twilio");
 const crypto = require("crypto");
 
-function normalizePhone(p) {
-  if (!p) return null;
-  const s = String(p).trim();
-  return s.startsWith("+") ? s : null;
+function normalizeRole(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function accessForStaffRole(staffRole) {
+  const key = normalizeRole(staffRole);
+
+  if (["admin", "administrator"].includes(key)) {
+    return {
+      role: "admin",
+      is_admin: true,
+      can_manage_admins: true,
+      can_schedule_read: true,
+      can_schedule_write: true,
+      can_census_read: true,
+      can_census_write: true,
+    };
+  }
+
+  if (["don", "directorofnursing"].includes(key)) {
+    return {
+      role: "don",
+      is_admin: true,
+      can_manage_admins: true,
+      can_schedule_read: true,
+      can_schedule_write: true,
+      can_census_read: true,
+      can_census_write: true,
+    };
+  }
+
+  if (["ed", "executivedirector"].includes(key)) {
+    return {
+      role: "ed",
+      is_admin: true,
+      can_manage_admins: true,
+      can_schedule_read: true,
+      can_schedule_write: true,
+      can_census_read: true,
+      can_census_write: true,
+    };
+  }
+
+  if (["scheduler", "staffingscheduler"].includes(key)) {
+    return {
+      role: "scheduler",
+      is_admin: false,
+      can_manage_admins: false,
+      can_schedule_read: true,
+      can_schedule_write: true,
+      can_census_read: true,
+      can_census_write: false,
+    };
+  }
+
+  if (["admissions", "admissionsdirector", "admissionscoordinator"].includes(key)) {
+    return {
+      role: "admissions",
+      is_admin: false,
+      can_manage_admins: false,
+      can_schedule_read: true,
+      can_schedule_write: false,
+      can_census_read: true,
+      can_census_write: true,
+    };
+  }
+
+  if (key === "wallboard") {
+    return {
+      role: "wallboard",
+      is_admin: false,
+      can_manage_admins: false,
+      can_schedule_read: true,
+      can_schedule_write: false,
+      can_census_read: true,
+      can_census_write: false,
+    };
+  }
+
+  return {
+    role: "staff",
+    is_admin: false,
+    can_manage_admins: false,
+    can_schedule_read: true,
+    can_schedule_write: false,
+    can_census_read: true,
+    can_census_write: false,
+  };
+}
+
+async function getAuthUserByEmail(email) {
+  const e = String(email || "").trim().toLowerCase();
+  if (!e) return null;
+
+  if (supabaseAdmin?.auth?.admin?.getUserByEmail) {
+    const { data, error } = await supabaseAdmin.auth.admin.getUserByEmail(e);
+    if (!error && data?.user) return data.user;
+  }
+
+  const { data, error } = await supabaseAdmin.auth.admin.listUsers({ perPage: 500 });
+  if (error) return null;
+  return (data?.users || []).find((u) => String(u.email || "").toLowerCase() === e) || null;
 }
 
 async function getMyMembership(req) {
@@ -52,23 +152,40 @@ async function canManageStaff(req) {
   return false;
 }
 
-async function ensureProfileAndMembership({ userId, orgId, orgCode, departmentId = null }) {
-  const { error: profErr } = await supabaseAdmin
+async function ensureProfileAndMembership({
+  userId,
+  orgId,
+  orgCode,
+  staffRole,
+  departmentId = null,
+}) {
+  const { data: existingProfile, error: profileReadError } = await supabaseAdmin
     .from("profiles")
-    .upsert(
-      [
-        {
-          id: userId,
-          role: "staff",
-          org_code: orgCode || null,
-          active_org_id: orgId || null,
-        },
-      ],
-      { onConflict: "id" }
-    );
+    .select("id,role")
+    .eq("id", userId)
+    .maybeSingle();
 
-  if (profErr) throw profErr;
+  if (profileReadError) throw profileReadError;
 
+  if (!existingProfile) {
+    const { error: insertProfileError } = await supabaseAdmin.from("profiles").insert([
+      {
+        id: userId,
+        role: "staff",
+        org_code: orgCode || null,
+        active_org_id: orgId || null,
+      },
+    ]);
+    if (insertProfileError) throw insertProfileError;
+  } else {
+    const { error: updateProfileError } = await supabaseAdmin
+      .from("profiles")
+      .update({ org_code: orgCode || null, active_org_id: orgId || null })
+      .eq("id", userId);
+    if (updateProfileError) throw updateProfileError;
+  }
+
+  const access = accessForStaffRole(staffRole);
   const { data: membership, error: memErr } = await supabaseAdmin
     .from("org_memberships")
     .upsert(
@@ -76,14 +193,8 @@ async function ensureProfileAndMembership({ userId, orgId, orgCode, departmentId
         {
           user_id: userId,
           org_id: orgId,
-          role: "staff",
+          ...access,
           is_active: true,
-          is_admin: false,
-          can_manage_admins: false,
-          can_schedule_read: true,
-          can_schedule_write: false,
-          can_census_read: true,
-          can_census_write: false,
           department_id: departmentId,
           department_locked: false,
         },
@@ -101,56 +212,41 @@ async function getOrCreateAuthUserByEmail(email, orgCode, staffId) {
   const e = String(email || "").trim().toLowerCase();
   if (!e) throw new Error("Email required");
 
-  if (supabaseAdmin?.auth?.admin?.getUserByEmail) {
-    const { data: found, error: foundErr } = await supabaseAdmin.auth.admin.getUserByEmail(e);
-    if (foundErr) throw foundErr;
-    if (found?.user?.id) return found.user;
-  }
+  const existing = await getAuthUserByEmail(e);
+  if (existing?.id) return existing;
 
-  const tempPassword = crypto.randomBytes(12).toString("base64url");
-  const { data: createData, error: createErr } = await supabaseAdmin.auth.admin.createUser({
+  const tempPassword = crypto.randomBytes(24).toString("base64url");
+  const { data, error } = await supabaseAdmin.auth.admin.createUser({
     email: e,
     password: tempPassword,
     email_confirm: true,
-    user_metadata: { org_code: orgCode, staff_id: staffId },
-  });
-
-  if (!createErr) return createData?.user;
-
-  if (supabaseAdmin?.auth?.admin?.getUserByEmail) {
-    const { data: found2, error: foundErr2 } = await supabaseAdmin.auth.admin.getUserByEmail(e);
-    if (!foundErr2 && found2?.user?.id) return found2.user;
-  }
-
-  const { data: listData, error: listErr } = await supabaseAdmin.auth.admin.listUsers({ perPage: 200 });
-  if (listErr) throw createErr;
-
-  const existing = (listData?.users || []).find(
-    (u) => String(u.email || "").toLowerCase() === e
-  );
-  if (existing?.id) return existing;
-  throw createErr;
-}
-
-async function buildRecoveryInvite({ email, orgCode, orgId, staffId }) {
-  const publicUrl = String(process.env.APP_PUBLIC_URL || "").replace(/\/$/, "");
-  if (!publicUrl) throw new Error("APP_PUBLIC_URL is not configured");
-
-  const redirectTo = `${publicUrl}/accept-invite`;
-  const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
-    type: "recovery",
-    email,
-    options: {
-      redirectTo,
-      data: { org_code: orgCode, org_id: orgId, staff_id: staffId },
+    user_metadata: {
+      org_code: orgCode,
+      staff_id: staffId,
+      setup_pending: true,
     },
   });
-  if (linkErr) throw linkErr;
 
-  const actionLink = linkData?.properties?.action_link || null;
-  if (!actionLink) throw new Error("Invite link was not returned");
-  return actionLink;
+  if (error) throw error;
+  return data?.user || null;
 }
+
+// Public account-state check used only to decide whether the login UI should
+// start the first-login setup flow. Unknown/active accounts intentionally share
+// the same response so this endpoint does not reveal whether an arbitrary email exists.
+router.get("/account-status", async (req, res) => {
+  try {
+    const email = String(req.query?.email || "").trim().toLowerCase();
+    if (!email) return res.json({ setup_required: false });
+
+    const user = await getAuthUserByEmail(email);
+    const setupRequired = user?.user_metadata?.setup_pending === true;
+    return res.json({ setup_required: setupRequired });
+  } catch (e) {
+    console.error("ACCOUNT STATUS ERROR:", e);
+    return res.json({ setup_required: false });
+  }
+});
 
 router.use(requireAuth);
 router.use(requireOrg);
@@ -168,7 +264,23 @@ router.get("/", async (req, res) => {
       console.error("STAFF GET ERROR:", error);
       return res.status(500).json({ error: "Failed to load staff" });
     }
-    return res.json(data || []);
+
+    let authUsers = [];
+    try {
+      const { data: usersData } = await supabaseAdmin.auth.admin.listUsers({ perPage: 500 });
+      authUsers = usersData?.users || [];
+    } catch {}
+
+    const authById = new Map(authUsers.map((u) => [String(u.id), u]));
+    const rows = (data || []).map((s) => {
+      const authUser = s.user_id ? authById.get(String(s.user_id)) : null;
+      return {
+        ...s,
+        setup_pending: authUser?.user_metadata?.setup_pending === true,
+      };
+    });
+
+    return res.json(rows);
   } catch (e) {
     console.error("STAFF GET ERROR:", e);
     return res.status(500).json({ error: "Failed to load staff" });
@@ -210,7 +322,7 @@ router.post("/", async (req, res) => {
     }
 
     if (!cleanedEmail) {
-      return res.json({ ...staff, login_created: false, invite_sent: false });
+      return res.json({ ...staff, login_created: false, setup_pending: false });
     }
 
     let user;
@@ -224,11 +336,13 @@ router.post("/", async (req, res) => {
     const userId = user?.id || null;
     if (!userId) return res.status(500).json({ error: "Auth user id missing" });
 
-    const { error: linkStaffErr } = await supabaseAdmin
+    const { data: linkedStaff, error: linkStaffErr } = await supabaseAdmin
       .from("staff")
       .update({ user_id: userId, org_id: orgId })
       .eq("id", staff.id)
-      .eq("org_code", orgCode);
+      .eq("org_code", orgCode)
+      .select()
+      .single();
 
     if (linkStaffErr) {
       console.error("STAFF LINK USER ERROR:", linkStaffErr);
@@ -240,64 +354,21 @@ router.post("/", async (req, res) => {
         userId,
         orgId,
         orgCode,
-        departmentId: staff.department_id || null,
+        staffRole: role,
+        departmentId: department_id || null,
       });
     } catch (e) {
       console.error("PROFILE/MEMBERSHIP ERROR:", e);
       return res.status(500).json({ error: "Staff created, but permissions could not be initialized" });
     }
 
-    let actionLink;
-    try {
-      actionLink = await buildRecoveryInvite({
-        email: cleanedEmail,
-        orgCode,
-        orgId,
-        staffId: staff.id,
-      });
-    } catch (e) {
-      console.error("GENERATE LINK ERROR:", e);
-      return res.json({
-        ...staff,
-        user_id: userId,
-        login_created: true,
-        invite_sent: false,
-        error: e?.message || "Invite link generation failed",
-      });
-    }
-
-    const toPhone = normalizePhone(phone);
-    if (!toPhone) {
-      return res.json({
-        ...staff,
-        user_id: userId,
-        login_created: true,
-        invite_sent: false,
-        actionLink,
-        note: "No E.164 phone provided; invite link returned instead of SMS.",
-      });
-    }
-
-    try {
-      const msg = `Welcome to ShiftCensus.\nSet your password using this secure link:\n${actionLink}`;
-      await sendSms(toPhone, msg);
-    } catch (smsErr) {
-      console.error("TWILIO SMS ERROR:", smsErr);
-      return res.json({
-        ...staff,
-        user_id: userId,
-        login_created: true,
-        invite_sent: false,
-        actionLink,
-        error: "SMS failed",
-      });
-    }
-
     return res.json({
-      ...staff,
-      user_id: userId,
+      ...linkedStaff,
       login_created: true,
-      invite_sent: true,
+      setup_pending: user?.user_metadata?.setup_pending === true,
+      note: user?.user_metadata?.setup_pending === true
+        ? "Account created. Employee should go to ShiftCensus and enter their email to finish setup."
+        : "Existing ShiftCensus account linked to this facility.",
     });
   } catch (e) {
     console.error("STAFF POST ERROR:", e);
@@ -344,41 +415,17 @@ router.post("/:id/provision-login", async (req, res) => {
       userId,
       orgId,
       orgCode,
+      staffRole: staff.role,
       departmentId: staff.department_id || null,
     });
-
-    const actionLink = await buildRecoveryInvite({
-      email,
-      orgCode,
-      orgId,
-      staffId: staff.id,
-    });
-
-    let inviteSent = false;
-    let note = "Invite link created.";
-    const toPhone = normalizePhone(staff.phone);
-    if (toPhone) {
-      try {
-        await sendSms(
-          toPhone,
-          `Welcome to ShiftCensus.\nSet your password using this secure link:\n${actionLink}`
-        );
-        inviteSent = true;
-        note = "Login linked and invite sent by SMS.";
-      } catch (smsErr) {
-        console.error("TWILIO SMS ERROR:", smsErr);
-        note = "Login linked. SMS failed, so use the returned invite link.";
-      }
-    } else {
-      note = "Login linked. No E.164 phone provided, so use the returned invite link.";
-    }
 
     return res.json({
       ...linkedStaff,
       login_created: true,
-      invite_sent: inviteSent,
-      actionLink,
-      note,
+      setup_pending: user?.user_metadata?.setup_pending === true,
+      note: user?.user_metadata?.setup_pending === true
+        ? "Account created. Employee should go to ShiftCensus and enter their email to finish setup."
+        : "Existing ShiftCensus account linked to this facility.",
     });
   } catch (e) {
     console.error("PROVISION STAFF LOGIN ERROR:", e);
@@ -391,6 +438,7 @@ async function handleUpdate(req, res) {
     if (!(await canManageStaff(req))) return res.status(403).json({ error: "Not allowed" });
 
     const orgCode = req.orgCode || req.org_code;
+    const orgId = req.orgId;
     const { name, role, email, phone, department_id } = req.body || {};
 
     const updates = {};
@@ -416,6 +464,17 @@ async function handleUpdate(req, res) {
       console.error("STAFF UPDATE ERROR:", error);
       return res.status(500).json({ error: "Failed to update staff" });
     }
+
+    if (data?.user_id && (role !== undefined || department_id !== undefined)) {
+      await ensureProfileAndMembership({
+        userId: data.user_id,
+        orgId,
+        orgCode,
+        staffRole: data.role,
+        departmentId: data.department_id || null,
+      });
+    }
+
     return res.json(data);
   } catch (e) {
     console.error("STAFF UPDATE ERROR:", e);
