@@ -11,10 +11,10 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
 
   const [loading, setLoading] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [infoMsg, setInfoMsg] = useState("");
 
-  // simple responsive switch
   const [isWide, setIsWide] = useState(
     typeof window !== "undefined" ? window.innerWidth >= 900 : false
   );
@@ -29,41 +29,70 @@ export default function LoginPage() {
   const styles = useMemo(() => makeStyles(isWide), [isWide]);
 
   const handleLogin = async (e) => {
-  e.preventDefault();
-  setErrorMsg("");
-  setInfoMsg("");
+    e.preventDefault();
+    setErrorMsg("");
+    setInfoMsg("");
 
-  if (!email.trim() || !password) {
-    setErrorMsg("Please enter your email and password.");
-    return;
-  }
+    if (!email.trim() || !password) {
+      setErrorMsg("Please enter your email and password.");
+      return;
+    }
 
-  setLoading(true);
+    setLoading(true);
 
-  try {
-    const { error } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password,
-    });
-    if (error) throw error;
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      if (error) throw error;
 
+      sessionStorage.removeItem("token");
+      localStorage.removeItem("token");
 
-    sessionStorage.removeItem("token");
-    localStorage.removeItem("token");
+      await refreshUser();
+      navigate("/");
+    } catch (err) {
+      const msg =
+        String(err?.message || "").toLowerCase().includes("invalid login")
+          ? "Invalid email or password."
+          : "Login failed. Please try again.";
+      setErrorMsg(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    await refreshUser();
-    navigate("/");
-  } catch (err) {
-    const msg =
-      String(err?.message || "").toLowerCase().includes("invalid login")
-        ? "Invalid email or password."
-        : "Login failed. Please try again.";
-    setErrorMsg(msg);
-  } finally {
-    setLoading(false);
-  }
-};
+  const handleForgotPassword = async () => {
+    setErrorMsg("");
+    setInfoMsg("");
 
+    const cleanedEmail = email.trim().toLowerCase();
+    if (!cleanedEmail) {
+      setErrorMsg("Enter your email address first, then choose Forgot password.");
+      return;
+    }
+
+    setResetting(true);
+
+    try {
+      const redirectTo = `${window.location.origin}/accept-invite`;
+      const { error } = await supabase.auth.resetPasswordForEmail(cleanedEmail, {
+        redirectTo,
+      });
+
+      if (error) throw error;
+
+      setInfoMsg(
+        "If that email has a ShiftCensus account, a password reset link has been sent."
+      );
+    } catch (err) {
+      console.error("PASSWORD RESET ERROR:", err);
+      setErrorMsg("Unable to send a password reset email right now. Please try again.");
+    } finally {
+      setResetting(false);
+    }
+  };
 
   const handleContact = () => {
     const subject = encodeURIComponent("ShiftCensus — Request Demo / Access");
@@ -75,14 +104,9 @@ export default function LoginPage() {
 
   return (
     <div style={styles.page}>
-      {/* Header */}
       <header style={styles.header}>
         <div style={styles.brandWrap}>
-          <img
-            src="/icon-black.png"
-            alt="ShiftCensus"
-            style={styles.logo}
-          />
+          <img src="/icon-black.png" alt="ShiftCensus" style={styles.logo} />
           <div style={{ lineHeight: 1.1 }}>
             <div style={styles.brandName}>ShiftCensus</div>
             <div style={styles.brandTag}>Staffing + census clarity for SNFs</div>
@@ -94,9 +118,7 @@ export default function LoginPage() {
         </button>
       </header>
 
-      {/* Main */}
       <main style={styles.container}>
-        {/* Left */}
         <section style={styles.card}>
           <div style={styles.pill}>Built for Skilled Nursing Facilities</div>
 
@@ -128,7 +150,6 @@ export default function LoginPage() {
           </div>
         </section>
 
-        {/* Right */}
         <section style={styles.card}>
           <div style={{ marginBottom: 18 }}>
             <div style={styles.h2}>Log in</div>
@@ -165,16 +186,24 @@ export default function LoginPage() {
               />
             </div>
 
-            <button type="submit" style={styles.loginBtn(loading)} disabled={loading}>
+            <button type="submit" style={styles.loginBtn(loading)} disabled={loading || resetting}>
               {loading ? "Signing in..." : "Sign In"}
             </button>
 
             <div style={styles.rowBetween}>
-              <button type="button" style={styles.linkBtn} onClick={handleContact}>
-                Forgot password?
+              <button
+                type="button"
+                style={styles.linkBtn}
+                onClick={handleForgotPassword}
+                disabled={resetting || loading}
+              >
+                {resetting ? "Sending reset..." : "Forgot password?"}
               </button>
 
-              <a style={styles.link} href="mailto:hello@shiftcensus.com?subject=ShiftCensus%20-%20Need%20Access">
+              <a
+                style={styles.link}
+                href="mailto:hello@shiftcensus.com?subject=ShiftCensus%20-%20Need%20Access"
+              >
                 Need access?
               </a>
             </div>
@@ -190,7 +219,9 @@ export default function LoginPage() {
         </section>
       </main>
 
-      <footer style={styles.footer}>© {new Date().getFullYear()} Battle Born Technologies LLC, a Nevada-based Technology company</footer>
+      <footer style={styles.footer}>
+        © {new Date().getFullYear()} Battle Born Technologies LLC, a Nevada-based Technology company
+      </footer>
     </div>
   );
 }
@@ -204,16 +235,9 @@ function Feature({ text }) {
   );
 }
 
-/* ---------------- Styles ---------------- */
-
 function makeStyles(isWide) {
   return {
-    page: {
-      minHeight: "100vh",
-      background: "#050505",
-      color: "white",
-    },
-
+    page: { minHeight: "100vh", background: "#050505", color: "white" },
     header: {
       maxWidth: 1120,
       margin: "0 auto",
@@ -223,25 +247,19 @@ function makeStyles(isWide) {
       justifyContent: "space-between",
       gap: 12,
     },
-
     brandWrap: { display: "flex", alignItems: "center", gap: 10 },
-
     logo: {
-  width: isWide ? 100 : 80,
-  height: isWide ? 100 : 80,
-  imageRendering: "auto",
-  filter: "drop-shadow(0 14px 32px rgba(0,0,0,0.65))",
-},
-
-
+      width: isWide ? 100 : 80,
+      height: isWide ? 100 : 80,
+      imageRendering: "auto",
+      filter: "drop-shadow(0 14px 32px rgba(0,0,0,0.65))",
+    },
     brandName: {
-  fontSize: isWide ? 22 : 20,
-  fontWeight: 950,
-  letterSpacing: "-0.015em",
-},
-
+      fontSize: isWide ? 22 : 20,
+      fontWeight: 950,
+      letterSpacing: "-0.015em",
+    },
     brandTag: { fontSize: 12, color: "#9CA3AF", marginTop: 2 },
-
     headerBtn: {
       background: "white",
       color: "#0b0b0b",
@@ -251,7 +269,6 @@ function makeStyles(isWide) {
       fontWeight: 900,
       cursor: "pointer",
     },
-
     container: {
       maxWidth: 1120,
       margin: "0 auto",
@@ -260,7 +277,6 @@ function makeStyles(isWide) {
       gridTemplateColumns: isWide ? "1.15fr 0.85fr" : "1fr",
       gap: 18,
     },
-
     card: {
       background: "#0c0c0c",
       border: "1px solid #1f1f1f",
@@ -268,7 +284,6 @@ function makeStyles(isWide) {
       padding: isWide ? 32 : 22,
       boxShadow: "0 18px 60px rgba(0,0,0,0.55)",
     },
-
     pill: {
       display: "inline-flex",
       alignItems: "center",
@@ -279,7 +294,6 @@ function makeStyles(isWide) {
       background: "#131313",
       border: "1px solid #232323",
     },
-
     h1: {
       marginTop: 14,
       fontSize: 34,
@@ -287,7 +301,6 @@ function makeStyles(isWide) {
       fontWeight: 950,
       letterSpacing: "-0.02em",
     },
-
     lead: {
       marginTop: 12,
       color: "#C7CBD1",
@@ -295,15 +308,8 @@ function makeStyles(isWide) {
       lineHeight: 1.6,
       maxWidth: 560,
     },
-
-    featureStack: {
-      marginTop: 18,
-      display: "grid",
-      gap: 10,
-    },
-
+    featureStack: { marginTop: 18, display: "grid", gap: 10 },
     ctaRow: { marginTop: 18, display: "flex", gap: 10, flexWrap: "wrap" },
-
     primaryCta: {
       background: "white",
       color: "#0b0b0b",
@@ -313,22 +319,11 @@ function makeStyles(isWide) {
       fontWeight: 950,
       cursor: "pointer",
     },
-
     h2: { fontSize: 26, fontWeight: 950, letterSpacing: "-0.02em" },
-
-    sub: {
-      marginTop: 6,
-      fontSize: 13,
-      color: "#9CA3AF",
-      lineHeight: 1.5,
-    },
-
+    sub: { marginTop: 6, fontSize: 13, color: "#9CA3AF", lineHeight: 1.5 },
     form: { display: "grid", gap: 12 },
-
     field: { display: "grid", gap: 8 },
-
     label: { fontSize: 13, color: "#D1D5DB" },
-
     input: {
       width: "100%",
       padding: "12px 12px",
@@ -338,8 +333,7 @@ function makeStyles(isWide) {
       borderRadius: 16,
       outline: "none",
     },
-
-    loginBtn: (loading) => ({
+    loginBtn: (busy) => ({
       width: "100%",
       padding: "12px 14px",
       background: "white",
@@ -347,11 +341,10 @@ function makeStyles(isWide) {
       border: "none",
       borderRadius: 18,
       fontWeight: 950,
-      cursor: loading ? "not-allowed" : "pointer",
-      opacity: loading ? 0.7 : 1,
+      cursor: busy ? "not-allowed" : "pointer",
+      opacity: busy ? 0.7 : 1,
       marginTop: 6,
     }),
-
     rowBetween: {
       display: "flex",
       alignItems: "center",
@@ -359,7 +352,6 @@ function makeStyles(isWide) {
       marginTop: 6,
       gap: 10,
     },
-
     linkBtn: {
       background: "transparent",
       border: "none",
@@ -370,14 +362,12 @@ function makeStyles(isWide) {
       padding: 0,
       fontSize: 13,
     },
-
     link: {
       color: "#D1D5DB",
       textDecoration: "underline",
       textUnderlineOffset: 3,
       fontSize: 13,
     },
-
     errorBox: {
       background: "rgba(127, 29, 29, 0.25)",
       border: "1px solid rgba(127, 29, 29, 0.45)",
@@ -387,7 +377,6 @@ function makeStyles(isWide) {
       marginBottom: 12,
       fontSize: 13,
     },
-
     infoBox: {
       background: "rgba(6, 78, 59, 0.25)",
       border: "1px solid rgba(6, 78, 59, 0.45)",
@@ -397,7 +386,6 @@ function makeStyles(isWide) {
       marginBottom: 12,
       fontSize: 13,
     },
-
     securityBox: {
       marginTop: 16,
       background: "#070707",
@@ -405,16 +393,13 @@ function makeStyles(isWide) {
       borderRadius: 18,
       padding: 14,
     },
-
     securityTitle: { fontSize: 13, fontWeight: 950, color: "#D1D5DB" },
-
     securityText: {
       marginTop: 6,
       fontSize: 12,
       color: "#9CA3AF",
       lineHeight: 1.5,
     },
-
     footer: {
       maxWidth: 1120,
       margin: "0 auto",
