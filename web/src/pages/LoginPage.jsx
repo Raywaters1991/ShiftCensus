@@ -50,7 +50,7 @@ export default function LoginPage() {
     setSetupReason(reason);
     setOtp("");
     setStage("otp");
-    setInfoMsg(`We sent a 6-digit verification code to ${cleanedEmail}.`);
+    setInfoMsg(`We sent a verification code to ${cleanedEmail}.`);
   }
 
   async function handleEmailContinue(e) {
@@ -119,8 +119,8 @@ export default function LoginPage() {
 
     const cleanedEmail = email.trim().toLowerCase();
     const token = String(otp || "").replace(/\D/g, "");
-    if (token.length !== 6) {
-      setErrorMsg("Enter the 6-digit code from your email.");
+    if (token.length < 6 || token.length > 8) {
+      setErrorMsg("Enter the verification code exactly as shown in your email.");
       return;
     }
 
@@ -330,11 +330,11 @@ export default function LoginPage() {
           {stage === "otp" ? (
             <form onSubmit={handleVerifyOtp} style={styles.form}>
               <div style={styles.field}>
-                <label style={styles.label}>6-digit verification code</label>
+                <label style={styles.label}>Verification code</label>
                 <input
-                  placeholder="123456"
+                  placeholder="Enter code"
                   value={otp}
-                  onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                  onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 8))}
                   style={{ ...styles.input, letterSpacing: 5, fontSize: 20, textAlign: "center" }}
                   inputMode="numeric"
                   autoComplete="one-time-code"
