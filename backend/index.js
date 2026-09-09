@@ -34,6 +34,7 @@ const allowedOrigins = new Set(
     "http://localhost:5173",
     "https://shiftcensus.com",
     "https://www.shiftcensus.com",
+    "https://app.shiftcensus.com",
   ].filter(Boolean)
 );
 
@@ -41,7 +42,13 @@ const corsOptions = {
   origin: (origin, cb) => {
     if (!origin) return cb(null, true);
     if (allowedOrigins.has(origin)) return cb(null, true);
-    if (/\.vercel\.app$/.test(new URL(origin).hostname)) return cb(null, true);
+
+    try {
+      if (/\.vercel\.app$/.test(new URL(origin).hostname)) return cb(null, true);
+    } catch {
+      return cb(new Error(`CORS blocked for malformed origin: ${origin}`), false);
+    }
+
     return cb(new Error(`CORS blocked for origin: ${origin}`), false);
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -56,8 +63,6 @@ app.use(express.json());
 // -----------------------------
 // ROUTES
 // -----------------------------
-
-
 app.use("/api/adminmanagement", require("./routes/adminManagement"));
 app.use("/api/units", require("./routes/units"));
 app.use("/api/admin", require("./routes/admin"));
