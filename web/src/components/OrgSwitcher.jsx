@@ -2,18 +2,54 @@
 import { useMemo } from "react";
 import { useUser } from "../contexts/UserContext";
 
-export default function OrgSwitcher({ open, onClose }) {
-  const { orgMemberships, activeOrg, switchOrg } = useUser();
+export default function OrgSwitcher({ open, onClose, onOrgChanged }) {
+  const { orgMemberships, activeOrg, switchOrg, isSuperadmin } = useUser();
 
   const list = useMemo(() => {
-    return (orgMemberships || []).map((m) => ({
-      role: m.role,
-      id: m.orgs?.id,
-      code: m.orgs?.org_code,
-      name: m.orgs?.name,
-      logo_url: m.orgs?.logo_url || null,
-    }));
+    return (orgMemberships || [])
+      .map((m) => ({
+        role: m.role,
+        id: m.orgs?.id,
+        code: m.orgs?.org_code,
+        name: m.orgs?.name,
+        logo_url: m.orgs?.logo_url || null,
+      }))
+      .filter((o) => o.id);
   }, [orgMemberships]);
+
+  async function chooseOrg(orgId) {
+    if (!orgId || String(orgId) === String(activeOrg?.id || "")) return;
+    await switchOrg(orgId);
+    onOrgChanged?.();
+    onClose?.();
+  }
+
+  // When no explicit `open` prop is supplied, render the compact selector used
+  // inside the global menu. For superadmins this list represents every facility
+  // they can impersonate/support; it does not make them a facility employee.
+  if (open === undefined) {
+    if (list.length === 0) {
+      return <div style={ui.inlineEmpty}>No facilities available</div>;
+    }
+
+    return (
+      <select
+        value={activeOrg?.id || ""}
+        onChange={(e) => chooseOrg(e.target.value)}
+        style={ui.select}
+        aria-label={isSuperadmin ? "Act as facility" : "Organization"}
+      >
+        <option value="" disabled>
+          {isSuperadmin ? "Choose facility" : "Choose organization"}
+        </option>
+        {list.map((o) => (
+          <option key={o.id} value={o.id}>
+            {o.name || o.code || "Unnamed facility"}
+          </option>
+        ))}
+      </select>
+    );
+  }
 
   if (!open) return null;
 
@@ -25,8 +61,12 @@ export default function OrgSwitcher({ open, onClose }) {
       aria-modal="true"
     >
       <div style={ui.modal} onMouseDown={(e) => e.stopPropagation()}>
-        <div style={ui.title}>Choose Facility</div>
-        <div style={ui.sub}>Switch the active organization for Units, Staff, Rooms, etc.</div>
+        <div style={ui.title}>{isSuperadmin ? "Act as Facility" : "Choose Facility"}</div>
+        <div style={ui.sub}>
+          {isSuperadmin
+            ? "Select the facility you want to view and manage as the developer superadmin."
+            : "Switch the active organization for Units, Staff, Rooms, and other facility data."}
+        </div>
 
         <div style={ui.list}>
           {list.map((o) => {
@@ -36,10 +76,7 @@ export default function OrgSwitcher({ open, onClose }) {
                 key={o.id}
                 type="button"
                 style={ui.row(isActive)}
-                onClick={() => {
-                  switchOrg(o.id);     // ✅ sets storage + context
-                  onClose?.();         // ✅ close modal
-                }}
+                onClick={() => chooseOrg(o.id)}
               >
                 <div style={{ display: "flex", gap: 12, alignItems: "center", minWidth: 0 }}>
                   <div style={ui.logoBox}>
@@ -60,7 +97,6 @@ export default function OrgSwitcher({ open, onClose }) {
                       <span style={{ opacity: 0.5, margin: "0 8px" }}>•</span>
                       <span style={{ opacity: 0.75 }}>{String(o.role || "").toUpperCase()}</span>
                     </div>
-                    <div style={ui.idLine}>orgId: {o.id}</div>
                   </div>
                 </div>
               </button>
@@ -68,7 +104,7 @@ export default function OrgSwitcher({ open, onClose }) {
           })}
 
           {list.length === 0 ? (
-            <div style={ui.empty}>No org memberships found for this user.</div>
+            <div style={ui.empty}>No facilities available for this account.</div>
           ) : null}
         </div>
 
@@ -83,6 +119,24 @@ export default function OrgSwitcher({ open, onClose }) {
 }
 
 const ui = {
+  select: {
+    width: "100%",
+    minWidth: 190,
+    height: 40,
+    borderRadius: 12,
+    padding: "0 10px",
+    background: "var(--surface-glass)",
+    color: "var(--nav-text)",
+    border: "1px solid var(--border)",
+    fontWeight: 800,
+    outline: "none",
+  },
+  inlineEmpty: {
+    color: "var(--nav-text)",
+    opacity: 0.65,
+    fontSize: 12,
+    textAlign: "right",
+  },
   overlay: {
     position: "fixed",
     inset: 0,
@@ -128,7 +182,6 @@ const ui = {
   logoFallback: { color: "white", fontWeight: 1000, opacity: 0.9 },
   name: { color: "white", fontWeight: 1000, fontSize: 14, display: "flex", gap: 10, alignItems: "center" },
   meta: { color: "#9CA3AF", marginTop: 4, fontSize: 12 },
-  idLine: { color: "#6B7280", marginTop: 4, fontSize: 11, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" },
   activePill: {
     padding: "4px 10px",
     borderRadius: 999,
