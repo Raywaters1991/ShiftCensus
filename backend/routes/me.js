@@ -2,8 +2,8 @@
 const express = require("express");
 const router = express.Router();
 
-const supabase = require("../supabase"); // anon client (auth verification)
-const supabaseAdmin = require("../supabaseAdmin"); // service role (DB reads)
+const supabase = require("../supabase");
+const supabaseAdmin = require("../supabaseAdmin");
 
 function getBearerToken(req) {
   const h = req.get("Authorization") || "";
@@ -15,10 +15,8 @@ async function requireAuth(req, res, next) {
   try {
     const token = getBearerToken(req);
     if (!token) return res.status(401).json({ error: "Missing Authorization Bearer token" });
-
     const { data, error } = await supabase.auth.getUser(token);
     if (error || !data?.user) return res.status(401).json({ error: "Invalid or expired token" });
-
     req.user = data.user;
     next();
   } catch {
@@ -28,87 +26,46 @@ async function requireAuth(req, res, next) {
 
 function monthRange(monthKey) {
   const [yStr, mStr] = String(monthKey || "").split("-");
-  const y = Number(yStr);
-  const m = Number(mStr);
+  const y = Number(yStr), m = Number(mStr);
   if (!y || !m) return null;
-
   const start = new Date(Date.UTC(y, m - 1, 1));
-  const end = new Date(Date.UTC(y, m, 1)); // exclusive
+  const end = new Date(Date.UTC(y, m, 1));
   return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
 }
 
-/** Read the global app role from profiles, matching middleware/auth.js. */
 async function getAppRole(userId) {
-  const { data, error } = await supabaseAdmin
-    .from("profiles")
-    .select("role")
-    .eq("id", userId)
-    .maybeSingle();
-
-  if (error) {
-    console.error("ME getAppRole ERROR:", error);
-    return null;
-  }
-
+  const { data, error } = await supabaseAdmin.from("profiles").select("role").eq("id", userId).maybeSingle();
+  if (error) { console.error("ME getAppRole ERROR:", error); return null; }
   const r = String(data?.role || "").toLowerCase();
   return r || null;
 }
 
 async function getOrgByCode(orgCode) {
   if (!orgCode) return null;
-  const { data, error } = await supabaseAdmin
-    .from("orgs")
-    .select("id, org_code, name, logo_url")
-    .eq("org_code", orgCode)
-    .maybeSingle();
-  if (error) return null;
-  return data?.id ? data : null;
-}
-
-async function getOrgById(orgId) {
-  if (!orgId) return null;
-  const { data, error } = await supabaseAdmin
-    .from("orgs")
-    .select("id, org_code, name, logo_url")
-    .eq("id", orgId)
-    .maybeSingle();
+  const { data, error } = await supabaseAdmin.from("orgs").select("id, org_code, name, logo_url").eq("org_code", orgCode).maybeSingle();
   if (error) return null;
   return data?.id ? data : null;
 }
 
 async function getFirstNonAdminOrg() {
-  const { data, error } = await supabaseAdmin
-    .from("orgs")
-    .select("id, org_code, name, logo_url")
-    .neq("org_code", "ADMIN")
-    .order("created_at", { ascending: true })
-    .limit(1);
-
+  const { data, error } = await supabaseAdmin.from("orgs").select("id, org_code, name, logo_url").neq("org_code", "ADMIN").order("created_at", { ascending: true }).limit(1);
   if (error) return null;
   return data?.[0]?.id ? data[0] : null;
 }
 
-/** Org-scoped membership permissions for a user in an org. */
 async function getMembershipPerms(userId, orgId) {
   if (!userId || !orgId) return null;
-
   const { data, error } = await supabaseAdmin
     .from("org_memberships")
-    .select("role, is_admin, can_manage_admins, can_schedule_write, department_id, is_active")
+    .select("role, is_admin, can_manage_admins, can_dashboard_read, can_schedule_read, can_schedule_write, can_census_read, can_census_write, department_id, is_active")
     .eq("user_id", userId)
     .eq("org_id", orgId)
     .eq("is_active", true)
     .maybeSingle();
-
   if (error) return null;
   return data?.role ? data : null;
 }
 
-/**
- * Resolve active org:
- * - Superadmin: header org_code wins; else first non-ADMIN org (or null)
- * - Normal: membership org; else staff fallback; else null
- */
 async function resolveActiveOrg({ userId, headerOrgCode, isSuperadmin }) {
   if (isSuperadmin) {
     if (headerOrgCode) {
@@ -122,17 +79,7 @@ async function resolveActiveOrg({ userId, headerOrgCode, isSuperadmin }) {
 
   const { data: memberships, error: memErr } = await supabaseAdmin
     .from("org_memberships")
-    .select(
-      `
-        role,
-        orgs:orgs!org_memberships_org_id_fkey (
-          id,
-          org_code,
-          name,
-          logo_url
-        )
-      `
-    )
+    .select(`role, orgs:orgs!org_memberships_org_id_fkey ( id, org_code, name, logo_url )`)
     .eq("user_id", userId)
     .eq("is_active", true);
 
@@ -141,17 +88,11 @@ async function resolveActiveOrg({ userId, headerOrgCode, isSuperadmin }) {
     if (m?.orgs?.id) return { org: m.orgs, source: "membership", membershipRole: m.role || null };
   }
 
-  const { data: staff, error: staffErr } = await supabaseAdmin
-    .from("staff")
-    .select("org_code")
-    .eq("user_id", userId)
-    .maybeSingle();
-
+  const { data: staff, error: staffErr } = await supabaseAdmin.from("staff").select("org_code").eq("user_id", userId).maybeSingle();
   if (!staffErr && staff?.org_code) {
     const org = await getOrgByCode(staff.org_code);
     if (org) return { org, source: "staff", membershipRole: null };
   }
-
   return { org: null, source: "none", membershipRole: null };
 }
 
@@ -159,21 +100,16 @@ router.get("/bootstrap", requireAuth, async (req, res) => {
   try {
     const appRole = await getAppRole(req.user.id);
     const isSuperadmin = String(appRole || "").toLowerCase() === "superadmin";
-
     const headerOrgCode = req.get("X-Org-Code") || req.get("x-org-code") || null;
     const r = await resolveActiveOrg({ userId: req.user.id, headerOrgCode, isSuperadmin });
-
     let permissions = null;
 
     if (r?.org?.id) {
       if (isSuperadmin) {
         permissions = {
-          role: "superadmin",
-          is_admin: true,
-          can_manage_admins: true,
-          can_schedule_write: true,
-          department_id: null,
-          is_active: true,
+          role: "superadmin", is_admin: true, can_manage_admins: true, can_dashboard_read: true,
+          can_schedule_read: true, can_schedule_write: true, can_census_read: true, can_census_write: true,
+          department_id: null, is_active: true,
         };
       } else {
         permissions = await getMembershipPerms(req.user.id, r.org.id);
@@ -201,65 +137,43 @@ router.get("/memberships", requireAuth, async (req, res) => {
     const isSuperadmin = String(appRole || "").toLowerCase() === "superadmin";
 
     if (isSuperadmin) {
-      const { data, error } = await supabaseAdmin
-        .from("orgs")
-        .select("id, org_code, name, logo_url")
-        .order("name", { ascending: true });
-
+      const { data, error } = await supabaseAdmin.from("orgs").select("id, org_code, name, logo_url").order("name", { ascending: true });
       if (error) throw error;
-
-      const memberships = (data || [])
-        .filter((o) => o?.id && String(o.org_code || "").toUpperCase() !== "ADMIN")
-        .map((o) => ({
-          role: "superadmin",
-          orgs: o,
-          permissions: {
-            role: "superadmin",
-            is_admin: true,
-            can_manage_admins: true,
-            can_schedule_write: true,
-            department_id: null,
-            is_active: true,
-          },
-        }));
-
+      const memberships = (data || []).filter((o) => o?.id && String(o.org_code || "").toUpperCase() !== "ADMIN").map((o) => ({
+        role: "superadmin",
+        orgs: o,
+        permissions: {
+          role: "superadmin", is_admin: true, can_manage_admins: true, can_dashboard_read: true,
+          can_schedule_read: true, can_schedule_write: true, can_census_read: true, can_census_write: true,
+          department_id: null, is_active: true,
+        },
+      }));
       return res.json({ memberships });
     }
 
     const { data, error } = await supabaseAdmin
       .from("org_memberships")
-      .select(
-        `
-          role,
-          is_admin,
-          can_manage_admins,
-          can_schedule_write,
-          department_id,
-          orgs:orgs!org_memberships_org_id_fkey (
-            id, org_code, name, logo_url
-          )
-        `
-      )
+      .select(`role, is_admin, can_manage_admins, can_dashboard_read, can_schedule_read, can_schedule_write, can_census_read, can_census_write, department_id, orgs:orgs!org_memberships_org_id_fkey ( id, org_code, name, logo_url )`)
       .eq("user_id", req.user.id)
       .eq("is_active", true);
-
     if (error) throw error;
 
-    const memberships = (data || [])
-      .filter((m) => m?.orgs?.id)
-      .map((m) => ({
+    const memberships = (data || []).filter((m) => m?.orgs?.id).map((m) => ({
+      role: m.role,
+      orgs: m.orgs,
+      permissions: {
         role: m.role,
-        orgs: m.orgs,
-        permissions: {
-          role: m.role,
-          is_admin: !!m.is_admin,
-          can_manage_admins: !!m.can_manage_admins,
-          can_schedule_write: !!m.can_schedule_write,
-          department_id: m.department_id || null,
-          is_active: true,
-        },
-      }));
-
+        is_admin: !!m.is_admin,
+        can_manage_admins: !!m.can_manage_admins,
+        can_dashboard_read: !!m.can_dashboard_read,
+        can_schedule_read: !!m.can_schedule_read,
+        can_schedule_write: !!m.can_schedule_write,
+        can_census_read: !!m.can_census_read,
+        can_census_write: !!m.can_census_write,
+        department_id: m.department_id || null,
+        is_active: true,
+      },
+    }));
     return res.json({ memberships });
   } catch (e) {
     console.error("ME MEMBERSHIPS ERROR:", e);
@@ -271,103 +185,30 @@ router.get("/home-summary", requireAuth, async (req, res) => {
   try {
     const range = monthRange(req.query.month);
     if (!range) return res.status(400).json({ error: "Invalid month. Use YYYY-MM" });
-
     const appRole = await getAppRole(req.user.id);
     const isSuperadmin = String(appRole || "").toLowerCase() === "superadmin";
-
     const headerOrgCode = req.get("X-Org-Code") || req.get("x-org-code") || null;
     const resolved = await resolveActiveOrg({ userId: req.user.id, headerOrgCode, isSuperadmin });
     const org = resolved.org;
-
     if (!org?.org_code) return res.status(400).json({ error: "No active org found for user" });
     const orgCode = org.org_code;
 
-    const { data: staff, error: staffErr } = await supabaseAdmin
-      .from("staff")
-      .select("id, user_id, org_code, employee_no, staff_uuid")
-      .eq("org_code", orgCode)
-      .eq("user_id", req.user.id)
-      .maybeSingle();
+    const { data: staff, error: staffErr } = await supabaseAdmin.from("staff").select("id, user_id, org_code, employee_no, staff_uuid").eq("org_code", orgCode).eq("user_id", req.user.id).maybeSingle();
     if (staffErr) throw staffErr;
-
     const staffId = staff?.id ? String(staff.id) : null;
 
     let myShifts = [];
     if (staffId) {
-      const { data, error } = await supabaseAdmin
-        .from("shifts")
-        .select(
-          `
-            id,
-            org_code,
-            staff_id,
-            staff_uuid,
-            role,
-            shift_date,
-            start_local,
-            end_local,
-            timezone,
-            shift_type,
-            unit
-          `
-        )
-        .eq("org_code", orgCode)
-        .eq("staff_id", staffId)
-        .gte("shift_date", range.start)
-        .lt("shift_date", range.end)
-        .order("shift_date", { ascending: true });
-
+      const { data, error } = await supabaseAdmin.from("shifts").select("id, org_code, staff_id, staff_uuid, role, shift_date, start_local, end_local, timezone, shift_type, unit").eq("org_code", orgCode).eq("staff_id", staffId).gte("shift_date", range.start).lt("shift_date", range.end).order("shift_date", { ascending: true });
       if (error) throw error;
-
-      myShifts = (data || []).map((s) => ({
-        ...s,
-        date: s.shift_date,
-        unit_name: s.unit || null,
-      }));
+      myShifts = (data || []).map((s) => ({ ...s, date: s.shift_date, unit_name: s.unit || null }));
     }
 
-    const { data: open, error: openErr } = await supabaseAdmin
-      .from("shifts")
-      .select(
-        `
-          id,
-          org_code,
-          staff_id,
-          staff_uuid,
-          role,
-          shift_date,
-          start_local,
-          end_local,
-          timezone,
-          shift_type,
-          unit
-        `
-      )
-      .eq("org_code", orgCode)
-      .is("staff_id", null)
-      .gte("shift_date", range.start)
-      .lt("shift_date", range.end)
-      .order("shift_date", { ascending: true });
-
+    const { data: open, error: openErr } = await supabaseAdmin.from("shifts").select("id, org_code, staff_id, staff_uuid, role, shift_date, start_local, end_local, timezone, shift_type, unit").eq("org_code", orgCode).is("staff_id", null).gte("shift_date", range.start).lt("shift_date", range.end).order("shift_date", { ascending: true });
     if (openErr) throw openErr;
+    const openShifts = (open || []).map((s) => ({ ...s, date: s.shift_date, unit_name: s.unit || null }));
 
-    const openShifts = (open || []).map((s) => ({
-      ...s,
-      date: s.shift_date,
-      unit_name: s.unit || null,
-    }));
-
-    return res.json({
-      myShifts,
-      openShifts,
-      pending: [],
-      timeOff: [],
-      staffId,
-      activeOrg: org,
-      activeOrgSource: resolved.source,
-      appRole: appRole || null,
-      isSuperadmin,
-    });
+    return res.json({ myShifts, openShifts, pending: [], timeOff: [], staffId, activeOrg: org, activeOrgSource: resolved.source, appRole: appRole || null, isSuperadmin });
   } catch (e) {
     console.error("ME HOME SUMMARY ERROR:", e);
     return res.status(500).json({ error: e?.message || "Server error" });
