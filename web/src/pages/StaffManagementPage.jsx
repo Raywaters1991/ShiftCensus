@@ -11,7 +11,7 @@ export default function StaffManagementPage() {
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState(null);
   const [adding, setAdding] = useState(false);
-  const [invite, setInvite] = useState(null);
+  const [accountNotice, setAccountNotice] = useState(null);
 
   async function load() {
     if (!orgId) return;
@@ -48,16 +48,16 @@ export default function StaffManagementPage() {
     return departments.find((d) => String(d.id) === String(id))?.name || "—";
   }
 
-  function showInvite(result, fallbackName, fallbackEmail) {
-    if (!result?.login_created && !result?.actionLink && result?.invite_sent !== false) return;
-    setInvite({
+  function showAccountNotice(result, fallbackName, fallbackEmail) {
+    if (!result?.login_created) return;
+    setAccountNotice({
       name: result?.name || fallbackName,
       email: result?.email || fallbackEmail,
-      actionLink: result?.actionLink || null,
       note:
         result?.note ||
-        result?.error ||
-        (result?.invite_sent ? "Login created and invite sent." : "Login created."),
+        (result?.setup_pending
+          ? "Account created. Have the employee go to ShiftCensus and enter their email to finish setup."
+          : "Existing ShiftCensus account linked to this facility."),
     });
   }
 
@@ -65,7 +65,7 @@ export default function StaffManagementPage() {
     try {
       const created = await api.post("/staff", payload);
       setStaff((prev) => [...prev, created].sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""))));
-      showInvite(created, payload.name, payload.email);
+      showAccountNotice(created, payload.name, payload.email);
     } catch (e) {
       alert(e?.response?.data?.error || e?.message || "Failed to add staff member.");
       throw e;
@@ -75,7 +75,7 @@ export default function StaffManagementPage() {
   async function saveStaff(staffId, payload) {
     try {
       const updated = await api.patch(`/staff/${staffId}`, payload);
-      setStaff((prev) => prev.map((s) => (s.id === staffId ? updated : s)));
+      setStaff((prev) => prev.map((s) => (s.id === staffId ? { ...s, ...updated } : s)));
     } catch (e) {
       alert(e?.response?.data?.error || e?.message || "Failed to save staff member.");
       throw e;
@@ -87,7 +87,7 @@ export default function StaffManagementPage() {
       const result = await api.post(`/staff/${staffId}/provision-login`);
       setStaff((prev) => prev.map((s) => (s.id === staffId ? { ...s, ...result } : s)));
       setEditing((prev) => (prev?.id === staffId ? { ...prev, ...result } : prev));
-      showInvite(result, result?.name, result?.email);
+      showAccountNotice(result, result?.name, result?.email);
     } catch (e) {
       alert(e?.response?.data?.error || e?.message || "Failed to create login.");
       throw e;
@@ -102,12 +102,6 @@ export default function StaffManagementPage() {
     } catch (e) {
       alert(e?.response?.data?.error || e?.message || "Failed to delete staff member.");
     }
-  }
-
-  async function copy(text) {
-    if (!text) return;
-    await navigator.clipboard.writeText(text);
-    alert("Invite link copied.");
   }
 
   return (
@@ -136,7 +130,7 @@ export default function StaffManagementPage() {
                     <th style={ui.th}>Staff</th>
                     <th style={ui.th}>Department</th>
                     <th style={ui.th}>Contact</th>
-                    <th style={ui.th}>Login</th>
+                    <th style={ui.th}>Account</th>
                     <th style={{ ...ui.th, textAlign: "right" }}>Actions</th>
                   </tr>
                 </thead>
@@ -146,11 +140,15 @@ export default function StaffManagementPage() {
                       <td style={ui.td}><b>{s.name || "—"}</b><div style={ui.muted}>{s.role || "—"}</div>{s.employee_no ? <div style={ui.muted}>Employee #: {s.employee_no}</div> : null}</td>
                       <td style={ui.td}>{departmentName(s.department_id)}</td>
                       <td style={ui.td}><div>{s.email || "—"}</div><div style={ui.muted}>{s.phone || "—"}</div></td>
-                      <td style={ui.td}>{s.user_id ? <span style={ui.linked}>Linked</span> : <span style={ui.unlinked}>No login</span>}</td>
+                      <td style={ui.td}>
+                        {!s.user_id ? <span style={ui.unlinked}>No account</span> : null}
+                        {s.user_id && s.setup_pending ? <span style={ui.pending}>Setup Pending</span> : null}
+                        {s.user_id && !s.setup_pending ? <span style={ui.linked}>Active</span> : null}
+                      </td>
                       <td style={{ ...ui.td, textAlign: "right" }}>
                         <div style={ui.actions}>
                           <button style={ui.ghost} onClick={() => setEditing(s)}>Edit</button>
-                          {!s.user_id ? <button style={ui.primary} onClick={() => provisionLogin(s.id)}>Create Login</button> : null}
+                          {!s.user_id ? <button style={ui.primary} onClick={() => provisionLogin(s.id)}>Create Account</button> : null}
                           <button style={ui.danger} onClick={() => deleteStaff(s.id)}>Delete</button>
                         </div>
                       </td>
@@ -184,14 +182,16 @@ export default function StaffManagementPage() {
         />
       ) : null}
 
-      {invite ? (
-        <div style={ui.overlay} onMouseDown={() => setInvite(null)}>
+      {accountNotice ? (
+        <div style={ui.overlay} onMouseDown={() => setAccountNotice(null)}>
           <div style={ui.modal} onMouseDown={(e) => e.stopPropagation()}>
-            <div style={ui.title}>Login Created</div>
-            <div style={ui.notice}>{invite.note}</div>
-            <div style={{ marginTop: 10 }}>{invite.name || "Staff member"}{invite.email ? ` • ${invite.email}` : ""}</div>
-            {invite.actionLink ? <><input style={{ ...ui.search, width: "100%", marginTop: 12 }} readOnly value={invite.actionLink} /><button style={{ ...ui.primary, marginTop: 10 }} onClick={() => copy(invite.actionLink)}>Copy Invite Link</button></> : null}
-            <div style={ui.actions}><button style={ui.ghost} onClick={() => setInvite(null)}>Close</button></div>
+            <div style={ui.title}>Account Created</div>
+            <div style={ui.notice}>{accountNotice.note}</div>
+            <div style={{ marginTop: 10 }}>{accountNotice.name || "Staff member"}{accountNotice.email ? ` • ${accountNotice.email}` : ""}</div>
+            <div style={{ ...ui.notice, marginTop: 12 }}>
+              Tell the employee to go to ShiftCensus, enter their work email, verify the code sent to that email, and create their password.
+            </div>
+            <div style={ui.actions}><button style={ui.ghost} onClick={() => setAccountNotice(null)}>Close</button></div>
           </div>
         </div>
       ) : null}
@@ -216,6 +216,7 @@ const ui = {
   ghost: { height: 38, borderRadius: 10, padding: "0 12px", border: "1px solid rgba(255,255,255,.15)", background: "rgba(255,255,255,.05)", color: "white", fontWeight: 900, cursor: "pointer" },
   danger: { height: 38, borderRadius: 10, padding: "0 12px", border: "1px solid rgba(239,68,68,.35)", background: "rgba(239,68,68,.12)", color: "white", fontWeight: 900, cursor: "pointer" },
   linked: { color: "#86efac", fontWeight: 900 },
+  pending: { color: "#fde68a", fontWeight: 900 },
   unlinked: { color: "#fca5a5", fontWeight: 900 },
   empty: { padding: 18, textAlign: "center", color: "#9CA3AF" },
   notice: { padding: 12, borderRadius: 12, border: "1px solid rgba(255,255,255,.12)", background: "rgba(255,255,255,.04)" },
