@@ -2,6 +2,9 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const { requireAuth } = require("./middleware/auth");
+const { requireOrg } = require("./middleware/orgGuard");
+const { requireCensusAccess } = require("./middleware/censusAccess");
 
 const app = express();
 
@@ -66,7 +69,7 @@ app.use(express.json());
 app.use("/api/adminmanagement", require("./routes/adminManagement"));
 app.use("/api/units", require("./routes/units"));
 app.use("/api/admin", require("./routes/admin"));
-app.use("/api/census", require("./routes/census"));
+app.use("/api/census", requireAuth, requireOrg, requireCensusAccess, require("./routes/census"));
 app.use("/api/shifts", require("./routes/shifts"));
 app.use("/api/staff", require("./routes/staff"));
 app.use("/api/organizations", require("./routes/organizations"));
