@@ -56,6 +56,7 @@ export default function CensusActionsPage(){
 
   const refresh=()=>{ setTarget(null); setMode("actions"); setDraft(null); setToId(""); setRefreshKey(k=>k+1); };
   const fail=(e)=>{ console.error(e); alert(e?.body?.details?.message || e?.message || "Could not update census."); };
+  const isGenderMismatch=(e)=>e?.status===409&&(e?.body?.error==="GENDER_MISMATCH"||e?.message==="GENDER_MISMATCH");
 
   function intercept(e){
     if(e.target.closest("button,select,input,textarea")) return;
@@ -68,6 +69,36 @@ export default function CensusActionsPage(){
     setTarget(row); setMode("actions"); setDraft(null); setToId("");
   }
 
+  async function putWithGenderOverride(row,payload){
+    try {
+      await api.put(`/census/${row.id}`,payload);
+      return true;
+    } catch(e){
+      if(!isGenderMismatch(e)) throw e;
+
+      const details=e?.body?.details||{};
+      const room=roomNo(row)||"this room";
+      const incoming=payload.patient_gender||"resident";
+      const existing=details.room_gender||details.expected_gender||"the current room gender";
+      const ok=confirm(
+        `Gender mismatch for Room ${room}.\n\n`+
+        `You are placing a ${incoming} resident into a room currently designated ${existing}.\n\n`+
+        `Override this restriction? Use only for an approved exception such as a married couple or other documented accommodation.`
+      );
+      if(!ok) return false;
+
+      const note=prompt("Enter the reason for the gender override:","Married couple / approved accommodation");
+      if(note===null) return false;
+
+      await api.put(`/census/${row.id}`,{
+        ...payload,
+        couple_override:true,
+        couple_note:String(note||"").trim()||"Approved room gender override",
+      });
+      return true;
+    }
+  }
+
   async function setLeave(next){
     if(!target) return; setBusy(true);
     try { await api.put(`/census/${target.id}`,{status:next}); refresh(); } catch(e){ fail(e); } finally { setBusy(false); }
@@ -78,8 +109,9 @@ export default function CensusActionsPage(){
     if(!draft?.payer_source || !draft?.care_type || !draft?.admit_date || !draft?.patient_gender || draft.patient_gender==="Unknown") return alert("Payer, care type, gender, and admit date are required.");
     setBusy(true);
     try {
-      await api.put(`/census/${draft.id}`,{payer_source:draft.payer_source,care_type:draft.care_type,patient_gender:draft.patient_gender,patient_label:String(draft.patient_label||"").trim()||null,admit_date:draft.admit_date,expected_discharge:allowsDc(draft.care_type)?draft.expected_discharge||null:null,private_pay_note:String(draft.private_pay_note||"")});
-      refresh();
+      const payload={payer_source:draft.payer_source,care_type:draft.care_type,patient_gender:draft.patient_gender,patient_label:String(draft.patient_label||"").trim()||null,admit_date:draft.admit_date,expected_discharge:allowsDc(draft.care_type)?draft.expected_discharge||null:null,private_pay_note:String(draft.private_pay_note||"")};
+      const saved=await putWithGenderOverride(draft,payload);
+      if(saved) refresh();
     } catch(e){ fail(e); } finally { setBusy(false); }
   }
 
@@ -88,7 +120,13 @@ export default function CensusActionsPage(){
   async function move(){
     const to=rows.find(r=>String(r.id)===String(toId)); if(!target||!to) return;
     const swap=normStatus(to.status)!=="empty"; setBusy(true);
-    try { await api.put(`/census/${to.id}`,residentPayload(target)); await api.put(`/census/${target.id}`,swap?residentPayload(to):emptyPayload); refresh(); }
+    try {
+      const moved=await putWithGenderOverride(to,residentPayload(target));
+      if(!moved) return;
+      const clearedOrSwapped=await putWithGenderOverride(target,swap?residentPayload(to):emptyPayload);
+      if(!clearedOrSwapped){ await load(); return; }
+      refresh();
+    }
     catch(e){ fail(e); await load(); } finally { setBusy(false); }
   }
   async function discharge(){
