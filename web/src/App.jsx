@@ -1,5 +1,5 @@
 // src/App.jsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Routes, Route, useNavigate, Link, useLocation, Navigate } from "react-router-dom";
 import { useUser } from "./contexts/UserContext.jsx";
 import supabase from "./services/supabaseClient";
@@ -166,6 +166,42 @@ function RoleLanding({ role }) {
   return <Navigate to="/home" replace />;
 }
 
+function FacilityAdminPage() {
+  const rootRef = useRef(null);
+
+  // Staff management now lives on its own route. Force the legacy Admin page
+  // into facility mode so a previously-saved "staff" tab cannot reopen it.
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem("admin_primary_tab", "facility");
+  }
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return undefined;
+
+    const hideLegacyStaffTab = () => {
+      root.querySelectorAll("button").forEach((button) => {
+        if (button.textContent?.trim() === "Staff Settings") {
+          button.style.display = "none";
+          button.setAttribute("aria-hidden", "true");
+          button.tabIndex = -1;
+        }
+      });
+    };
+
+    hideLegacyStaffTab();
+    const observer = new MutationObserver(hideLegacyStaffTab);
+    observer.observe(root, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div ref={rootRef}>
+      <AdminPage />
+    </div>
+  );
+}
+
 export default function App() {
   const { user, loading, role } = useUser();
   const navigate = useNavigate();
@@ -286,7 +322,7 @@ export default function App() {
         <Route path="/dashboard" element={<DashboardPage />} />
         {canSeeShifts && <Route path="/shifts" element={<ShiftsPage />} />}
         {canSeeCensus && <Route path="/census" element={<CensusPage />} />}
-        {canSeeAdmin && <Route path="/admin" element={<AdminPage />} />}
+        {canSeeAdmin && <Route path="/admin" element={<FacilityAdminPage />} />}
         {canSeeAdmin && <Route path="/staff-management" element={<StaffManagementPage />} />}
         {isSuperAdmin && <Route path="/superadmin" element={<SuperAdminPage />} />}
         <Route path="*" element={<Navigate to="/" replace />} />
