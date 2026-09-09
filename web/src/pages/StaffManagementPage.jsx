@@ -10,6 +10,7 @@ export default function StaffManagementPage() {
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState(null);
+  const [adding, setAdding] = useState(false);
   const [invite, setInvite] = useState(null);
 
   async function load() {
@@ -47,6 +48,30 @@ export default function StaffManagementPage() {
     return departments.find((d) => String(d.id) === String(id))?.name || "—";
   }
 
+  function showInvite(result, fallbackName, fallbackEmail) {
+    if (!result?.login_created && !result?.actionLink && result?.invite_sent !== false) return;
+    setInvite({
+      name: result?.name || fallbackName,
+      email: result?.email || fallbackEmail,
+      actionLink: result?.actionLink || null,
+      note:
+        result?.note ||
+        result?.error ||
+        (result?.invite_sent ? "Login created and invite sent." : "Login created."),
+    });
+  }
+
+  async function addStaff(payload) {
+    try {
+      const created = await api.post("/staff", payload);
+      setStaff((prev) => [...prev, created].sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""))));
+      showInvite(created, payload.name, payload.email);
+    } catch (e) {
+      alert(e?.response?.data?.error || e?.message || "Failed to add staff member.");
+      throw e;
+    }
+  }
+
   async function saveStaff(staffId, payload) {
     try {
       const updated = await api.patch(`/staff/${staffId}`, payload);
@@ -62,12 +87,7 @@ export default function StaffManagementPage() {
       const result = await api.post(`/staff/${staffId}/provision-login`);
       setStaff((prev) => prev.map((s) => (s.id === staffId ? { ...s, ...result } : s)));
       setEditing((prev) => (prev?.id === staffId ? { ...prev, ...result } : prev));
-      setInvite({
-        name: result?.name,
-        email: result?.email,
-        actionLink: result?.actionLink,
-        note: result?.note || "Login created.",
-      });
+      showInvite(result, result?.name, result?.email);
     } catch (e) {
       alert(e?.response?.data?.error || e?.message || "Failed to create login.");
       throw e;
@@ -97,7 +117,10 @@ export default function StaffManagementPage() {
           <div style={ui.title}>Staff Management</div>
           <div style={ui.sub}>{orgName || "No facility selected"}{orgCode ? ` • ${orgCode}` : ""} • Role: {String(role || "").toUpperCase()}</div>
         </div>
-        <button style={ui.ghost} onClick={load} disabled={loading}>{loading ? "Loading…" : "Refresh"}</button>
+        <div style={ui.headerActions}>
+          <button style={ui.primary} onClick={() => setAdding(true)} disabled={!orgId}>+ Add Staff</button>
+          <button style={ui.ghost} onClick={load} disabled={loading}>{loading ? "Loading…" : "Refresh"}</button>
+        </div>
       </div>
 
       {!orgId ? (
@@ -141,6 +164,16 @@ export default function StaffManagementPage() {
         </>
       )}
 
+      {adding ? (
+        <StaffEditModal
+          mode="create"
+          staff={{}}
+          departments={departments}
+          onClose={() => setAdding(false)}
+          onSave={addStaff}
+        />
+      ) : null}
+
       {editing ? (
         <StaffEditModal
           staff={editing}
@@ -169,6 +202,7 @@ export default function StaffManagementPage() {
 const ui = {
   page: { padding: 18, color: "white", minHeight: "100vh" },
   header: { display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 14 },
+  headerActions: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" },
   title: { fontSize: 20, fontWeight: 1000 },
   sub: { color: "#9CA3AF", fontSize: 12, marginTop: 4 },
   search: { height: 42, borderRadius: 12, padding: "8px 12px", background: "rgba(0,0,0,.35)", color: "white", border: "1px solid rgba(255,255,255,.15)", minWidth: 280, marginBottom: 12 },
