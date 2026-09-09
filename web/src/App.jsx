@@ -169,8 +169,6 @@ function RoleLanding({ role }) {
 function FacilityAdminPage() {
   const rootRef = useRef(null);
 
-  // Staff management now lives on its own route. Force the legacy Admin page
-  // into facility mode so a previously-saved "staff" tab cannot reopen it.
   if (typeof window !== "undefined") {
     window.localStorage.setItem("admin_primary_tab", "facility");
   }
@@ -209,6 +207,7 @@ export default function App() {
   const location = useLocation();
 
   const isInviteRoute = location.pathname.startsWith("/accept-invite");
+  const isLoginRoute = location.pathname.startsWith("/login");
 
   useEffect(() => {
     if (!loading && !user && !isInviteRoute) navigate("/login");
@@ -259,9 +258,12 @@ export default function App() {
     window.location.reload();
   };
 
-  if (loading) return <div style={{ padding: 40 }}>Loading...</div>;
+  // Auth changes during OTP verification briefly refresh UserContext. Do not
+  // unmount the login flow during that refresh or the verified user loses the
+  // "create password" step and gets dumped back at the beginning.
+  if (loading && !isLoginRoute) return <div style={{ padding: 40 }}>Loading...</div>;
 
-  const showNav = !!user && !isInviteRoute;
+  const showNav = !!user && !isInviteRoute && !isLoginRoute;
 
   return (
     <div>
