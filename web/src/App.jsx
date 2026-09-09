@@ -9,6 +9,7 @@ import DashboardPage from "./pages/DashboardPage.jsx";
 import ShiftsPage from "./pages/ShiftsPage.jsx";
 import CensusPage from "./pages/CensusPage.jsx";
 import AdminPage from "./pages/AdminPage.jsx";
+import StaffManagementPage from "./pages/StaffManagementPage.jsx";
 import SuperAdminPage from "./pages/SuperAdminPage.jsx";
 import AcceptInvitePage from "./pages/AcceptInvitePage.jsx";
 
@@ -69,7 +70,6 @@ function MenuOverlay({ open, onClose, links, role, onLogout, onOrgChanged }) {
           overflow: "hidden",
         }}
       >
-        {/* Header */}
         <div
           style={{
             padding: 12,
@@ -81,7 +81,6 @@ function MenuOverlay({ open, onClose, links, role, onLogout, onOrgChanged }) {
           }}
         >
           <div style={{ fontWeight: 900, color: "var(--nav-text)" }}>Menu</div>
-
           <button
             onClick={onClose}
             style={{
@@ -101,9 +100,7 @@ function MenuOverlay({ open, onClose, links, role, onLogout, onOrgChanged }) {
           </button>
         </div>
 
-        {/* Content */}
         <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12 }}>
-          {/* Links */}
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {links.map((l) => (
               <MenuLink key={l.to} to={l.to} label={l.label} onClick={onClose} />
@@ -112,7 +109,6 @@ function MenuOverlay({ open, onClose, links, role, onLogout, onOrgChanged }) {
 
           <div style={{ height: 1, background: "var(--border)", margin: "6px 0" }} />
 
-          {/* Controls */}
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div
               style={{
@@ -128,7 +124,6 @@ function MenuOverlay({ open, onClose, links, role, onLogout, onOrgChanged }) {
               </div>
             </div>
 
-            {/* Theme toggle (only here, not top of page) */}
             <div style={{ display: "flex", justifyContent: "flex-end" }}>
               <ThemeToggle />
             </div>
@@ -158,29 +153,16 @@ function MenuOverlay({ open, onClose, links, role, onLogout, onOrgChanged }) {
   );
 }
 
-/**
- * ✅ Role-based landing
- * - admissions -> /census
- * - scheduler  -> /shifts
- * - superadmin/admin/don/ed -> /admin   ✅ you requested this
- * - wallboard -> /dashboard
- * - default -> /home
- */
 function RoleLanding({ role }) {
   const r = String(role || "").toLowerCase();
 
   if (!r) return <Navigate to="/home" replace />;
-
   if (r === "admissions") return <Navigate to="/census" replace />;
   if (r === "scheduler") return <Navigate to="/shifts" replace />;
-
-  // ✅ ALL admin-capable roles land on Admin page
   if (["superadmin", "admin", "don", "ed"].includes(r)) {
     return <Navigate to="/admin" replace />;
   }
-
   if (r === "wallboard") return <Navigate to="/dashboard" replace />;
-
   return <Navigate to="/home" replace />;
 }
 
@@ -189,7 +171,6 @@ export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // ✅ Allow invite acceptance without being logged-in yet
   const isInviteRoute = location.pathname.startsWith("/accept-invite");
 
   useEffect(() => {
@@ -197,13 +178,8 @@ export default function App() {
   }, [loading, user, navigate, isInviteRoute]);
 
   const isSuperAdmin = role === "superadmin";
-
-  // ✅ Schedule tools visible to scheduler + admins
   const canSeeShifts = ["superadmin", "admin", "scheduler", "don", "ed"].includes(role);
-
   const canSeeCensus = ["superadmin", "admin", "admissions", "don", "ed"].includes(role);
-
-  // ✅ Admin page visible to all admin-capable roles
   const canSeeAdmin = ["superadmin", "admin", "don", "ed"].includes(role);
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -221,18 +197,17 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [menuOpen]);
 
-  // ✅ Menu links
   const navLinks = useMemo(() => {
     const links = [];
-
     links.push({ to: "/home", label: "Home" });
     links.push({ to: "/dashboard", label: "Dashboard" });
-
     if (canSeeShifts) links.push({ to: "/shifts", label: "Schedule" });
     if (canSeeCensus) links.push({ to: "/census", label: "Census" });
-    if (canSeeAdmin) links.push({ to: "/admin", label: "Admin" });
+    if (canSeeAdmin) {
+      links.push({ to: "/admin", label: "Admin" });
+      links.push({ to: "/staff-management", label: "Staff Management" });
+    }
     if (isSuperAdmin) links.push({ to: "/superadmin", label: "Super Admin" });
-
     return links;
   }, [canSeeShifts, canSeeCensus, canSeeAdmin, isSuperAdmin]);
 
@@ -242,7 +217,6 @@ export default function App() {
     window.location.href = "/login";
   };
 
-  // one-time reload helper for org switching
   const handleOrgChanged = () => {
     setMenuOpen(false);
     window.location.reload();
@@ -250,14 +224,12 @@ export default function App() {
 
   if (loading) return <div style={{ padding: 40 }}>Loading...</div>;
 
-  // ✅ If not logged in, only show auth + invite routes
   const showNav = !!user && !isInviteRoute;
 
   return (
     <div>
       {showNav && (
         <>
-          {/* ✅ GLOBAL HAMBURGER NAVBAR */}
           <div
             className="navbar"
             style={{
@@ -291,7 +263,6 @@ export default function App() {
             >
               ☰
             </button>
-
             <div style={{ fontWeight: 900, letterSpacing: "-0.02em" }}>ShiftCensus</div>
             <div style={{ flex: 1 }} />
           </div>
@@ -308,23 +279,16 @@ export default function App() {
       )}
 
       <Routes>
-        {/* Public-ish routes */}
         <Route path="/login" element={<LoginPage />} />
         <Route path="/accept-invite" element={<AcceptInvitePage />} />
-
-        {/* Landing: decides where to send user based on role */}
         <Route path="/" element={<RoleLanding role={role} />} />
-
-        {/* Main app pages */}
         <Route path="/home" element={<UserHomePage />} />
         <Route path="/dashboard" element={<DashboardPage />} />
-
         {canSeeShifts && <Route path="/shifts" element={<ShiftsPage />} />}
         {canSeeCensus && <Route path="/census" element={<CensusPage />} />}
         {canSeeAdmin && <Route path="/admin" element={<AdminPage />} />}
+        {canSeeAdmin && <Route path="/staff-management" element={<StaffManagementPage />} />}
         {isSuperAdmin && <Route path="/superadmin" element={<SuperAdminPage />} />}
-
-        {/* Fallback */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>
