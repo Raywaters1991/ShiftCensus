@@ -132,6 +132,26 @@ async function getOrCreateAuthUserByEmail(email, orgCode, staffId) {
   throw createErr;
 }
 
+async function buildRecoveryInvite({ email, orgCode, orgId, staffId }) {
+  const publicUrl = String(process.env.APP_PUBLIC_URL || "").replace(/\/$/, "");
+  if (!publicUrl) throw new Error("APP_PUBLIC_URL is not configured");
+
+  const redirectTo = `${publicUrl}/accept-invite`;
+  const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
+    type: "recovery",
+    email,
+    options: {
+      redirectTo,
+      data: { org_code: orgCode, org_id: orgId, staff_id: staffId },
+    },
+  });
+  if (linkErr) throw linkErr;
+
+  const actionLink = linkData?.properties?.action_link || null;
+  if (!actionLink) throw new Error("Invite link was not returned");
+  return actionLink;
+}
+
 router.use(requireAuth);
 router.use(requireOrg);
 
@@ -227,57 +247,25 @@ router.post("/", async (req, res) => {
       return res.status(500).json({ error: "Staff created, but permissions could not be initialized" });
     }
 
-    const publicUrl = String(process.env.APP_PUBLIC_URL || "").replace(/\/$/, "");
-    if (!publicUrl) {
-      console.error("STAFF INVITE ERROR: APP_PUBLIC_URL is not configured");
+    let actionLink;
+    try {
+      actionLink = await buildRecoveryInvite({
+        email: cleanedEmail,
+        orgCode,
+        orgId,
+        staffId: staff.id,
+      });
+    } catch (e) {
+      console.error("GENERATE LINK ERROR:", e);
       return res.json({
         ...staff,
         user_id: userId,
         login_created: true,
         invite_sent: false,
-        error: "Invite URL is not configured",
+        error: e?.message || "Invite link generation failed",
       });
     }
 
-    const redirectTo = `${publicUrl}/accept-invite`;
-    const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
-      type: "recovery",
-      email: cleanedEmail,
-      options: {
-        redirectTo,
-        data: {
-          org_code: orgCode,
-          org_id: orgId,
-          staff_id: staff.id,
-        },
-      },
-    });
-
-    if (linkErr) {
-      console.error("GENERATE LINK ERROR:", linkErr);
-      return res.json({
-        ...staff,
-        user_id: userId,
-        login_created: true,
-        invite_sent: false,
-        error: "Invite link generation failed",
-      });
-    }
-
-    const actionLink = linkData?.properties?.action_link || null;
-    if (!actionLink) {
-      return res.json({
-        ...staff,
-        user_id: userId,
-        login_created: true,
-        invite_sent: false,
-        error: "Invite link was not returned",
-      });
-    }
-
-    // Supabase recovery links are now the single source of truth for onboarding.
-    // Do not create a second custom token in user_invites: the frontend consumes
-    // the Supabase recovery session directly at /accept-invite.
     const toPhone = normalizePhone(phone);
     if (!toPhone) {
       return res.json({
@@ -314,6 +302,87 @@ router.post("/", async (req, res) => {
   } catch (e) {
     console.error("STAFF POST ERROR:", e);
     return res.status(500).json({ error: "Failed to create staff" });
+  }
+});
+
+router.post("/:id/provision-login", async (req, res) => {
+  try {
+    if (!(await canManageStaff(req))) return res.status(403).json({ error: "Not allowed" });
+
+    const orgCode = req.orgCode || req.org_code;
+    const orgId = req.orgId;
+
+    const { data: staff, error: staffErr } = await supabaseAdmin
+      .from("staff")
+      .select("*")
+      .eq("id", req.params.id)
+      .eq("org_code", orgCode)
+      .maybeSingle();
+
+    if (staffErr) return res.status(500).json({ error: "Failed to load staff member" });
+    if (!staff) return res.status(404).json({ error: "Staff member not found" });
+    if (staff.user_id) return res.status(409).json({ error: "Staff member already has a linked login" });
+
+    const email = String(staff.email || "").trim().toLowerCase();
+    if (!email) return res.status(400).json({ error: "Add an email address before creating a login" });
+
+    const user = await getOrCreateAuthUserByEmail(email, orgCode, staff.id);
+    const userId = user?.id;
+    if (!userId) return res.status(500).json({ error: "Auth user id missing" });
+
+    const { data: linkedStaff, error: linkErr } = await supabaseAdmin
+      .from("staff")
+      .update({ user_id: userId, org_id: orgId })
+      .eq("id", staff.id)
+      .eq("org_code", orgCode)
+      .select()
+      .single();
+
+    if (linkErr) return res.status(500).json({ error: "Failed to link login to staff member" });
+
+    await ensureProfileAndMembership({
+      userId,
+      orgId,
+      orgCode,
+      departmentId: staff.department_id || null,
+    });
+
+    const actionLink = await buildRecoveryInvite({
+      email,
+      orgCode,
+      orgId,
+      staffId: staff.id,
+    });
+
+    let inviteSent = false;
+    let note = "Invite link created.";
+    const toPhone = normalizePhone(staff.phone);
+    if (toPhone) {
+      try {
+        await sendSms(
+          toPhone,
+          `Welcome to ShiftCensus.\nSet your password using this secure link:\n${actionLink}`
+        );
+        inviteSent = true;
+        note = "Login linked and invite sent by SMS.";
+      } catch (smsErr) {
+        console.error("TWILIO SMS ERROR:", smsErr);
+        note = "Login linked. SMS failed, so use the returned invite link.";
+      }
+    } else {
+      note = "Login linked. No E.164 phone provided, so use the returned invite link.";
+    }
+
+    return res.json({
+      ...linkedStaff,
+      login_created: true,
+      invite_sent: inviteSent,
+      actionLink,
+      note,
+    });
+  } catch (e) {
+    console.error("PROVISION STAFF LOGIN ERROR:", e);
+    return res.status(500).json({ error: e?.message || "Failed to provision staff login" });
   }
 });
 
