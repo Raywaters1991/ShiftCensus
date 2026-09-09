@@ -46,7 +46,7 @@ export default function StaffEditModal({
 
   async function provision() {
     const email = String(form.email || "").trim();
-    if (!email) return alert("Add and save an email address before creating a login.");
+    if (!email) return alert("Add and save an email address before creating an account.");
     setProvisioning(true);
     try {
       await onProvisionLogin?.();
@@ -68,15 +68,17 @@ export default function StaffEditModal({
         </div>
 
         {isCreate ? (
-          <div style={ui.notice}>If you enter an email address, ShiftCensus will create a login and generate a set-password invite when the staff member is added.</div>
+          <div style={ui.notice}>If you enter an email address, ShiftCensus will create the employee account automatically. Tell the employee to go to ShiftCensus, enter that email, verify the code sent to them, and create their password.</div>
         ) : !staff?.user_id ? (
-          <div style={ui.notice}>This staff record does not have a ShiftCensus login yet. Save any email changes first, then use Create Login / Send Invite.</div>
+          <div style={ui.notice}>This staff record does not have a ShiftCensus account yet. Save any email changes first, then choose Create Account.</div>
+        ) : staff?.setup_pending ? (
+          <div style={ui.notice}>Account created. Employee setup is still pending.</div>
         ) : (
-          <div style={ui.good}>Login linked.</div>
+          <div style={ui.good}>Account active.</div>
         )}
 
         <div style={ui.actions}>
-          {!isCreate && !staff?.user_id ? <button style={ui.secondary} disabled={provisioning} onClick={provision}>{provisioning ? "Creating…" : "Create Login / Send Invite"}</button> : null}
+          {!isCreate && !staff?.user_id ? <button style={ui.secondary} disabled={provisioning} onClick={provision}>{provisioning ? "Creating…" : "Create Account"}</button> : null}
           <button style={ui.ghost} onClick={() => onClose?.()} disabled={saving || provisioning}>Cancel</button>
           <button style={ui.primary} onClick={save} disabled={saving || provisioning}>{saving ? "Saving…" : isCreate ? "Add Staff" : "Save Changes"}</button>
         </div>
