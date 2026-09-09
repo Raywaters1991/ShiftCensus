@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import api from "../services/api";
 import CensusPage from "./CensusPage.jsx";
 
@@ -18,6 +18,7 @@ const primary = { ...btn, background:"#0f766e", borderColor:"#0d9488" };
 const input = { width:"100%", boxSizing:"border-box", padding:"10px 12px", borderRadius:10, border:"1px solid var(--border, #4b5563)", background:"var(--surface-glass, #111827)", color:"inherit" };
 
 export default function CensusActionsPage(){
+  const rootRef=useRef(null);
   const [rows,setRows]=useState([]);
   const [target,setTarget]=useState(null);
   const [mode,setMode]=useState("actions");
@@ -28,6 +29,31 @@ export default function CensusActionsPage(){
 
   const load=async()=>{ try { const d=await api.get("/census/bed-board"); setRows(Array.isArray(d)?d:[]); } catch(e){ console.error(e); } };
   useEffect(()=>{ load(); },[refreshKey]);
+
+  useEffect(()=>{
+    const root=rootRef.current;
+    if(!root) return;
+    const cleanLegacyControls=()=>{
+      root.querySelectorAll("button").forEach(b=>{
+        const title=String(b.getAttribute("title")||"");
+        if(title==="Edit room" || title.startsWith("Save & lock room")){
+          b.style.display="none";
+          b.setAttribute("aria-hidden","true");
+          b.tabIndex=-1;
+        }
+      });
+      root.querySelectorAll("div").forEach(el=>{
+        if(String(el.textContent||"").trim()==="Empty opens admit. Occupied/leave toggles with one tap (when not in room edit mode)."){
+          el.textContent="Empty beds open Admit Resident. Occupied and on-leave beds open Resident Actions.";
+        }
+      });
+    };
+    cleanLegacyControls();
+    const observer=new MutationObserver(cleanLegacyControls);
+    observer.observe(root,{childList:true,subtree:true});
+    return()=>observer.disconnect();
+  },[refreshKey]);
+
   const refresh=()=>{ setTarget(null); setMode("actions"); setDraft(null); setToId(""); setRefreshKey(k=>k+1); };
   const fail=(e)=>{ console.error(e); alert(e?.body?.details?.message || e?.message || "Could not update census."); };
 
@@ -71,7 +97,7 @@ export default function CensusActionsPage(){
   }
 
   const destinations=useMemo(()=>rows.slice().sort((a,b)=>bedKey(a).localeCompare(bedKey(b),undefined,{numeric:true})),[rows]);
-  return <div onClickCapture={intercept}>
+  return <div ref={rootRef} onClickCapture={intercept}>
     <CensusPage key={refreshKey}/>
     {target&&<div style={overlay} onMouseDown={()=>!busy&&setTarget(null)}><div style={modal} onMouseDown={e=>e.stopPropagation()}>
       {mode==="actions"&&<>
