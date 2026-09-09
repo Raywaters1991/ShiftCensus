@@ -37,15 +37,19 @@ function monthRange(monthKey) {
   return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
 }
 
-/** Read your app-role from public.users (NOT Supabase auth role) */
+/** Read the global app role from profiles, matching middleware/auth.js. */
 async function getAppRole(userId) {
   const { data, error } = await supabaseAdmin
-    .from("users")
+    .from("profiles")
     .select("role")
     .eq("id", userId)
     .maybeSingle();
 
-  if (error) return null;
+  if (error) {
+    console.error("ME getAppRole ERROR:", error);
+    return null;
+  }
+
   const r = String(data?.role || "").toLowerCase();
   return r || null;
 }
@@ -84,14 +88,7 @@ async function getFirstNonAdminOrg() {
   return data?.[0]?.id ? data[0] : null;
 }
 
-/**
- * ✅ NEW: Org-scoped membership permissions for a user in an org
- * Requires columns on org_memberships:
- * - is_admin boolean
- * - can_manage_admins boolean
- * - can_schedule_write boolean
- * - department_id uuid nullable
- */
+/** Org-scoped membership permissions for a user in an org. */
 async function getMembershipPerms(userId, orgId) {
   if (!userId || !orgId) return null;
 
@@ -113,7 +110,6 @@ async function getMembershipPerms(userId, orgId) {
  * - Normal: membership org; else staff fallback; else null
  */
 async function resolveActiveOrg({ userId, headerOrgCode, isSuperadmin }) {
-  // SUPERADMIN: can enter ANY org, no membership required
   if (isSuperadmin) {
     if (headerOrgCode) {
       const org = await getOrgByCode(headerOrgCode);
@@ -124,7 +120,6 @@ async function resolveActiveOrg({ userId, headerOrgCode, isSuperadmin }) {
     return { org: null, source: "none", membershipRole: "superadmin" };
   }
 
-  // NORMAL USERS: use memberships.
   const { data: memberships, error: memErr } = await supabaseAdmin
     .from("org_memberships")
     .select(
@@ -146,7 +141,6 @@ async function resolveActiveOrg({ userId, headerOrgCode, isSuperadmin }) {
     if (m?.orgs?.id) return { org: m.orgs, source: "membership", membershipRole: m.role || null };
   }
 
-  // staff fallback
   const { data: staff, error: staffErr } = await supabaseAdmin
     .from("staff")
     .select("org_code")
@@ -161,10 +155,6 @@ async function resolveActiveOrg({ userId, headerOrgCode, isSuperadmin }) {
   return { org: null, source: "none", membershipRole: null };
 }
 
-/**
- * Bootstrap: frontend calls this on login/refresh
- * ✅ NOW RETURNS permissions for active org
- */
 router.get("/bootstrap", requireAuth, async (req, res) => {
   try {
     const appRole = await getAppRole(req.user.id);
@@ -196,7 +186,7 @@ router.get("/bootstrap", requireAuth, async (req, res) => {
       activeOrg: r.org,
       activeOrgSource: r.source,
       membershipRole: r.membershipRole,
-      permissions, // ✅ NEW
+      permissions,
       isSuperadmin,
     });
   } catch (e) {
@@ -205,11 +195,6 @@ router.get("/bootstrap", requireAuth, async (req, res) => {
   }
 });
 
-/**
- * Memberships:
- * - Superadmin: return ALL orgs as selectable list (no membership rows needed)
- * - Normal: return real memberships (with permissions)
- */
 router.get("/memberships", requireAuth, async (req, res) => {
   try {
     const appRole = await getAppRole(req.user.id);
@@ -282,11 +267,6 @@ router.get("/memberships", requireAuth, async (req, res) => {
   }
 });
 
-/**
- * Home summary:
- * Your shifts table columns: unit (text), no status/unit_name.
- * Map unit -> unit_name and shift_date -> date for UI.
- */
 router.get("/home-summary", requireAuth, async (req, res) => {
   try {
     const range = monthRange(req.query.month);
@@ -302,7 +282,6 @@ router.get("/home-summary", requireAuth, async (req, res) => {
     if (!org?.org_code) return res.status(400).json({ error: "No active org found for user" });
     const orgCode = org.org_code;
 
-    // Get staff row for this user in this org
     const { data: staff, error: staffErr } = await supabaseAdmin
       .from("staff")
       .select("id, user_id, org_code, employee_no, staff_uuid")
@@ -347,7 +326,6 @@ router.get("/home-summary", requireAuth, async (req, res) => {
       }));
     }
 
-    // Open shifts (unassigned)
     const { data: open, error: openErr } = await supabaseAdmin
       .from("shifts")
       .select(
