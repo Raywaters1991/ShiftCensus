@@ -132,7 +132,24 @@ api.interceptors.request.use((config) => {
 
 api.interceptors.response.use(
   (response) => response.data,
-  (error) => Promise.reject(error)
+  (error) => {
+    // Normalize Axios errors so the rest of the app can consistently read
+    // err.status / err.body instead of depending on Axios' response shape.
+    const status = error?.response?.status ?? error?.status;
+    const body = error?.response?.data ?? error?.body ?? null;
+
+    if (status !== undefined) error.status = status;
+    if (body !== undefined) error.body = body;
+
+    const serverMessage =
+      body?.details?.message ||
+      body?.message ||
+      (typeof body?.error === "string" && body.error !== "GENDER_MISMATCH" ? body.error : null);
+
+    if (serverMessage) error.message = serverMessage;
+
+    return Promise.reject(error);
+  }
 );
 
 export default api;
