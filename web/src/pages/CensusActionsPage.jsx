@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import api from "../services/api";
+import { useUser } from "../contexts/UserContext.jsx";
 import CensusPage from "./CensusPage.jsx";
 
 const PAYER_OPTIONS = ["VA", "Medicare", "Medicaid", "Private Pay"];
@@ -18,6 +19,9 @@ const primary = { ...btn, background:"#0f766e", borderColor:"#0d9488" };
 const input = { width:"100%", boxSizing:"border-box", padding:"10px 12px", borderRadius:10, border:"1px solid var(--border, #4b5563)", background:"var(--surface-glass, #111827)", color:"inherit" };
 
 export default function CensusActionsPage(){
+  const { permissions, isSuperadmin, role } = useUser();
+  const superUser=!!isSuperadmin||String(role||"").toLowerCase()==="superadmin";
+  const canWrite=superUser||!!permissions?.can_census_write;
   const rootRef=useRef(null);
   const [rows,setRows]=useState([]);
   const [target,setTarget]=useState(null);
@@ -43,8 +47,11 @@ export default function CensusActionsPage(){
         }
       });
       root.querySelectorAll("div").forEach(el=>{
-        if(String(el.textContent||"").trim()==="Empty opens admit. Occupied/leave toggles with one tap (when not in room edit mode)."){
-          el.textContent="Empty beds open Admit Resident. Occupied and on-leave beds open Resident Actions.";
+        const text=String(el.textContent||"").trim();
+        if(text==="Empty opens admit. Occupied/leave toggles with one tap (when not in room edit mode)." || text==="Empty beds open Admit Resident. Occupied and on-leave beds open Resident Actions."){
+          el.textContent=canWrite
+            ? "Empty beds open Admit Resident. Occupied and on-leave beds open Resident Actions."
+            : "Read only — Census Write permission is required to admit, edit, move, place on leave, return, or discharge residents.";
         }
       });
     };
@@ -52,7 +59,7 @@ export default function CensusActionsPage(){
     const observer=new MutationObserver(cleanLegacyControls);
     observer.observe(root,{childList:true,subtree:true});
     return()=>observer.disconnect();
-  },[refreshKey]);
+  },[refreshKey,canWrite]);
 
   const refresh=()=>{ setTarget(null); setMode("actions"); setDraft(null); setToId(""); setRefreshKey(k=>k+1); };
   const fail=(e)=>{ console.error(e); alert(e?.body?.details?.message || e?.message || "Could not update census."); };
@@ -62,6 +69,13 @@ export default function CensusActionsPage(){
     if(e.target.closest("button,select,input,textarea")) return;
     const card=e.target.closest('[role="button"]');
     if(!card) return;
+
+    if(!canWrite){
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+
     const text=String(card.textContent||"").replace(/\s+/g," ").trim();
     const row=rows.find(r=>text.includes(bedKey(r)) && normStatus(r.status)!=="empty");
     if(!row) return;
@@ -70,6 +84,7 @@ export default function CensusActionsPage(){
   }
 
   async function putWithGenderOverride(row,payload){
+    if(!canWrite) return false;
     try {
       await api.put(`/census/${row.id}`,payload);
       return true;
@@ -100,12 +115,13 @@ export default function CensusActionsPage(){
   }
 
   async function setLeave(next){
-    if(!target) return; setBusy(true);
+    if(!target||!canWrite) return; setBusy(true);
     try { await api.put(`/census/${target.id}`,{status:next}); refresh(); } catch(e){ fail(e); } finally { setBusy(false); }
   }
 
-  function startEdit(){ setDraft({...target, admit_date:String(target.admit_date||"").slice(0,10), expected_discharge:String(target.expected_discharge||"").slice(0,10)}); setMode("edit"); }
+  function startEdit(){ if(!canWrite) return; setDraft({...target, admit_date:String(target.admit_date||"").slice(0,10), expected_discharge:String(target.expected_discharge||"").slice(0,10)}); setMode("edit"); }
   async function saveEdit(){
+    if(!canWrite) return;
     if(!draft?.payer_source || !draft?.care_type || !draft?.admit_date || !draft?.patient_gender || draft.patient_gender==="Unknown") return alert("Payer, care type, gender, and admit date are required.");
     setBusy(true);
     try {
@@ -118,6 +134,7 @@ export default function CensusActionsPage(){
   function residentPayload(r){ return {status:normStatus(r.status),payer_source:r.payer_source||null,care_type:r.care_type||null,admit_date:r.admit_date||null,expected_discharge:allowsDc(r.care_type)?r.expected_discharge||null:null,patient_label:String(r.patient_label||"").trim()||null,private_pay_note:String(r.private_pay_note||""),patient_gender:r.patient_gender||"Unknown",couple_override:!!r.couple_override,couple_note:String(r.couple_note||"").trim()||null}; }
   const emptyPayload={status:"empty",payer_source:null,care_type:null,admit_date:null,expected_discharge:null,patient_label:null,private_pay_note:"",patient_gender:"Unknown",couple_override:false,couple_note:null};
   async function move(){
+    if(!canWrite) return;
     const to=rows.find(r=>String(r.id)===String(toId)); if(!target||!to) return;
     const swap=normStatus(to.status)!=="empty"; setBusy(true);
     try {
@@ -130,6 +147,7 @@ export default function CensusActionsPage(){
     catch(e){ fail(e); await load(); } finally { setBusy(false); }
   }
   async function discharge(){
+    if(!canWrite) return;
     if(!target||!confirm(`Discharge ${bedKey(target)}? This will mark the bed EMPTY.`)) return;
     setBusy(true); try { await api.put(`/census/${target.id}`,emptyPayload); refresh(); } catch(e){ fail(e); } finally { setBusy(false); }
   }
@@ -137,7 +155,7 @@ export default function CensusActionsPage(){
   const destinations=useMemo(()=>rows.slice().sort((a,b)=>bedKey(a).localeCompare(bedKey(b),undefined,{numeric:true})),[rows]);
   return <div ref={rootRef} onClickCapture={intercept}>
     <CensusPage key={refreshKey}/>
-    {target&&<div style={overlay} onMouseDown={()=>!busy&&setTarget(null)}><div style={modal} onMouseDown={e=>e.stopPropagation()}>
+    {target&&canWrite&&<div style={overlay} onMouseDown={()=>!busy&&setTarget(null)}><div style={modal} onMouseDown={e=>e.stopPropagation()}>
       {mode==="actions"&&<>
         <div style={{fontSize:22,fontWeight:900}}>Resident Actions</div>
         <div style={{opacity:.72,marginTop:4}}>Bed {bedKey(target)} • {normStatus(target.status)==="leave"?"On Leave":"Occupied"}</div>
