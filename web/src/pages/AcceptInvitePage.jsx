@@ -16,22 +16,21 @@ export default function AcceptInvitePage() {
 
     (async () => {
       try {
-        // ✅ Prevent “wrong account” updates if someone is already logged in
-        await supabase.auth.signOut();
-
         const url = new URL(window.location.href);
-        const code = url.searchParams.get("code"); // PKCE-style links
+        const code = url.searchParams.get("code");
 
         let session = null;
 
+        // PKCE flow: exchange the one-time code for a session.
         if (code) {
-          // ✅ PKCE flow: exchange code for session
           const { data, error } = await supabase.auth.exchangeCodeForSession(code);
           if (error) throw error;
           session = data?.session || null;
         } else {
-          // ✅ Hash/token flow: parse from URL
-          const { data, error } = await supabase.auth.getSessionFromUrl({ storeSession: true });
+          // For implicit/recovery links, detectSessionInUrl on the shared client
+          // handles URL tokens. Read the resulting session instead of relying on
+          // the removed/legacy getSessionFromUrl API.
+          const { data, error } = await supabase.auth.getSession();
           if (error) throw error;
           session = data?.session || null;
         }
@@ -39,17 +38,21 @@ export default function AcceptInvitePage() {
         if (!mounted) return;
 
         if (!session?.user?.id) {
-          setError("No session found in invite link. Try opening the link again.");
+          setError("No valid session found in this invite link. Request a new invite and try again.");
           setStage("error");
           setLoading(false);
           return;
         }
 
+        // Clean the one-time auth parameters from the visible URL after the
+        // session is established so refreshes do not attempt to reuse them.
+        window.history.replaceState({}, document.title, "/accept-invite");
+
         setStage("setpw");
         setLoading(false);
       } catch (e) {
         if (!mounted) return;
-        setError(e?.message || "Invite link invalid/expired.");
+        setError(e?.message || "Invite link invalid or expired.");
         setStage("error");
         setLoading(false);
       }
@@ -72,10 +75,7 @@ export default function AcceptInvitePage() {
       if (error) throw error;
 
       setStage("done");
-
-      // ✅ either send to app or login — your call
       setTimeout(() => nav("/"), 900);
-      // setTimeout(() => nav("/login"), 900);
     } catch (e) {
       setError(e?.message || "Failed to set password.");
     } finally {

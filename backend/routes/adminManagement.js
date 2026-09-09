@@ -26,7 +26,7 @@ function toBool(v, fallback = false) {
 }
 
 // GET /api/adminmanagement/list
-// ✅ Returns ALL staff for the org + membership overlay (if staff.user_id exists)
+// Returns ALL staff for the org + membership overlay (if staff.user_id exists)
 router.get("/list", async (req, res) => {
   const orgId = req.orgId;
   const orgCode = req.orgCode; // should be set by requireOrg
@@ -110,6 +110,7 @@ router.get("/list", async (req, res) => {
 // PATCH /api/adminmanagement/:userId
 router.patch("/:userId", async (req, res) => {
   const orgId = req.orgId;
+  const orgCode = req.orgCode;
   const userId = String(req.params.userId || "").trim();
 
   if (!userId) return res.status(400).json({ error: "Missing userId" });
@@ -132,26 +133,73 @@ router.patch("/:userId", async (req, res) => {
     department_locked: toBool(patch.department_locked, false),
   };
 
-  const { data, error } = await supabaseAdmin
-    .from("org_memberships")
-    .update(payload)
-    .eq("org_id", orgId)
-    .eq("user_id", userId)
-    .select(
-      "user_id,org_id,role,is_active,is_admin,can_manage_admins,can_schedule_read,can_schedule_write,can_census_read,can_census_write,department_id,department_locked,created_at"
-    )
-    .maybeSingle();
+  try {
+    // The admin list includes staff who do not have an org_memberships row yet.
+    // Before creating one, verify this user actually belongs to a staff row in
+    // the active organization so an admin cannot add an arbitrary auth user.
+    let staffQuery = supabaseAdmin
+      .from("staff")
+      .select("id,user_id")
+      .eq("user_id", userId);
 
-  if (error) {
-    console.error("ADMINMGMT PATCH ERROR:", error);
+    if (orgId && orgCode) {
+      staffQuery = staffQuery.or(`org_id.eq.${orgId},org_code.eq.${orgCode}`);
+    } else if (orgId) {
+      staffQuery = staffQuery.eq("org_id", orgId);
+    } else if (orgCode) {
+      staffQuery = staffQuery.eq("org_code", orgCode);
+    }
+
+    const { data: staffRow, error: staffErr } = await staffQuery.limit(1).maybeSingle();
+    if (staffErr) throw staffErr;
+    if (!staffRow) {
+      return res.status(404).json({ error: "Staff user not found in this organization" });
+    }
+
+    const { data: existing, error: existingErr } = await supabaseAdmin
+      .from("org_memberships")
+      .select("user_id,org_id,role,is_active")
+      .eq("org_id", orgId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (existingErr) throw existingErr;
+
+    let result;
+
+    if (existing) {
+      result = await supabaseAdmin
+        .from("org_memberships")
+        .update(payload)
+        .eq("org_id", orgId)
+        .eq("user_id", userId)
+        .select(
+          "user_id,org_id,role,is_active,is_admin,can_manage_admins,can_schedule_read,can_schedule_write,can_census_read,can_census_write,department_id,department_locked,created_at"
+        )
+        .single();
+    } else {
+      result = await supabaseAdmin
+        .from("org_memberships")
+        .insert({
+          org_id: orgId,
+          user_id: userId,
+          role: "staff",
+          is_active: true,
+          ...payload,
+        })
+        .select(
+          "user_id,org_id,role,is_active,is_admin,can_manage_admins,can_schedule_read,can_schedule_write,can_census_read,can_census_write,department_id,department_locked,created_at"
+        )
+        .single();
+    }
+
+    if (result.error) throw result.error;
+
+    return res.json({ membership: result.data });
+  } catch (err) {
+    console.error("ADMINMGMT PATCH ERROR:", err);
     return res.status(500).json({ error: "Failed to update membership" });
   }
-
-  if (!data) {
-    return res.status(404).json({ error: "Membership not found for this org/user" });
-  }
-
-  res.json({ membership: data });
 });
 
 module.exports = router;
