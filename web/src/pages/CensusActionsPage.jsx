@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import api from "../services/api";
 import { useUser } from "../contexts/UserContext.jsx";
+import { saveOfflineSnapshot } from "../services/offlineCache.js";
 import CensusPage from "./CensusPage.jsx";
 
 const PAYER_OPTIONS = ["VA", "Medicare", "Medicaid", "Private Pay"];
@@ -19,7 +20,7 @@ const primary = { ...btn, background:"#0f766e", borderColor:"#0d9488" };
 const input = { width:"100%", boxSizing:"border-box", padding:"10px 12px", borderRadius:10, border:"1px solid var(--border, #4b5563)", background:"var(--surface-glass, #111827)", color:"inherit" };
 
 export default function CensusActionsPage(){
-  const { permissions, isSuperadmin, role } = useUser();
+  const { permissions, isSuperadmin, role, orgId, orgCode, orgName } = useUser();
   const superUser=!!isSuperadmin||String(role||"").toLowerCase()==="superadmin";
   const canWrite=superUser||!!permissions?.can_census_write;
   const rootRef=useRef(null);
@@ -31,8 +32,8 @@ export default function CensusActionsPage(){
   const [busy,setBusy]=useState(false);
   const [refreshKey,setRefreshKey]=useState(0);
 
-  const load=async()=>{ try { const d=await api.get("/census/bed-board"); setRows(Array.isArray(d)?d:[]); } catch(e){ console.error(e); } };
-  useEffect(()=>{ load(); },[refreshKey]);
+  const load=async()=>{ try { const d=await api.get("/census/bed-board"); const list=Array.isArray(d)?d:[]; setRows(list); if(list.length) saveOfflineSnapshot({orgId,orgCode,orgName,censusRows:list}); } catch(e){ console.error(e); } };
+  useEffect(()=>{ load(); },[refreshKey,orgId,orgCode,orgName]);
 
   useEffect(()=>{
     const root=rootRef.current;
