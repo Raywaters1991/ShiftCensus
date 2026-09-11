@@ -5,7 +5,32 @@ const SNAPSHOT_TTL_MS = 24 * 60 * 60 * 1000;
 
 function safeParse(value) { try { return JSON.parse(value); } catch { return null; } }
 function normalizeOrgKey(value) { return String(value || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "_"); }
-function orgKey({ orgId, orgCode } = {}) { return normalizeOrgKey(orgId) || normalizeOrgKey(orgCode) || null; }
+
+function storedActiveOrg() {
+  try {
+    const orgId = sessionStorage.getItem("active_org_id") || localStorage.getItem("active_org_id") || "";
+    const orgCode = sessionStorage.getItem("active_org_code") || localStorage.getItem("active_org_code") || "";
+    const orgName = sessionStorage.getItem("active_org_name") || localStorage.getItem("active_org_name") || "";
+    return { orgId, orgCode, orgName };
+  } catch {
+    return { orgId: "", orgCode: "", orgName: "" };
+  }
+}
+
+function resolveOrg(org = {}) {
+  const explicit = {
+    orgId: org?.orgId || "",
+    orgCode: org?.orgCode || "",
+    orgName: org?.orgName || "",
+  };
+  if (explicit.orgId || explicit.orgCode) return explicit;
+  return storedActiveOrg();
+}
+
+function orgKey(org = {}) {
+  const resolved = resolveOrg(org);
+  return normalizeOrgKey(resolved.orgId) || normalizeOrgKey(resolved.orgCode) || null;
+}
 function key(kind, org = {}) { const k = orgKey(org); return k ? `${CACHE_PREFIX}:${k}:${kind}` : null; }
 
 function sanitizeCensusRows(rows) { return (Array.isArray(rows)?rows:[]).map(r=>({id:r.id,room:r.room??null,room_number:r.room_number??null,bed:r.bed??null,status:r.status??"empty",payer_source:r.payer_source??null,care_type:r.care_type??null,admit_date:r.admit_date??null,expected_discharge:r.expected_discharge??null,patient_gender:r.patient_gender??"Unknown"})); }
@@ -15,13 +40,30 @@ function sanitizeAssignments(rows) { return (Array.isArray(rows)?rows:[]).map(a=
 function sanitizeUnits(rows) { return (Array.isArray(rows)?rows:[]).map(u=>({id:u.id,name:u.name??u.unit??null})); }
 
 function save(kind, org, payload) {
-  try { const storageKey=key(kind,org); if(!storageKey)return false; localStorage.setItem(storageKey,JSON.stringify({version:2,orgId:org.orgId||null,orgCode:org.orgCode||null,orgName:org.orgName||null,syncedAt:new Date().toISOString(),...payload})); return true; }
+  try {
+    const resolved = resolveOrg(org);
+    const storageKey=key(kind,resolved);
+    if(!storageKey)return false;
+    localStorage.setItem(storageKey,JSON.stringify({version:2,orgId:resolved.orgId||null,orgCode:resolved.orgCode||null,orgName:resolved.orgName||null,syncedAt:new Date().toISOString(),...payload}));
+    return true;
+  }
   catch(e){console.warn(`Could not save offline ${kind} snapshot`,e);return false;}
 }
 export function saveOfflineSnapshot({orgId,orgCode,orgName,censusRows}) { if(!Array.isArray(censusRows)||!censusRows.length)return false; return save("census",{orgId,orgCode,orgName},{censusRows:sanitizeCensusRows(censusRows)}); }
 export function saveOfflineOperationsSnapshot({orgId,orgCode,orgName,shifts,staff,units,assignments}) { if(![shifts,staff,units,assignments].every(Array.isArray))return false; return save("operations",{orgId,orgCode,orgName},{shifts:sanitizeShifts(shifts),staff:sanitizeStaff(staff),units:sanitizeUnits(units),assignments:sanitizeAssignments(assignments)}); }
 
-function read(kind, org) { try { const storageKey=key(kind,org); if(!storageKey)return null; const s=safeParse(localStorage.getItem(storageKey)); if(!s||s.version!==2)return null; const expected=orgKey(org), actual=orgKey(s); if(!expected||expected!==actual)return null; return s; } catch{return null;} }
+function read(kind, org = {}) {
+  try {
+    const resolved = resolveOrg(org);
+    const storageKey=key(kind,resolved);
+    if(!storageKey)return null;
+    const s=safeParse(localStorage.getItem(storageKey));
+    if(!s||s.version!==2)return null;
+    const expected=orgKey(resolved), actual=orgKey({orgId:s.orgId,orgCode:s.orgCode});
+    if(!expected||expected!==actual)return null;
+    return s;
+  } catch{return null;}
+}
 export function getOfflineSnapshot(org={}) { const s=read("census",org); return s&&Array.isArray(s.censusRows)?s:null; }
 export function getOfflineOperationsSnapshot(org={}) { const s=read("operations",org); return s&&[s.shifts,s.staff,s.units,s.assignments].every(Array.isArray)?s:null; }
 export function getOfflineSnapshotAge(snapshot){const t=Date.parse(snapshot?.syncedAt||"");return Number.isFinite(t)?Math.max(0,Date.now()-t):null;}
