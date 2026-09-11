@@ -1,0 +1,142 @@
+import { useEffect, useMemo, useState } from "react";
+import api from "../services/api";
+
+function ymd(d) {
+  const x = new Date(d);
+  const y = x.getFullYear();
+  const m = String(x.getMonth() + 1).padStart(2, "0");
+  const day = String(x.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+export default function SchedulePage() {
+  const [shifts, setShifts] = useState([]);
+  const [staff, setStaff] = useState([]);
+  const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  const [modal, setModal] = useState(null);
+  const [form, setForm] = useState({ staffId: "", date: "", shiftType: "" });
+  const [loading, setLoading] = useState(true);
+
+  async function load() {
+    try {
+      const [s, p] = await Promise.all([api.get("/shifts"), api.get("/staff")]);
+      setShifts(Array.isArray(s) ? s : []);
+      setStaff(Array.isArray(p) ? p : []);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { load(); }, []);
+
+  const staffById = useMemo(() => Object.fromEntries(staff.map(s => [String(s.id), s])), [staff]);
+
+  const days = useMemo(() => {
+    const first = new Date(month.getFullYear(), month.getMonth(), 1);
+    const last = new Date(month.getFullYear(), month.getMonth() + 1, 0);
+    const out = Array(first.getDay()).fill(null);
+    for (let i = 1; i <= last.getDate(); i++) out.push(new Date(month.getFullYear(), month.getMonth(), i));
+    return out;
+  }, [month]);
+
+  const byDate = useMemo(() => {
+    const map = {};
+    shifts.forEach(s => {
+      if (!s?.shift_date) return;
+      if (!map[s.shift_date]) map[s.shift_date] = [];
+      map[s.shift_date].push(s);
+    });
+    return map;
+  }, [shifts]);
+
+  function openNew(date) {
+    setForm({ staffId: "", date: ymd(date), shiftType: "" });
+    setModal({ mode: "new" });
+  }
+
+  function openEdit(shift) {
+    setForm({ staffId: String(shift.staff_id || ""), date: shift.shift_date || "", shiftType: shift.shift_type || "" });
+    setModal({ mode: "edit", shift });
+  }
+
+  async function save() {
+    if (!form.staffId || !form.date || !form.shiftType) return alert("Select staff, date, and shift type.");
+    const payload = {
+      staff_id: Number(form.staffId),
+      shift_date: form.date,
+      shiftType: form.shiftType,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    };
+    try {
+      if (modal?.mode === "edit") await api.put(`/shifts/${modal.shift.id}`, payload);
+      else await api.post("/shifts", payload);
+      setModal(null);
+      await load();
+    } catch (e) {
+      alert(e?.message || "Unable to save shift.");
+    }
+  }
+
+  async function remove() {
+    if (!modal?.shift?.id || !window.confirm("Delete this shift?")) return;
+    await api.delete(`/shifts/${modal.shift.id}`);
+    setModal(null);
+    await load();
+  }
+
+  if (loading) return <div style={{padding:32}}>Loading schedule…</div>;
+
+  return <div style={{padding:24,color:"var(--text)"}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap",marginBottom:18}}>
+      <div>
+        <h1 style={{margin:0}}>Schedule</h1>
+        <div style={{opacity:.65,marginTop:4}}>Schedule who is working. Unit placement happens separately in Assignments.</div>
+      </div>
+      <div style={{display:"flex",gap:8,alignItems:"center"}}>
+        <button onClick={()=>setMonth(new Date(month.getFullYear(),month.getMonth()-1,1))} style={btn}>◀</button>
+        <strong>{month.toLocaleDateString("en-US",{month:"long",year:"numeric"})}</strong>
+        <button onClick={()=>setMonth(new Date(month.getFullYear(),month.getMonth()+1,1))} style={btn}>▶</button>
+      </div>
+    </div>
+
+    <div style={{display:"grid",gridTemplateColumns:"repeat(7,minmax(0,1fr))",gap:6,marginBottom:6,opacity:.65,fontSize:12,textAlign:"center"}}>
+      {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(x=><div key={x}>{x}</div>)}
+    </div>
+
+    <div style={{display:"grid",gridTemplateColumns:"repeat(7,minmax(0,1fr))",gap:6}}>
+      {days.map((date,i)=>{
+        if (!date) return <div key={`b-${i}`} style={blank}/>;
+        const key = ymd(date); const rows = byDate[key] || [];
+        return <div key={key} onClick={()=>openNew(date)} style={cell}>
+          <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}><b>{date.getDate()}</b><span style={{fontSize:10,opacity:.6}}>{rows.length||""}</span></div>
+          <div style={{display:"grid",gap:4}}>
+            {rows.map(s=>{ const person=staffById[String(s.staff_id)]; return <button key={s.id} onClick={e=>{e.stopPropagation();openEdit(s);}} style={shiftBtn}>
+              <span style={{fontWeight:800}}>{person?.name || `Staff #${s.staff_id}`}</span>
+              <span style={{opacity:.65,fontSize:10}}>{person?.role || s.role} · {s.shift_type || "Shift"}</span>
+            </button>})}
+          </div>
+        </div>
+      })}
+    </div>
+
+    {modal && <div style={overlay} onMouseDown={()=>setModal(null)}><div style={modalStyle} onMouseDown={e=>e.stopPropagation()}>
+      <h2 style={{marginTop:0}}>{modal.mode==="edit"?"Edit scheduled shift":"Schedule staff"}</h2>
+      <label style={label}>Staff<select value={form.staffId} onChange={e=>setForm(f=>({...f,staffId:e.target.value}))} style={input}><option value="">Select staff…</option>{staff.map(s=><option key={s.id} value={s.id}>{s.name} ({s.role})</option>)}</select></label>
+      <label style={label}>Date<input type="date" value={form.date} onChange={e=>setForm(f=>({...f,date:e.target.value}))} style={input}/></label>
+      <label style={label}>Shift<select value={form.shiftType} onChange={e=>setForm(f=>({...f,shiftType:e.target.value}))} style={input}><option value="">Select shift…</option><option>Day</option><option>Evening</option><option>Night</option></select></label>
+      <div style={{display:"flex",justifyContent:"space-between",gap:8,marginTop:16}}>
+        <div>{modal.mode==="edit"&&<button onClick={remove} style={{...btn,borderColor:"#7f1d1d",color:"#fca5a5"}}>Delete</button>}</div>
+        <div style={{display:"flex",gap:8}}><button onClick={()=>setModal(null)} style={btn}>Cancel</button><button onClick={save} style={{...btn,background:"#2563eb",color:"white"}}>Save</button></div>
+      </div>
+    </div></div>}
+  </div>;
+}
+
+const btn={padding:"9px 12px",borderRadius:10,border:"1px solid var(--border)",background:"var(--surface)",color:"inherit",fontWeight:800};
+const blank={minHeight:96,borderRadius:10,background:"var(--surface-glass)"};
+const cell={minHeight:112,border:"1px solid var(--border)",borderRadius:10,padding:8,background:"var(--surface)",cursor:"pointer"};
+const shiftBtn={display:"grid",textAlign:"left",gap:2,padding:"6px 7px",borderRadius:7,border:"1px solid var(--border)",background:"var(--surface-glass)",color:"inherit"};
+const overlay={position:"fixed",inset:0,background:"rgba(0,0,0,.65)",display:"grid",placeItems:"center",zIndex:10000,padding:18};
+const modalStyle={width:"min(460px,95vw)",background:"#111",border:"1px solid #333",borderRadius:16,padding:20,color:"white"};
+const label={display:"grid",gap:6,marginBottom:12,fontWeight:800};
+const input={padding:"11px 12px",borderRadius:10,border:"1px solid #444",background:"#090909",color:"white"};
