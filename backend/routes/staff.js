@@ -54,7 +54,10 @@ async function getOrCreateAuthUserByEmail(email,orgCode,staffId){
   const e=String(email||"").trim().toLowerCase(); if(!e)throw new Error("Email required"); const existing=await getAuthUserByEmail(e); if(existing?.id)return existing;
   const {data,error}=await supabaseAdmin.auth.admin.createUser({email:e,password:crypto.randomBytes(24).toString("base64url"),email_confirm:true,user_metadata:{org_code:orgCode,staff_id:staffId,setup_pending:true}}); if(error)throw error; return data?.user||null;
 }
-router.get("/account-status",async(req,res)=>{try{const user=await getAuthUserByEmail(req.query?.email);return res.json({setup_required:user?.user_metadata?.setup_pending===true});}catch(e){return res.json({setup_required:false});}});
+
+// Deliberately no public account-status lookup. Exposing setup state by email
+// allowed unauthenticated account enumeration. First-time setup/reset is handled
+// through the generic email-verification flow instead.
 router.use(requireAuth); router.use(requireOrg);
 
 router.get("/",async(req,res)=>{try{
