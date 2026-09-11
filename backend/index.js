@@ -6,6 +6,7 @@ const { requireAuth } = require("./middleware/auth");
 const { requireOrg } = require("./middleware/orgGuard");
 const { requireCensusAccess } = require("./middleware/censusAccess");
 const { requireOrgAdminForWrites, requireManageAdmins } = require("./middleware/adminAccess");
+const { auditMutations } = require("./middleware/auditMutations");
 
 const app = express();
 
@@ -50,6 +51,7 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
 app.use(express.json());
+app.use(auditMutations);
 
 // Sensitive org administration. These guards are intentionally mounted at
 // the app boundary as a second layer, even though the route modules also
