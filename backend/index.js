@@ -70,6 +70,7 @@ app.use("/api/facility", requireAuth, requireOrg, requireOrgAdminForWrites, requ
 app.use("/api/me", require("./routes/me"));
 app.use("/api/schedules", require("./routes/schedules"));
 app.use("/api/security-audit", require("./routes/securityAudit"));
+app.use("/api/security-self-test", require("./routes/securitySelfTest"));
 
 app.get("/", (_req, res) => res.send("ShiftCensus backend running."));
 app.get("/health", (_req, res) => res.json({ ok: true }));
