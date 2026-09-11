@@ -39,9 +39,8 @@ function findStaffById(staffList, staffId) {
 
 function inferShiftTypeFromStartLocal(startLocal, role) {
   const r = String(role || "").toUpperCase();
-  const t = String(startLocal || "").slice(0, 5); // "HH:MM"
+  const t = String(startLocal || "").slice(0, 5);
 
-  // Common template anchors
   if (t === "06:00") return "Day";
   if (t === "14:00") return "Evening";
   if (t === "18:00") return "Night";
@@ -49,9 +48,7 @@ function inferShiftTypeFromStartLocal(startLocal, role) {
   const hour = Number(t.split(":")[0]);
   if (!Number.isFinite(hour)) return "Unknown";
 
-  // Licensed often Day/Night only
   if (r === "RN" || r === "LPN") return hour >= 6 && hour < 18 ? "Day" : "Night";
-
   if (hour >= 6 && hour < 14) return "Day";
   if (hour >= 14 && hour < 22) return "Evening";
   return "Night";
@@ -145,8 +142,6 @@ export default function DashboardPage() {
     return { total, occupied, leave, empty };
   }, [bedBoard]);
 
-  // In SNF land, LOA typically still counts as a patient day.
-  // If you want PPD to be based on OCCUPIED ONLY, change patientDayCount to censusStats.occupied
   const patientDayCount = useMemo(() => {
     return (censusStats?.occupied || 0) + (censusStats?.leave || 0);
   }, [censusStats]);
@@ -166,13 +161,11 @@ export default function DashboardPage() {
   })();
 
   function buildLicensedBucketsFromUnits() {
-    // Units can be returned in many shapes; try a few common fields.
     const names = (Array.isArray(units) ? units : [])
       .map((u) => u?.name || u?.unit || u?.label || u?.code || "")
       .map((x) => String(x).trim())
       .filter(Boolean);
 
-    // Ensure we always have at least one bucket to show data
     const unique = Array.from(new Set(names));
     const buckets = {};
 
@@ -180,14 +173,12 @@ export default function DashboardPage() {
       buckets[n] = { RN: 0, LPN: 0, hoursRN: 0, hoursLPN: 0 };
     });
 
-    // Always include a catch-all bucket
     buckets["Unassigned"] =
       buckets["Unassigned"] || { RN: 0, LPN: 0, hoursRN: 0, hoursLPN: 0 };
 
     return buckets;
   }
 
-  // ✅ If there is no Evening shift today, only show Day + Night.
   const visibleShiftBlocks = useMemo(() => {
     const base = SHIFT_BLOCKS.filter((b) => b.key !== "Evening");
 
@@ -213,7 +204,6 @@ export default function DashboardPage() {
   const renderShiftCard = ({ key, label }) => {
     if (!Array.isArray(shifts) || !Array.isArray(staff)) return null;
 
-    // ✅ FIX: filter by shift_date (facility day) not by start_time (UTC skew)
     const todayShifts = shifts.filter((shift) => String(shift.shift_date || "") === todayKey);
 
     const blockShifts = todayShifts.filter((shift) => {
@@ -228,19 +218,14 @@ export default function DashboardPage() {
       return shiftType === key;
     });
 
-    // ✅ Total hours in this shift block
     const blockHoursTotal = blockShifts.reduce(
       (sum, sh) => sum + calcHours(sh.start_time, sh.end_time),
       0
     );
 
-    // ✅ PPD: hours per patient day
     const ppd = patientDayCount > 0 ? blockHoursTotal / patientDayCount : null;
-
-    // ✅ dynamic units
     const licensed = buildLicensedBucketsFromUnits();
 
-    // CNA assignment groups (kept)
     const cnaGroups = {
       1: { count: 0, hours: 0 },
       2: { count: 0, hours: 0 },
@@ -331,7 +316,6 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* ✅ PPD footer */}
         <div
           style={{
             marginTop: 14,
@@ -441,7 +425,16 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "24px", marginTop: "24px" }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(min(340px, 100%), 1fr))",
+          gap: "24px",
+          margin: "24px auto 0",
+          width: "100%",
+          maxWidth: visibleShiftBlocks.length === 1 ? "720px" : visibleShiftBlocks.length === 2 ? "1200px" : "1600px",
+        }}
+      >
         {visibleShiftBlocks.map(renderShiftCard)}
       </div>
     </div>
