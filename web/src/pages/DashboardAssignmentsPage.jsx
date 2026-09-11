@@ -46,7 +46,7 @@ function ShiftCard({label,active,rows,staffById,asgByShift,patientDays}){
   const cnas=rows.filter(s=>String(staffById[String(s.staff_id)]?.role||s.role).toUpperCase()==="CNA");
   const hours=rows.reduce((sum,s)=>{if(!s.start_time||!s.end_time)return sum;return sum+Math.max((new Date(s.end_time)-new Date(s.start_time))/3600000,0)},0);
   const ppd=patientDays?hours/patientDays:null;
-  const line=s=>{const p=staffById[String(s.staff_id)]||{};const a=asgByShift[String(s.id)]||{};return `${p.name||`Staff #${s.staff_id}`} — ${a.unit||"Unassigned"}${a.assignment_number?` · Assignment #${a.assignment_number}`:""}`};
+  const line=s=>{const p=staffById[String(s.staff_id)]||{};const a=asgByShift[String(s.id)]||{};const role=String(p.role||s.role||"STAFF").toUpperCase();return `${role} — ${a.unit||"Unassigned"}${a.assignment_number?` · Assignment #${a.assignment_number}`:""}`};
   return <div style={{padding:28,minHeight:260,borderRadius:14,background:"var(--card-bg,rgba(255,255,255,.08))",border:active?"2px solid #3b82f6":"1px solid var(--border)"}}>
     <h2 style={{marginTop:0}}>{label}</h2>
     <h3>Licensed Staff</h3>{licensed.length?licensed.map(s=><div key={s.id} style={{marginBottom:5}}>{line(s)}</div>):<div style={{opacity:.7}}>No licensed staff scheduled.</div>}
