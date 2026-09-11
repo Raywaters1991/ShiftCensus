@@ -17,6 +17,9 @@ export default function SecurityAuditPage() {
   const [orgCode, setOrgCode] = useState("");
   const [filterOutcome, setFilterOutcome] = useState("all");
   const [method, setMethod] = useState("all");
+  const [testRunning, setTestRunning] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const [testError, setTestError] = useState("");
 
   const suspicious = useMemo(() => rows.filter(r => Number(r.status_code || 0) === 401 || Number(r.status_code || 0) === 403).length, [rows]);
   const failed = useMemo(() => rows.filter(r => Number(r.status_code || 0) >= 400).length, [rows]);
@@ -38,17 +41,50 @@ export default function SecurityAuditPage() {
     }
   }
 
+  async function runSecurityTest() {
+    setTestRunning(true);
+    setTestError("");
+    setTestResult(null);
+    try {
+      const data = await api.post("/security-self-test/run", {});
+      setTestResult(data || null);
+      await load();
+    } catch (e) {
+      setTestError(e?.message || "Security self-test failed to run.");
+    } finally {
+      setTestRunning(false);
+    }
+  }
+
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
   return <div style={{padding:24,maxWidth:1300,margin:"0 auto",color:"var(--text)"}}>
     <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",flexWrap:"wrap"}}>
       <div><h1 style={{marginBottom:4}}>Security Audit Log</h1><div style={{opacity:.7}}>Developer / Super Admin only</div></div>
-      <button onClick={load} disabled={loading} style={btn}>{loading?"Refreshing…":"Refresh"}</button>
+      <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+        <button onClick={runSecurityTest} disabled={testRunning} style={{...btn,borderColor:testRunning?"var(--border)":"#2563eb"}}>{testRunning?"Running attack simulation…":"Run Security Test"}</button>
+        <button onClick={load} disabled={loading} style={btn}>{loading?"Refreshing…":"Refresh"}</button>
+      </div>
     </div>
 
     <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10,margin:"20px 0"}}>
       <Stat label="Loaded events" value={rows.length}/><Stat label="Failed / denied" value={failed}/><Stat label="401 / 403" value={suspicious}/>
     </div>
+
+    {testError && <div style={{padding:14,border:"1px solid #a33",borderRadius:12,marginBottom:16}}>{testError}</div>}
+    {testResult && <div style={{padding:16,border:`1px solid ${testResult.ok?"#22c55e":"#ef4444"}`,borderRadius:14,marginBottom:18,background:"var(--surface)"}}>
+      <div style={{display:"flex",justifyContent:"space-between",gap:10,flexWrap:"wrap",alignItems:"center"}}>
+        <div><b style={{fontSize:18}}>{testResult.ok?"Security test passed":"Security test found a problem"}</b><div style={{opacity:.7,fontSize:13,marginTop:4}}>{testResult?.source_org?.name||"Test org"} → attempted access against {testResult?.target_org?.name||"second org"}</div></div>
+        <div style={{fontWeight:950,fontSize:20}}>{testResult?.summary?.passed||0}/{testResult?.summary?.total||0} passed</div>
+      </div>
+      <div style={{display:"grid",gap:8,marginTop:14}}>
+        {(testResult.tests||[]).map((t,i)=><div key={`${t.name}-${i}`} style={{display:"grid",gridTemplateColumns:"28px minmax(0,1fr) auto",gap:10,alignItems:"start",padding:"10px 0",borderTop:i?"1px solid var(--border)":"none"}}>
+          <div style={{fontWeight:950,color:t.passed?"#22c55e":"#ef4444"}}>{t.passed?"✓":"✕"}</div>
+          <div><div style={{fontWeight:900}}>{t.name}</div><div style={{opacity:.65,fontSize:12,marginTop:3}}>{t.detail}</div></div>
+          <div style={{fontFamily:"monospace",fontSize:12}}>expected {t.expected_status} · got {t.actual_status}</div>
+        </div>)}
+      </div>
+    </div>}
 
     <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:18}}>
       <input value={orgCode} onChange={e=>setOrgCode(e.target.value)} placeholder="Filter org code" style={input}/>
@@ -78,7 +114,7 @@ export default function SecurityAuditPage() {
       </table>
     </div>
 
-    <p style={{fontSize:12,opacity:.6,lineHeight:1.5,marginTop:14}}>This view intentionally excludes request bodies, passwords, authentication tokens, resident names, and free-text PHI. Repeated 401/403 events can indicate bad credentials, blocked permissions, or attempted unauthorized access.</p>
+    <p style={{fontSize:12,opacity:.6,lineHeight:1.5,marginTop:14}}>The security test creates a temporary least-privilege account, attempts cross-facility and privilege-escalation requests against the live backend, records the denials here, then removes the temporary account. This view intentionally excludes request bodies, passwords, authentication tokens, resident names, and free-text PHI.</p>
   </div>;
 }
 
