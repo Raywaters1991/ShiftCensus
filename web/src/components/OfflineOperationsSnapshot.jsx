@@ -9,16 +9,47 @@ function todayYmd() {
   return `${y}-${m}-${day}`;
 }
 
+async function canReachLiveSite() {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    const res = await fetch(`/?connectivity_check=${Date.now()}`, {
+      method: "HEAD",
+      cache: "no-store",
+      signal: controller.signal,
+      headers: { "Cache-Control": "no-cache" },
+    });
+    clearTimeout(timer);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export default function OfflineOperationsSnapshot({ onRetry, retrying }) {
   const snapshot = getOfflineOperationsSnapshot();
   const [online, setOnline] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
 
   useEffect(() => {
-    const up = () => setOnline(true);
+    let cancelled = false;
+
+    const check = async () => {
+      const reachable = await canReachLiveSite();
+      if (!cancelled) setOnline(reachable);
+    };
+
+    const up = () => check();
     const down = () => setOnline(false);
+
     window.addEventListener("online", up);
     window.addEventListener("offline", down);
+
+    check();
+    const interval = setInterval(check, 3000);
+
     return () => {
+      cancelled = true;
+      clearInterval(interval);
       window.removeEventListener("online", up);
       window.removeEventListener("offline", down);
     };
