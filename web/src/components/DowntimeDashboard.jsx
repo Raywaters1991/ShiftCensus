@@ -72,7 +72,7 @@ export default function DowntimeDashboard({ error, onRetry, retrying, onCensus, 
       </div>
 
       {stale && <div style={{padding:14,borderRadius:12,border:"1px solid #a66",marginBottom:16,fontWeight:800}}>Warning: one or more saved snapshots are over 24 hours old. Verify information using your facility downtime procedure.</div>}
-      {error?.message && <div style={{fontSize:13,opacity:.62,marginBottom:18}}>Connection detail: {error.message}</div>}
+      {!online && error?.message && <div style={{fontSize:13,opacity:.62,marginBottom:18}}>Connection detail: {error.message}</div>}
 
       {census && <section style={{border:"1px solid var(--border)",borderRadius:16,padding:18,marginBottom:16,background:"var(--surface)"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap"}}><h2 style={{margin:0}}>Census</h2><button onClick={onCensus} style={btn}>View Census</button></div>
