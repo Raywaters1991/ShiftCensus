@@ -59,8 +59,10 @@ app.use(securityHeaders);
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
 app.use(express.json({ limit: "256kb" }));
-app.use("/api", apiLimiter);
+// Audit hooks are attached before rate limiting so blocked mutation attempts (429s)
+// are recorded too. Request bodies are never written to the audit log.
 app.use(auditMutations);
+app.use("/api", apiLimiter);
 
 app.use("/api/adminmanagement", requireAuth, requireOrg, requireManageAdmins, require("./routes/adminManagement"));
 app.use("/api/units", require("./routes/units"));
