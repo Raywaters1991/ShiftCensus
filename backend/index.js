@@ -53,9 +53,6 @@ app.options(/.*/, cors(corsOptions));
 app.use(express.json());
 app.use(auditMutations);
 
-// Sensitive org administration. These guards are intentionally mounted at
-// the app boundary as a second layer, even though the route modules also
-// authenticate/resolve org context internally.
 app.use("/api/adminmanagement", requireAuth, requireOrg, requireManageAdmins, require("./routes/adminManagement"));
 app.use("/api/units", require("./routes/units"));
 app.use("/api/admin", require("./routes/admin"));
@@ -72,6 +69,7 @@ app.use("/api/org-settings", requireAuth, requireOrg, requireOrgAdminForWrites, 
 app.use("/api/facility", requireAuth, requireOrg, requireOrgAdminForWrites, require("./routes/facility"));
 app.use("/api/me", require("./routes/me"));
 app.use("/api/schedules", require("./routes/schedules"));
+app.use("/api/security-audit", require("./routes/securityAudit"));
 
 app.get("/", (_req, res) => res.send("ShiftCensus backend running."));
 app.get("/health", (_req, res) => res.json({ ok: true }));
