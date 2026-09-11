@@ -6,6 +6,13 @@ function fmt(iso) {
   return Number.isNaN(d.getTime()) ? "Unknown" : d.toLocaleString();
 }
 
+function localYmd(date = new Date()) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 export default function DowntimeDashboard({ error, onRetry, retrying, onCensus, onOperations }) {
   const census = getOfflineSnapshot();
   const ops = getOfflineOperationsSnapshot();
@@ -16,7 +23,10 @@ export default function DowntimeDashboard({ error, onRetry, retrying, onCensus, 
     const down = () => setOnline(false);
     window.addEventListener("online", up);
     window.addEventListener("offline", down);
-    return () => { window.removeEventListener("online", up); window.removeEventListener("offline", down); };
+    return () => {
+      window.removeEventListener("online", up);
+      window.removeEventListener("offline", down);
+    };
   }, []);
 
   const stats = useMemo(() => {
@@ -27,21 +37,40 @@ export default function DowntimeDashboard({ error, onRetry, retrying, onCensus, 
     return { occupied, leave, empty, total: rows.length };
   }, [census]);
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localYmd();
   const scheduled = (ops?.shifts || []).filter(s => s.shift_date === today).length;
   const syncTimes = [census?.syncedAt, ops?.syncedAt].filter(Boolean).sort();
   const lastSynced = syncTimes.length ? syncTimes[syncTimes.length - 1] : null;
   const stale = (census && isOfflineSnapshotStale(census)) || (ops && isOfflineSnapshotStale(ops));
 
+  const statusColor = online ? "#19b83f" : "#e52323";
+  const statusDark = online ? "#0b6f26" : "#9f1111";
+
   return <div style={{minHeight:"100vh",background:"var(--bg)",color:"var(--text)"}}>
-    <div style={{background:online?"#755100":"#8b3d00",color:"white",padding:"18px 20px",textAlign:"center",fontWeight:950,fontSize:18}}>
-      SHIFT CENSUS DOWNTIME MODE — READ ONLY
-      <div style={{fontSize:14,marginTop:4,opacity:.95}}>Last synchronized: {fmt(lastSynced)}</div>
+    <div style={{width:"min(720px,100%)",margin:"0 auto",padding:"18px 24px 12px",display:"flex",alignItems:"center",gap:12}}>
+      <div style={{fontSize:24,fontWeight:950}}>ShiftCensus</div>
+      <div style={{flex:1}}/>
+      <div aria-label={online?"Connection restored":"Downtime active"} title={online?"Connection restored":"Downtime active"} style={{width:52,height:52,borderRadius:"50%",display:"grid",placeItems:"center",background:statusColor,border:`4px solid ${statusDark}`,boxShadow:`0 0 0 3px ${online?"rgba(25,184,63,.18)":"rgba(229,35,35,.18)"}`,fontSize:28,lineHeight:1}}>
+        🔨
+      </div>
     </div>
+
+    <div style={{background:statusColor,color:"white",padding:"16px 20px",textAlign:"center",fontWeight:950,fontSize:18}}>
+      {online ? "CONNECTION RESTORED" : "DOWNTIME MODE — READ ONLY"}
+      <div style={{fontSize:14,marginTop:4,opacity:.98}}>{online ? "You can return to the live system." : `Last synchronized: ${fmt(lastSynced)}`}</div>
+    </div>
+
     <main style={{width:"min(720px,100%)",margin:"0 auto",padding:24}}>
-      <h1 style={{fontSize:34,margin:"12px 0 6px"}}>Downtime Mode</h1>
-      <div style={{opacity:.72,marginBottom:22}}>{census?.orgName || ops?.orgName || "ShiftCensus facility"}</div>
-      {online && <div style={{padding:14,borderRadius:12,border:"1px solid var(--border)",marginBottom:16,fontWeight:800}}>Internet connection detected. Select “Return to live ShiftCensus” to reconnect.</div>}
+      <div style={{fontSize:24,fontWeight:950,margin:"2px 0 18px"}}>{census?.orgName || ops?.orgName || "ShiftCensus facility"}</div>
+
+      <div style={{padding:16,borderRadius:14,border:`1px solid ${online?"rgba(25,184,63,.55)":"rgba(229,35,35,.55)"}`,marginBottom:18,display:"flex",gap:12,alignItems:"flex-start",background:"var(--surface)"}}>
+        <div style={{width:32,height:32,borderRadius:"50%",display:"grid",placeItems:"center",background:statusColor,color:"white",fontWeight:950,flex:"0 0 auto"}}>{online?"✓":"!"}</div>
+        <div>
+          <div style={{fontWeight:950,fontSize:18}}>{online?"Internet connection detected":"You’re offline"}</div>
+          <div style={{opacity:.78,lineHeight:1.45,marginTop:4}}>{online?"ShiftCensus is back online and ready to use.":"This device does not currently have an internet connection. Saved information remains available in read-only mode."}</div>
+        </div>
+      </div>
+
       {stale && <div style={{padding:14,borderRadius:12,border:"1px solid #a66",marginBottom:16,fontWeight:800}}>Warning: one or more saved snapshots are over 24 hours old. Verify information using your facility downtime procedure.</div>}
       {error?.message && <div style={{fontSize:13,opacity:.62,marginBottom:18}}>Connection detail: {error.message}</div>}
 
@@ -54,7 +83,10 @@ export default function DowntimeDashboard({ error, onRetry, retrying, onCensus, 
       </section>}
 
       {ops && <section style={{border:"1px solid var(--border)",borderRadius:16,padding:18,marginBottom:16,background:"var(--surface)"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap"}}><div><h2 style={{margin:0}}>Staffing & Assignments</h2><div style={{opacity:.7,marginTop:5}}>{scheduled} staff shift{scheduled===1?"":"s"} scheduled today</div></div><button onClick={onOperations} style={btn}>View Staffing</button></div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+          <div><h2 style={{margin:0}}>Staffing & Assignments</h2><div style={{opacity:.7,marginTop:5}}>{scheduled} staff shift{scheduled===1?"":"s"} scheduled today</div></div>
+          <button onClick={onOperations} style={btn}>View Staffing</button>
+        </div>
         <div style={{fontSize:12,opacity:.65,marginTop:12}}>Staffing synced {fmt(ops.syncedAt)}</div>
       </section>}
 
