@@ -59,8 +59,6 @@ app.use(securityHeaders);
 app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
 app.use(express.json({ limit: "256kb" }));
-// Audit hooks are attached before rate limiting so blocked mutation attempts (429s)
-// are recorded too. Request bodies are never written to the audit log.
 app.use(auditMutations);
 app.use("/api", apiLimiter);
 
@@ -69,6 +67,7 @@ app.use("/api/units", require("./routes/units"));
 app.use("/api/admin", require("./routes/admin"));
 app.use("/api/census", requireAuth, requireOrg, requireCensusAccess, require("./routes/census"));
 app.use("/api/shifts", require("./routes/shifts"));
+app.use("/api/shift-assignments", require("./routes/shiftAssignments"));
 app.use("/api/staff", require("./routes/staff"));
 app.use("/api/organizations", require("./routes/organizations"));
 app.use("/api/assignments", require("./routes/assignments"));
@@ -86,7 +85,6 @@ app.use("/api/security-self-test", require("./routes/securitySelfTest"));
 app.get("/", (_req, res) => res.send("ShiftCensus backend running."));
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-// Keep error responses generic so internal stack/details are never sent to clients.
 app.use((err, _req, res, _next) => {
   console.error("UNHANDLED EXPRESS ERROR:", err?.message || err);
   if (res.headersSent) return;
