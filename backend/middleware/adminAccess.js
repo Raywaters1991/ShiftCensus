@@ -42,6 +42,12 @@ async function requireOrgAdmin(req, res, next) {
   }
 }
 
+function requireOrgAdminForWrites(req, res, next) {
+  const method = String(req.method || "GET").toUpperCase();
+  if (["GET", "HEAD", "OPTIONS"].includes(method)) return next();
+  return requireOrgAdmin(req, res, next);
+}
+
 async function requireManageAdmins(req, res, next) {
   try {
     if (String(req.role || "").toLowerCase() === "superadmin") return next();
@@ -56,4 +62,4 @@ async function requireManageAdmins(req, res, next) {
   }
 }
 
-module.exports = { requireOrgAdmin, requireManageAdmins };
+module.exports = { requireOrgAdmin, requireOrgAdminForWrites, requireManageAdmins };
