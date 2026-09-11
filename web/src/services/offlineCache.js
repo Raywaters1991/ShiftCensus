@@ -1,144 +1,31 @@
-const SNAPSHOT_KEY = "shiftcensus:last-good-snapshot:v1";
-const OPERATIONS_KEY = "shiftcensus:last-good-operations:v1";
+const CACHE_PREFIX = "shiftcensus:offline:v2";
+const LEGACY_SNAPSHOT_KEY = "shiftcensus:last-good-snapshot:v1";
+const LEGACY_OPERATIONS_KEY = "shiftcensus:last-good-operations:v1";
 const SNAPSHOT_TTL_MS = 24 * 60 * 60 * 1000;
 
-function safeParse(value) {
-  try { return JSON.parse(value); } catch { return null; }
-}
+function safeParse(value) { try { return JSON.parse(value); } catch { return null; } }
+function normalizeOrgKey(value) { return String(value || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "_"); }
+function orgKey({ orgId, orgCode } = {}) { return normalizeOrgKey(orgId) || normalizeOrgKey(orgCode) || null; }
+function key(kind, org = {}) { const k = orgKey(org); return k ? `${CACHE_PREFIX}:${k}:${kind}` : null; }
 
-// Keep offline resident data deliberately minimal. Do not persist
-// patient_label, notes, auth tokens, or other direct resident identifiers.
-function sanitizeCensusRows(rows) {
-  return (Array.isArray(rows) ? rows : []).map((r) => ({
-    id: r.id,
-    room: r.room ?? null,
-    room_number: r.room_number ?? null,
-    bed: r.bed ?? null,
-    status: r.status ?? "empty",
-    payer_source: r.payer_source ?? null,
-    care_type: r.care_type ?? null,
-    admit_date: r.admit_date ?? null,
-    expected_discharge: r.expected_discharge ?? null,
-    patient_gender: r.patient_gender ?? "Unknown",
-  }));
-}
+function sanitizeCensusRows(rows) { return (Array.isArray(rows)?rows:[]).map(r=>({id:r.id,room:r.room??null,room_number:r.room_number??null,bed:r.bed??null,status:r.status??"empty",payer_source:r.payer_source??null,care_type:r.care_type??null,admit_date:r.admit_date??null,expected_discharge:r.expected_discharge??null,patient_gender:r.patient_gender??"Unknown"})); }
+function sanitizeStaff(rows) { return (Array.isArray(rows)?rows:[]).map(s=>({id:s.id,name:s.name??null,role:s.role??null})); }
+function sanitizeShifts(rows) { return (Array.isArray(rows)?rows:[]).map(s=>({id:s.id,staff_id:s.staff_id,shift_date:s.shift_date??null,unit:s.unit??null,role:s.role??null,shiftType:s.shiftType??null,start_local:s.start_local??null,end_local:s.end_local??null,assignment_number:s.assignment_number??null})); }
+function sanitizeAssignments(rows) { return (Array.isArray(rows)?rows:[]).map(a=>({id:a.id,unit:a.unit??null,assignment_number:a.assignment_number??a.number??null,name:a.name??a.label??null})); }
+function sanitizeUnits(rows) { return (Array.isArray(rows)?rows:[]).map(u=>({id:u.id,name:u.name??u.unit??null})); }
 
-function sanitizeStaff(rows) {
-  return (Array.isArray(rows) ? rows : []).map((s) => ({
-    id: s.id,
-    name: s.name ?? null,
-    role: s.role ?? null,
-  }));
+function save(kind, org, payload) {
+  try { const storageKey=key(kind,org); if(!storageKey)return false; localStorage.setItem(storageKey,JSON.stringify({version:2,orgId:org.orgId||null,orgCode:org.orgCode||null,orgName:org.orgName||null,syncedAt:new Date().toISOString(),...payload})); return true; }
+  catch(e){console.warn(`Could not save offline ${kind} snapshot`,e);return false;}
 }
+export function saveOfflineSnapshot({orgId,orgCode,orgName,censusRows}) { if(!Array.isArray(censusRows)||!censusRows.length)return false; return save("census",{orgId,orgCode,orgName},{censusRows:sanitizeCensusRows(censusRows)}); }
+export function saveOfflineOperationsSnapshot({orgId,orgCode,orgName,shifts,staff,units,assignments}) { if(![shifts,staff,units,assignments].every(Array.isArray))return false; return save("operations",{orgId,orgCode,orgName},{shifts:sanitizeShifts(shifts),staff:sanitizeStaff(staff),units:sanitizeUnits(units),assignments:sanitizeAssignments(assignments)}); }
 
-function sanitizeShifts(rows) {
-  return (Array.isArray(rows) ? rows : []).map((s) => ({
-    id: s.id,
-    staff_id: s.staff_id,
-    shift_date: s.shift_date ?? null,
-    unit: s.unit ?? null,
-    role: s.role ?? null,
-    shiftType: s.shiftType ?? null,
-    start_local: s.start_local ?? null,
-    end_local: s.end_local ?? null,
-    assignment_number: s.assignment_number ?? null,
-  }));
-}
+function read(kind, org) { try { const storageKey=key(kind,org); if(!storageKey)return null; const s=safeParse(localStorage.getItem(storageKey)); if(!s||s.version!==2)return null; const expected=orgKey(org), actual=orgKey(s); if(!expected||expected!==actual)return null; return s; } catch{return null;} }
+export function getOfflineSnapshot(org={}) { const s=read("census",org); return s&&Array.isArray(s.censusRows)?s:null; }
+export function getOfflineOperationsSnapshot(org={}) { const s=read("operations",org); return s&&[s.shifts,s.staff,s.units,s.assignments].every(Array.isArray)?s:null; }
+export function getOfflineSnapshotAge(snapshot){const t=Date.parse(snapshot?.syncedAt||"");return Number.isFinite(t)?Math.max(0,Date.now()-t):null;}
+export function isOfflineSnapshotStale(snapshot){const age=getOfflineSnapshotAge(snapshot);return age===null||age>SNAPSHOT_TTL_MS;}
 
-function sanitizeAssignments(rows) {
-  return (Array.isArray(rows) ? rows : []).map((a) => ({
-    id: a.id,
-    unit: a.unit ?? null,
-    assignment_number: a.assignment_number ?? a.number ?? null,
-    name: a.name ?? a.label ?? null,
-  }));
-}
-
-function sanitizeUnits(rows) {
-  return (Array.isArray(rows) ? rows : []).map((u) => ({
-    id: u.id,
-    name: u.name ?? u.unit ?? null,
-  }));
-}
-
-export function saveOfflineSnapshot({ orgId, orgCode, orgName, censusRows }) {
-  try {
-    if (!Array.isArray(censusRows) || censusRows.length === 0) return false;
-    const snapshot = {
-      version: 1,
-      orgId: orgId || null,
-      orgCode: orgCode || null,
-      orgName: orgName || null,
-      syncedAt: new Date().toISOString(),
-      censusRows: sanitizeCensusRows(censusRows),
-    };
-    localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshot));
-    return true;
-  } catch (e) {
-    console.warn("Could not save offline snapshot", e);
-    return false;
-  }
-}
-
-// Save only after ALL staffing endpoints have completed successfully. This
-// prevents a partial/failed refresh from replacing the last known good data.
-export function saveOfflineOperationsSnapshot({ orgId, orgCode, orgName, shifts, staff, units, assignments }) {
-  try {
-    if (![shifts, staff, units, assignments].every(Array.isArray)) return false;
-    const snapshot = {
-      version: 1,
-      orgId: orgId || null,
-      orgCode: orgCode || null,
-      orgName: orgName || null,
-      syncedAt: new Date().toISOString(),
-      shifts: sanitizeShifts(shifts),
-      staff: sanitizeStaff(staff),
-      units: sanitizeUnits(units),
-      assignments: sanitizeAssignments(assignments),
-    };
-    localStorage.setItem(OPERATIONS_KEY, JSON.stringify(snapshot));
-    return true;
-  } catch (e) {
-    console.warn("Could not save offline operations snapshot", e);
-    return false;
-  }
-}
-
-export function getOfflineSnapshot() {
-  try {
-    const snapshot = safeParse(localStorage.getItem(SNAPSHOT_KEY));
-    if (!snapshot || snapshot.version !== 1 || !Array.isArray(snapshot.censusRows)) return null;
-    return snapshot;
-  } catch {
-    return null;
-  }
-}
-
-export function getOfflineOperationsSnapshot() {
-  try {
-    const snapshot = safeParse(localStorage.getItem(OPERATIONS_KEY));
-    if (!snapshot || snapshot.version !== 1) return null;
-    if (![snapshot.shifts, snapshot.staff, snapshot.units, snapshot.assignments].every(Array.isArray)) return null;
-    return snapshot;
-  } catch {
-    return null;
-  }
-}
-
-export function getOfflineSnapshotAge(snapshot) {
-  const t = Date.parse(snapshot?.syncedAt || "");
-  if (!Number.isFinite(t)) return null;
-  return Math.max(0, Date.now() - t);
-}
-
-export function isOfflineSnapshotStale(snapshot) {
-  const age = getOfflineSnapshotAge(snapshot);
-  return age === null || age > SNAPSHOT_TTL_MS;
-}
-
-export function clearOfflineSnapshot() {
-  try {
-    localStorage.removeItem(SNAPSHOT_KEY);
-    localStorage.removeItem(OPERATIONS_KEY);
-  } catch {}
-}
+export function clearOfflineSnapshot(org={}) { try { const c=key("census",org),o=key("operations",org); if(c)localStorage.removeItem(c); if(o)localStorage.removeItem(o); } catch{} }
+export function clearAllOfflineSnapshots() { try { for(let i=localStorage.length-1;i>=0;i--){const k=localStorage.key(i);if(k&&(k.startsWith(`${CACHE_PREFIX}:`)||k===LEGACY_SNAPSHOT_KEY||k===LEGACY_OPERATIONS_KEY))localStorage.removeItem(k);} } catch{} }
