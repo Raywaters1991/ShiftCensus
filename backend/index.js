@@ -5,12 +5,10 @@ const cors = require("cors");
 const { requireAuth } = require("./middleware/auth");
 const { requireOrg } = require("./middleware/orgGuard");
 const { requireCensusAccess } = require("./middleware/censusAccess");
+const { requireOrgAdminForWrites, requireManageAdmins } = require("./middleware/adminAccess");
 
 const app = express();
 
-// ----------------------------------------------------
-// DEBUG: verify your keys at boot (safe, no key printed)
-// ----------------------------------------------------
 function jwtRole(jwt) {
   try {
     const payload = JSON.parse(Buffer.from(jwt.split(".")[1], "base64").toString("utf8"));
@@ -23,35 +21,25 @@ function jwtRole(jwt) {
 console.log("SUPABASE_URL set?", !!process.env.SUPABASE_URL);
 console.log("SUPABASE_ANON_KEY set?", !!process.env.SUPABASE_ANON_KEY);
 console.log("SUPABASE_SERVICE_ROLE_KEY set?", !!process.env.SUPABASE_SERVICE_ROLE_KEY);
+if (process.env.SUPABASE_SERVICE_ROLE_KEY) console.log("SERVICE_ROLE_KEY role:", jwtRole(process.env.SUPABASE_SERVICE_ROLE_KEY));
 
-if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
-  console.log("SERVICE_ROLE_KEY role:", jwtRole(process.env.SUPABASE_SERVICE_ROLE_KEY));
-}
-
-// -----------------------------
-// CORS
-// -----------------------------
-const allowedOrigins = new Set(
-  [
-    process.env.APP_PUBLIC_URL,
-    "http://localhost:5173",
-    "https://shiftcensus.com",
-    "https://www.shiftcensus.com",
-    "https://app.shiftcensus.com",
-  ].filter(Boolean)
-);
+const allowedOrigins = new Set([
+  process.env.APP_PUBLIC_URL,
+  "http://localhost:5173",
+  "https://shiftcensus.com",
+  "https://www.shiftcensus.com",
+  "https://app.shiftcensus.com",
+].filter(Boolean));
 
 const corsOptions = {
   origin: (origin, cb) => {
     if (!origin) return cb(null, true);
     if (allowedOrigins.has(origin)) return cb(null, true);
-
     try {
       if (/\.vercel\.app$/.test(new URL(origin).hostname)) return cb(null, true);
     } catch {
       return cb(new Error(`CORS blocked for malformed origin: ${origin}`), false);
     }
-
     return cb(new Error(`CORS blocked for origin: ${origin}`), false);
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -63,10 +51,10 @@ app.use(cors(corsOptions));
 app.options(/.*/, cors(corsOptions));
 app.use(express.json());
 
-// -----------------------------
-// ROUTES
-// -----------------------------
-app.use("/api/adminmanagement", require("./routes/adminManagement"));
+// Sensitive org administration. These guards are intentionally mounted at
+// the app boundary as a second layer, even though the route modules also
+// authenticate/resolve org context internally.
+app.use("/api/adminmanagement", requireAuth, requireOrg, requireManageAdmins, require("./routes/adminManagement"));
 app.use("/api/units", require("./routes/units"));
 app.use("/api/admin", require("./routes/admin"));
 app.use("/api/census", requireAuth, requireOrg, requireCensusAccess, require("./routes/census"));
@@ -78,8 +66,8 @@ app.use("/api/templates", require("./routes/templates"));
 app.use("/api/shift-settings", require("./routes/shiftSettings"));
 app.use("/api/invites", require("./routes/invites"));
 app.use("/api/departments", require("./routes/departments"));
-app.use("/api/org-settings", require("./routes/orgSettings"));
-app.use("/api/facility", require("./routes/facility"));
+app.use("/api/org-settings", requireAuth, requireOrg, requireOrgAdminForWrites, require("./routes/orgSettings"));
+app.use("/api/facility", requireAuth, requireOrg, requireOrgAdminForWrites, require("./routes/facility"));
 app.use("/api/me", require("./routes/me"));
 app.use("/api/schedules", require("./routes/schedules"));
 
