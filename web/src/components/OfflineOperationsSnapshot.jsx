@@ -17,7 +17,7 @@ export default function OfflineOperationsSnapshot({ onRetry, retrying }) {
   const stale = isOfflineSnapshotStale(snapshot);
 
   return <div style={{minHeight:"100vh",background:"var(--bg)",color:"var(--text)",paddingBottom:40}}>
-    <div style={{padding:"18px 20px",textAlign:"center",fontWeight:950,background:stale?"#7a2e00":"#7a3a00",color:"white"}}>
+    <div style={{padding:"18px 20px",textAlign:"center",fontWeight:950,background:"#e52323",color:"white"}}>
       OFFLINE MODE — READ ONLY • Staffing last synced {new Date(snapshot.syncedAt).toLocaleString()}{stale?" • SNAPSHOT OVER 24 HOURS OLD":""}
     </div>
     <main style={{maxWidth:900,margin:"0 auto",padding:24}}>
