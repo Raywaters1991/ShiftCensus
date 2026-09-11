@@ -162,10 +162,12 @@ export function UserProvider({ children }) {
         message.includes("invalid jwt") ||
         message.includes("invalid refresh token") ||
         message.includes("refresh token not found") ||
-        message.includes("session not found");
+        message.includes("session not found") ||
+        message.includes("auth session missing");
 
       if (invalidSession) {
         setUser(null);
+        setConnectionError(null);
       } else {
         setConnectionError({
           message: e?.message || "ShiftCensus is temporarily unable to connect.",
