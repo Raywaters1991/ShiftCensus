@@ -2,13 +2,19 @@ import { useEffect, useMemo, useState } from "react";
 import api from "../services/api";
 import { useUser } from "../contexts/UserContext.jsx";
 
+const ASSIGNMENT_VIEW_SECONDS = 30;
+
 function todayYmd(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
 function norm(s){const v=String(s||"empty").toLowerCase();return ["occupied","leave","empty"].includes(v)?v:"empty";}
+function shiftHours(s){if(!s?.start_time||!s?.end_time)return 0;return Math.max((new Date(s.end_time)-new Date(s.start_time))/3600000,0);}
+function fmtHours(v){const n=Number(v||0);return Number.isInteger(n)?`${n} hours`:`${n.toFixed(1)} hours`;}
 
 export default function DashboardAssignmentsPage(){
   const {orgLogo}=useUser();
   const [clock,setClock]=useState(new Date());
   const [shifts,setShifts]=useState([]);const [staff,setStaff]=useState([]);const [bedBoard,setBedBoard]=useState([]);const [assignments,setAssignments]=useState([]);const [loading,setLoading]=useState(true);
+  const [showAssignments,setShowAssignments]=useState(false);
+  const [secondsLeft,setSecondsLeft]=useState(ASSIGNMENT_VIEW_SECONDS);
   const date=todayYmd();
 
   async function load(){
@@ -18,6 +24,15 @@ export default function DashboardAssignmentsPage(){
     }finally{setLoading(false)}
   }
   useEffect(()=>{load();const a=setInterval(load,5000);const b=setInterval(()=>setClock(new Date()),1000);return()=>{clearInterval(a);clearInterval(b)};},[]);
+  useEffect(()=>{
+    if(!showAssignments)return;
+    setSecondsLeft(ASSIGNMENT_VIEW_SECONDS);
+    const timer=setInterval(()=>setSecondsLeft(v=>{
+      if(v<=1){clearInterval(timer);setShowAssignments(false);return ASSIGNMENT_VIEW_SECONDS;}
+      return v-1;
+    }),1000);
+    return()=>clearInterval(timer);
+  },[showAssignments]);
 
   const staffById=useMemo(()=>Object.fromEntries(staff.map(x=>[String(x.id),x])),[staff]);
   const asgByShift=useMemo(()=>Object.fromEntries(assignments.map(x=>[String(x.shift_id),x])),[assignments]);
@@ -26,11 +41,17 @@ export default function DashboardAssignmentsPage(){
   const groups=useMemo(()=>{const g={Day:[],Evening:[],Night:[]};shifts.forEach(s=>{const key=s.shift_type||"Day";(g[key]||(g[key]=[])).push(s)});return g},[shifts]);
   const visible=["Day","Evening","Night"].filter(k=>groups[k]?.length||k!=="Evening");
   const current=(()=>{const h=clock.getHours();return h>=6&&h<14?"Day":h>=14&&h<22?"Evening":"Night"})();
+  const assignmentShift=groups[current]?.length?current:(groups.Day?.length?"Day":groups.Night?.length?"Night":"Evening");
 
   if(loading)return <div style={{padding:40}}>Loading Dashboard…</div>;
-  return <div style={{padding:32,color:"var(--text)"}}>
+  return <div style={{padding:32,color:"var(--text)",position:"relative"}}>
     <div style={{textAlign:"center",marginBottom:18}}>{orgLogo&&<img src={orgLogo} alt="Facility Logo" style={{height:160,maxWidth:"100%",objectFit:"contain"}}/>}</div>
     <div style={{textAlign:"center",fontWeight:800,marginBottom:10}}>Current Time: {clock.toLocaleString()}</div>
+
+    <div style={{display:"flex",justifyContent:"center",marginBottom:16}}>
+      <button onClick={()=>setShowAssignments(true)} style={{padding:"12px 22px",borderRadius:999,border:"1px solid var(--border)",background:"#2563eb",color:"white",fontWeight:950,fontSize:15,cursor:"pointer",boxShadow:"0 8px 22px rgba(37,99,235,.22)"}}>View {assignmentShift} Shift Assignments</button>
+    </div>
+
     <div style={{textAlign:"center",fontSize:12,opacity:.7}}>Census</div>
     <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(120px,1fr))",gap:12,maxWidth:900,margin:"10px auto 24px"}}>
       <Stat label="Occupied" value={census.occupied}/><Stat label="Leave" value={census.leave}/><Stat label="Empty" value={census.empty}/><Stat label="Total" value={census.total}/>
@@ -38,15 +59,24 @@ export default function DashboardAssignmentsPage(){
     <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.min(visible.length,3)},minmax(0,1fr))`,gap:24,maxWidth:visible.length===2?1100:1500,margin:"0 auto"}}>
       {visible.map(key=><ShiftCard key={key} label={`${key} Shift`} active={current===key} rows={groups[key]||[]} staffById={staffById} asgByShift={asgByShift} patientDays={patientDays}/>) }
     </div>
+
+    {showAssignments&&<AssignmentOverlay
+      shiftLabel={assignmentShift}
+      rows={groups[assignmentShift]||[]}
+      staffById={staffById}
+      asgByShift={asgByShift}
+      secondsLeft={secondsLeft}
+      onClose={()=>setShowAssignments(false)}
+    />}
   </div>
 }
 
 function ShiftCard({label,active,rows,staffById,asgByShift,patientDays}){
   const licensed=rows.filter(s=>["RN","LPN"].includes(String(staffById[String(s.staff_id)]?.role||s.role).toUpperCase()));
   const cnas=rows.filter(s=>String(staffById[String(s.staff_id)]?.role||s.role).toUpperCase()==="CNA");
-  const hours=rows.reduce((sum,s)=>{if(!s.start_time||!s.end_time)return sum;return sum+Math.max((new Date(s.end_time)-new Date(s.start_time))/3600000,0)},0);
+  const hours=rows.reduce((sum,s)=>sum+shiftHours(s),0);
   const ppd=patientDays?hours/patientDays:null;
-  const line=s=>{const p=staffById[String(s.staff_id)]||{};const a=asgByShift[String(s.id)]||{};const role=String(p.role||s.role||"STAFF").toUpperCase();return `${role} — ${a.unit||"Unassigned"}${a.assignment_number?` · Assignment #${a.assignment_number}`:""}`};
+  const line=s=>{const p=staffById[String(s.staff_id)]||{};const a=asgByShift[String(s.id)]||{};const role=String(p.role||s.role||"STAFF").toUpperCase();return `${role} — ${a.unit||"Unassigned"}${a.assignment_number?` · Assignment #${a.assignment_number}`:""} — ${fmtHours(shiftHours(s))}`};
   return <div style={{padding:28,minHeight:260,borderRadius:14,background:"var(--card-bg,rgba(255,255,255,.08))",border:active?"2px solid #3b82f6":"1px solid var(--border)"}}>
     <h2 style={{marginTop:0}}>{label}</h2>
     <h3>Licensed Staff</h3>{licensed.length?licensed.map(s=><div key={s.id} style={{marginBottom:5}}>{line(s)}</div>):<div style={{opacity:.7}}>No licensed staff scheduled.</div>}
@@ -55,4 +85,29 @@ function ShiftCard({label,active,rows,staffById,asgByShift,patientDays}){
     <div style={{borderTop:"1px solid var(--border)",marginTop:16,paddingTop:12,display:"flex",justifyContent:"space-between",gap:12}}><div><small style={{opacity:.65}}>Patients</small><div style={{fontSize:20,fontWeight:900}}>{patientDays}</div></div><div style={{textAlign:"right"}}><small style={{opacity:.65}}>PPD</small><div style={{fontSize:20,fontWeight:900}}>{ppd==null?"—":ppd.toFixed(2)}</div></div></div>
   </div>
 }
+
+function AssignmentOverlay({shiftLabel,rows,staffById,asgByShift,secondsLeft,onClose}){
+  const ordered=[...rows].sort((a,b)=>{
+    const ar=String(staffById[String(a.staff_id)]?.role||a.role||"");
+    const br=String(staffById[String(b.staff_id)]?.role||b.role||"");
+    return ar.localeCompare(br)||String(staffById[String(a.staff_id)]?.name||"").localeCompare(String(staffById[String(b.staff_id)]?.name||""));
+  });
+  return <div style={{position:"fixed",inset:0,zIndex:5000,background:"rgba(3,7,18,.97)",color:"white",padding:"32px",overflowY:"auto"}}>
+    <div style={{maxWidth:1100,margin:"0 auto"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:16,flexWrap:"wrap",borderBottom:"1px solid rgba(255,255,255,.15)",paddingBottom:18,marginBottom:22}}>
+        <div><div style={{fontSize:13,fontWeight:900,letterSpacing:".12em",textTransform:"uppercase",opacity:.65}}>ShiftCensus Wallboard</div><h1 style={{margin:"5px 0 0",fontSize:34}}>{shiftLabel} Shift Assignments</h1></div>
+        <div style={{display:"flex",alignItems:"center",gap:12}}><div style={{fontWeight:900,opacity:.8}}>Returning to census in {secondsLeft}s</div><button onClick={onClose} style={{padding:"10px 16px",borderRadius:10,border:"1px solid rgba(255,255,255,.25)",background:"rgba(255,255,255,.1)",color:"white",fontWeight:900,cursor:"pointer"}}>Close</button></div>
+      </div>
+      {ordered.length===0?<div style={{padding:32,textAlign:"center",fontSize:22,opacity:.7}}>No staff scheduled for this shift.</div>:<div style={{display:"grid",gap:12}}>{ordered.map(s=>{
+        const p=staffById[String(s.staff_id)]||{};const a=asgByShift[String(s.id)]||{};const role=String(p.role||s.role||"STAFF").toUpperCase();
+        return <div key={s.id} style={{display:"grid",gridTemplateColumns:"minmax(220px,1.4fr) 110px minmax(180px,1fr) 150px",gap:16,alignItems:"center",padding:"17px 20px",borderRadius:14,border:"1px solid rgba(255,255,255,.14)",background:"rgba(255,255,255,.06)",fontSize:18}}>
+          <div style={{fontWeight:950,fontSize:21}}>{p.name||`Staff #${s.staff_id}`}</div>
+          <div style={{fontWeight:950}}>{role}</div>
+          <div>{a.unit||"Unassigned"}{a.assignment_number?` · Assignment #${a.assignment_number}`:""}</div>
+          <div style={{textAlign:"right",fontWeight:900}}>{fmtHours(shiftHours(s))}</div>
+        </div>})}</div>}
+    </div>
+  </div>
+}
+
 function Stat({label,value}){return <div style={{padding:"14px 16px",borderRadius:14,border:"1px solid var(--border)",background:"var(--surface)",textAlign:"center"}}><div style={{fontSize:11,fontWeight:900,textTransform:"uppercase",opacity:.7}}>{label}</div><div style={{fontSize:30,fontWeight:950,marginTop:6}}>{value}</div></div>}
