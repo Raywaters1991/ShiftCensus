@@ -50,6 +50,7 @@ app.use("/api/dashboard", require("./routes/dashboard"));
 app.use("/api/operations-snapshot", require("./routes/operationsSnapshot"));
 app.use("/api/shifts", require("./routes/shifts"));
 app.use("/api/shift-assignments", require("./routes/shiftAssignments"));
+app.use("/api/shift-requests", require("./routes/shiftRequests"));
 app.use("/api/staff", require("./routes/staff"));
 app.use("/api/organizations", require("./routes/organizations"));
 app.use("/api/assignments", require("./routes/assignments"));
