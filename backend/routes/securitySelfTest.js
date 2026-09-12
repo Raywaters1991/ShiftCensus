@@ -115,6 +115,9 @@ router.post("/run", async (req, res) => {
     r = await request(`${root}/api/staff/lookup`, token, sourceOrg);
     tests.push(result("Allowed scoped staff lookup", r.status, 200, "Schedule readers may load only the lightweight name/role lookup in their own org."));
 
+    r = await request(`${root}/api/operations-snapshot?date=${testDate}`, token, sourceOrg);
+    tests.push(result("Allowed scoped operations snapshot", r.status, 200, "Schedule readers may load the compact operations snapshot only for their own organization."));
+
     r = await request(`${root}/api/dashboard?date=${testDate}`, token, sourceOrg);
     tests.push(result("Denied dashboard without permission", r.status, 403, "Schedule read permission must not implicitly grant dashboard access."));
 
@@ -129,6 +132,9 @@ router.post("/run", async (req, res) => {
 
     r = await request(`${root}/api/staff/lookup`, token, targetOrg);
     tests.push(result("Denied cross-org staff lookup", r.status, 403, "User must not enumerate staff names or roles in another organization."));
+
+    r = await request(`${root}/api/operations-snapshot?date=${testDate}`, token, targetOrg);
+    tests.push(result("Denied cross-org operations snapshot", r.status, 403, "User must not load another organization's cached operations data."));
 
     r = await request(`${root}/api/dashboard?date=${testDate}`, token, targetOrg);
     tests.push(result("Denied cross-org dashboard read", r.status, 403, "User must not read another organization's dashboard data."));
