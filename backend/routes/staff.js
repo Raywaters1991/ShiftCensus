@@ -36,13 +36,19 @@ async function getAuthUserByEmail(email) {
 }
 async function getMyMembership(req) {
   if(req.orgMembership)return req.orgMembership;
-  if(req._myMembership)return req._myMembership; const userId=req.user?.id||req.userId; if(!userId||!req.orgId)return null;
+  if(req._myMembership)return req._myMembership;
+  const userId=req.user?.id||req.userId; if(!userId||!req.orgId)return null;
   const {data,error}=await supabaseAdmin.from("org_memberships").select("role,is_active,is_admin,can_manage_admins,can_dashboard_read,can_schedule_write,can_schedule_read,can_census_write,can_census_read,department_id,department_locked").eq("user_id",userId).eq("org_id",req.orgId).maybeSingle();
   if(error){console.error("GET MY MEMBERSHIP ERROR:",error);return null;} req._myMembership=data||null; return req._myMembership;
 }
 async function canManageStaff(req) {
-  if(String(req.role||"").toLowerCase()==="superadmin")return true; const mem=await getMyMembership(req); if(!mem||mem.is_active===false)return false;
+  if(String(req.role||"").toLowerCase()==="superadmin")return true;
+  const mem=await getMyMembership(req); if(!mem||mem.is_active===false)return false;
   return !!mem.can_manage_admins;
+}
+async function requireStaffManager(req,res,next){
+  try{if(await canManageStaff(req))return next();return res.status(403).json({error:"Not allowed"});}
+  catch(e){console.error("STAFF MANAGER ACCESS ERROR:",e);return res.status(500).json({error:"Failed to verify staff-management access"});}
 }
 async function ensureProfileAndMembership({userId,orgId,orgCode,staffRole,departmentId=null,permissions=null}) {
   const {data:profile,error:readErr}=await supabaseAdmin.from("profiles").select("id,role").eq("id",userId).maybeSingle(); if(readErr)throw readErr;
@@ -66,11 +72,22 @@ router.get("/lookup",requireScheduleAccess,async(req,res)=>{try{
   return res.json(data||[]);
 }catch(e){console.error("STAFF LOOKUP ERROR:",e);return res.status(500).json({error:"Failed to load staff lookup"});}});
 
-router.get("/",async(req,res)=>{try{
-  const orgCode=req.orgCode||req.org_code; const {data,error}=await supabaseAdmin.from("staff").select("*").eq("org_code",orgCode).order("name"); if(error)throw error;
-  let users=[]; try{const {data:u}=await supabaseAdmin.auth.admin.listUsers({perPage:500});users=u?.users||[];}catch{}
-  const authById=new Map(users.map(u=>[String(u.id),u])); const userIds=(data||[]).map(s=>s.user_id).filter(Boolean);
-  let memberships=[]; if(userIds.length){const {data:m,error:me}=await supabaseAdmin.from("org_memberships").select("user_id,role,is_active,is_admin,can_manage_admins,can_dashboard_read,can_schedule_read,can_schedule_write,can_census_read,can_census_write").eq("org_id",req.orgId).in("user_id",userIds);if(!me)memberships=m||[];}
+// Full staff records include contact details, linked-login state, and organization
+// permissions. Keep this endpoint restricted to users who can manage staff/admins.
+router.get("/",requireStaffManager,async(req,res)=>{try{
+  const orgCode=req.orgCode||req.org_code;
+  const {data,error}=await supabaseAdmin.from("staff").select("*").eq("org_code",orgCode).order("name"); if(error)throw error;
+  const userIds=(data||[]).map(s=>s.user_id).filter(Boolean);
+  let authById=new Map();
+  if(userIds.length){
+    try{
+      const {data:u}=await supabaseAdmin.auth.admin.listUsers({perPage:500});
+      const wanted=new Set(userIds.map(String));
+      authById=new Map((u?.users||[]).filter(x=>wanted.has(String(x.id))).map(x=>[String(x.id),x]));
+    }catch{}
+  }
+  let memberships=[];
+  if(userIds.length){const {data:m,error:me}=await supabaseAdmin.from("org_memberships").select("user_id,role,is_active,is_admin,can_manage_admins,can_dashboard_read,can_schedule_read,can_schedule_write,can_census_read,can_census_write").eq("org_id",req.orgId).in("user_id",userIds);if(!me)memberships=m||[];}
   const memById=new Map(memberships.map(m=>[String(m.user_id),m]));
   return res.json((data||[]).map(s=>({...s,setup_pending:s.user_id?authById.get(String(s.user_id))?.user_metadata?.setup_pending===true:false,permissions:s.user_id?memById.get(String(s.user_id))||null:null})));
 }catch(e){console.error("STAFF GET ERROR:",e);return res.status(500).json({error:"Failed to load staff"});}});
