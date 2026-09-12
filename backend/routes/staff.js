@@ -55,10 +55,14 @@ async function getOrCreateAuthUserByEmail(email,orgCode,staffId){
   const {data,error}=await supabaseAdmin.auth.admin.createUser({email:e,password:crypto.randomBytes(24).toString("base64url"),email_confirm:true,user_metadata:{org_code:orgCode,staff_id:staffId,setup_pending:true}}); if(error)throw error; return data?.user||null;
 }
 
-// Deliberately no public account-status lookup. Exposing setup state by email
-// allowed unauthenticated account enumeration. First-time setup/reset is handled
-// through the generic email-verification flow instead.
 router.use(requireAuth); router.use(requireOrg);
+
+router.get("/lookup",async(req,res)=>{try{
+  const orgCode=req.orgCode||req.org_code;
+  const {data,error}=await supabaseAdmin.from("staff").select("id,name,role").eq("org_code",orgCode).order("name");
+  if(error)throw error;
+  return res.json(data||[]);
+}catch(e){console.error("STAFF LOOKUP ERROR:",e);return res.status(500).json({error:"Failed to load staff lookup"});}});
 
 router.get("/",async(req,res)=>{try{
   const orgCode=req.orgCode||req.org_code; const {data,error}=await supabaseAdmin.from("staff").select("*").eq("org_code",orgCode).order("name"); if(error)throw error;
