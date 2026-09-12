@@ -1,0 +1,74 @@
+const express = require("express");
+const router = express.Router();
+
+const supabaseAdmin = require("../supabaseAdmin");
+const { requireAuth } = require("../middleware/auth");
+const { requireOrg } = require("../middleware/orgGuard");
+const { requireScheduleAccess } = require("../middleware/scheduleAccess");
+
+function validDate(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
+}
+
+router.use(requireAuth);
+router.use(requireOrg);
+router.use(requireScheduleAccess);
+
+router.get("/", async (req, res) => {
+  try {
+    const orgCode = req.orgCode || req.org_code;
+    const date = String(req.query?.date || "").trim();
+    if (!validDate(date)) return res.status(400).json({ error: "date must be YYYY-MM-DD" });
+
+    const [shiftResult, staffResult, unitResult] = await Promise.all([
+      supabaseAdmin
+        .from("shifts")
+        .select("id,staff_id,role,shift_date,shift_type,start_local,end_local,start_time,end_time,timezone")
+        .eq("org_code", orgCode)
+        .eq("shift_date", date)
+        .order("start_time", { ascending: true }),
+      supabaseAdmin
+        .from("staff")
+        .select("id,name,role")
+        .eq("org_code", orgCode)
+        .order("name", { ascending: true }),
+      supabaseAdmin
+        .from("units")
+        .select("id,name")
+        .eq("org_code", orgCode)
+        .order("name", { ascending: true }),
+    ]);
+
+    if (shiftResult.error) throw shiftResult.error;
+    if (staffResult.error) throw staffResult.error;
+    if (unitResult.error) throw unitResult.error;
+
+    const shifts = shiftResult.data || [];
+    const shiftIds = shifts.map((s) => s.id).filter(Boolean);
+
+    let assignments = [];
+    if (shiftIds.length) {
+      const { data, error } = await supabaseAdmin
+        .from("shift_assignments")
+        .select("id,shift_id,unit_id,unit,assignment_number,updated_at")
+        .eq("org_code", orgCode)
+        .in("shift_id", shiftIds)
+        .order("shift_id", { ascending: true });
+      if (error) throw error;
+      assignments = data || [];
+    }
+
+    return res.json({
+      date,
+      shifts,
+      staff: staffResult.data || [],
+      units: unitResult.data || [],
+      assignments,
+    });
+  } catch (e) {
+    console.error("OPERATIONS SNAPSHOT GET ERROR:", e);
+    return res.status(500).json({ error: "Failed to load operations snapshot" });
+  }
+});
+
+module.exports = router;
