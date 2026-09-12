@@ -1,45 +1,15 @@
 // backend/routes/departments.js
 const express = require("express");
 const router = express.Router();
-
 const supabaseAdmin = require("../supabaseAdmin");
 const { requireAuth } = require("../middleware/auth");
 const { requireOrg } = require("../middleware/orgGuard");
 const { requireScheduleAccess } = require("../middleware/scheduleAccess");
-
-router.use(requireAuth);
-router.use(requireOrg);
-router.use(requireScheduleAccess);
-
-function canManage(req) {
-  return String(req.role || "").toLowerCase() === "superadmin" || !!req.schedulePermissions?.canWrite;
-}
-
-router.get("/", async (req, res) => {
-  try {
-    const orgCode = req.orgCode || req.org_code;
-    const { data, error } = await supabaseAdmin.from("departments").select("*").eq("org_code",orgCode).order("name");
-    if (error) return res.status(500).json({ error: "Failed to load departments" });
-    res.json(data || []);
-  } catch (e) {
-    console.error("DEPARTMENTS GET ERROR:", e);
-    res.status(500).json({ error: "Failed to load departments" });
-  }
-});
-
-router.post("/", async (req, res) => {
-  try {
-    if (!canManage(req)) return res.status(403).json({ error: "Not allowed" });
-    const orgCode = req.orgCode || req.org_code;
-    const name = String(req.body?.name || "").trim();
-    if (!name) return res.status(400).json({ error: "Name required" });
-    const { data, error } = await supabaseAdmin.from("departments").insert([{org_code:orgCode,name}]).select().single();
-    if (error) return res.status(500).json({ error: "Failed to create department" });
-    res.json(data);
-  } catch (e) {
-    console.error("DEPARTMENTS POST ERROR:", e);
-    res.status(500).json({ error: "Failed to create department" });
-  }
-});
-
-module.exports = router;
+router.use(requireAuth);router.use(requireOrg);router.use(requireScheduleAccess);
+function canManage(req){return String(req.role||"").toLowerCase()==="superadmin"||!!req.schedulePermissions?.canWrite}
+router.get("/",async(req,res)=>{try{const orgCode=req.orgCode||req.org_code;const{data,error}=await supabaseAdmin.from("departments").select("*").eq("org_code",orgCode).order("name");if(error)throw error;res.json(data||[])}catch(e){console.error("DEPARTMENTS GET ERROR:",e);res.status(500).json({error:"Failed to load departments"})}});
+router.get("/approvers",async(req,res)=>{try{const orgCode=req.orgCode||req.org_code;const{data,error}=await supabaseAdmin.from("department_request_approvers").select("id,department_id,approver_user_id").eq("org_code",orgCode);if(error)throw error;res.json(data||[])}catch(e){console.error("DEPARTMENT APPROVERS GET ERROR:",e);res.status(500).json({error:"Failed to load request approvers"})}});
+router.put("/:id/approvers",async(req,res)=>{try{if(!canManage(req))return res.status(403).json({error:"Not allowed"});const orgCode=req.orgCode||req.org_code,departmentId=req.params.id,staffIds=[...new Set((Array.isArray(req.body?.staff_ids)?req.body.staff_ids:[]).map(Number).filter(Number.isFinite))];if(staffIds.length>2)return res.status(400).json({error:"Choose no more than two approvers"});const{data:dept}=await supabaseAdmin.from("departments").select("id").eq("id",departmentId).eq("org_code",orgCode).maybeSingle();if(!dept)return res.status(404).json({error:"Department not found"});let rows=[];if(staffIds.length){const{data:staff,error}=await supabaseAdmin.from("staff").select("id,user_id,name").eq("org_code",orgCode).in("id",staffIds);if(error)throw error;if((staff||[]).length!==staffIds.length)return res.status(400).json({error:"Invalid approver selection"});if((staff||[]).some(s=>!s.user_id))return res.status(400).json({error:"Approvers must have active ShiftCensus accounts"});rows=staff.map(s=>({org_code:orgCode,department_id:departmentId,approver_user_id:s.user_id}));}
+await supabaseAdmin.from("department_request_approvers").delete().eq("org_code",orgCode).eq("department_id",departmentId);if(rows.length){const{error}=await supabaseAdmin.from("department_request_approvers").insert(rows);if(error)throw error;}const{data}=await supabaseAdmin.from("department_request_approvers").select("id,department_id,approver_user_id").eq("org_code",orgCode).eq("department_id",departmentId);res.json(data||[])}catch(e){console.error("DEPARTMENT APPROVERS PUT ERROR:",e);res.status(500).json({error:e?.message||"Failed to save request approvers"})}});
+router.post("/",async(req,res)=>{try{if(!canManage(req))return res.status(403).json({error:"Not allowed"});const orgCode=req.orgCode||req.org_code,name=String(req.body?.name||"").trim();if(!name)return res.status(400).json({error:"Name required"});const{data,error}=await supabaseAdmin.from("departments").insert([{org_code:orgCode,name}]).select().single();if(error)throw error;res.json(data)}catch(e){console.error("DEPARTMENTS POST ERROR:",e);res.status(500).json({error:"Failed to create department"})}});
+module.exports=router;
