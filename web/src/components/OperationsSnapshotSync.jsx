@@ -21,7 +21,7 @@ export default function OperationsSnapshotSync() {
       try {
         const date=todayYmd();
         const [shifts, staff, units, assignments] = await Promise.all([
-          api.get(`/shifts?date=${date}`), api.get("/staff"), api.get("/units"), api.get(`/shift-assignments?date=${date}`)
+          api.get(`/shifts?date=${date}`), api.get("/staff/lookup"), api.get("/units"), api.get(`/shift-assignments?date=${date}`)
         ]);
         if (cancelled) return;
         saveOfflineOperationsSnapshot({ orgId, orgCode, orgName, shifts, staff, units, assignments });
