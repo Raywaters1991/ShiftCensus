@@ -115,6 +115,9 @@ router.post("/run", async (req, res) => {
     r = await request(`${root}/api/staff/lookup`, token, sourceOrg);
     tests.push(result("Allowed scoped staff lookup", r.status, 200, "Schedule readers may load only the lightweight name/role lookup in their own org."));
 
+    r = await request(`${root}/api/staff`, token, sourceOrg);
+    tests.push(result("Denied full staff directory", r.status, 403, "Schedule readers must not receive contact details, linked-login state, or staff permissions."));
+
     r = await request(`${root}/api/operations-snapshot?date=${testDate}`, token, sourceOrg);
     tests.push(result("Allowed scoped operations snapshot", r.status, 200, "Schedule readers may load the compact operations snapshot only for their own organization."));
 
