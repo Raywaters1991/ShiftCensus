@@ -18,25 +18,18 @@ function storedActiveOrg() {
 }
 
 function resolveOrg(org = {}) {
-  const explicit = {
-    orgId: org?.orgId || "",
-    orgCode: org?.orgCode || "",
-    orgName: org?.orgName || "",
-  };
+  const explicit = { orgId: org?.orgId || "", orgCode: org?.orgCode || "", orgName: org?.orgName || "" };
   if (explicit.orgId || explicit.orgCode) return explicit;
   return storedActiveOrg();
 }
 
-function orgKey(org = {}) {
-  const resolved = resolveOrg(org);
-  return normalizeOrgKey(resolved.orgId) || normalizeOrgKey(resolved.orgCode) || null;
-}
+function orgKey(org = {}) { const resolved = resolveOrg(org); return normalizeOrgKey(resolved.orgId) || normalizeOrgKey(resolved.orgCode) || null; }
 function key(kind, org = {}) { const k = orgKey(org); return k ? `${CACHE_PREFIX}:${k}:${kind}` : null; }
 
 function sanitizeCensusRows(rows) { return (Array.isArray(rows)?rows:[]).map(r=>({id:r.id,room:r.room??null,room_number:r.room_number??null,bed:r.bed??null,status:r.status??"empty",payer_source:r.payer_source??null,care_type:r.care_type??null,admit_date:r.admit_date??null,expected_discharge:r.expected_discharge??null,patient_gender:r.patient_gender??"Unknown"})); }
 function sanitizeStaff(rows) { return (Array.isArray(rows)?rows:[]).map(s=>({id:s.id,name:s.name??null,role:s.role??null})); }
-function sanitizeShifts(rows) { return (Array.isArray(rows)?rows:[]).map(s=>({id:s.id,staff_id:s.staff_id,shift_date:s.shift_date??null,unit:s.unit??null,role:s.role??null,shiftType:s.shiftType??null,start_local:s.start_local??null,end_local:s.end_local??null,assignment_number:s.assignment_number??null})); }
-function sanitizeAssignments(rows) { return (Array.isArray(rows)?rows:[]).map(a=>({id:a.id,unit:a.unit??null,assignment_number:a.assignment_number??a.number??null,name:a.name??a.label??null})); }
+function sanitizeShifts(rows) { return (Array.isArray(rows)?rows:[]).map(s=>({id:s.id,staff_id:s.staff_id,shift_date:s.shift_date??null,shift_type:s.shift_type??s.shiftType??null,role:s.role??null,start_local:s.start_local??null,end_local:s.end_local??null,start_time:s.start_time??null,end_time:s.end_time??null,timezone:s.timezone??null})); }
+function sanitizeAssignments(rows) { return (Array.isArray(rows)?rows:[]).map(a=>({id:a.id,shift_id:a.shift_id??null,unit_id:a.unit_id??null,unit:a.unit??null,assignment_number:a.assignment_number??a.number??null})); }
 function sanitizeUnits(rows) { return (Array.isArray(rows)?rows:[]).map(u=>({id:u.id,name:u.name??u.unit??null})); }
 
 function save(kind, org, payload) {
@@ -50,7 +43,7 @@ function save(kind, org, payload) {
   catch(e){console.warn(`Could not save offline ${kind} snapshot`,e);return false;}
 }
 export function saveOfflineSnapshot({orgId,orgCode,orgName,censusRows}) { if(!Array.isArray(censusRows)||!censusRows.length)return false; return save("census",{orgId,orgCode,orgName},{censusRows:sanitizeCensusRows(censusRows)}); }
-export function saveOfflineOperationsSnapshot({orgId,orgCode,orgName,shifts,staff,units,assignments}) { if(![shifts,staff,units,assignments].every(Array.isArray))return false; return save("operations",{orgId,orgCode,orgName},{shifts:sanitizeShifts(shifts),staff:sanitizeStaff(staff),units:sanitizeUnits(units),assignments:sanitizeAssignments(assignments)}); }
+export function saveOfflineOperationsSnapshot({orgId,orgCode,orgName,date,timezone,shifts,staff,units,assignments}) { if(![shifts,staff,units,assignments].every(Array.isArray))return false; return save("operations",{orgId,orgCode,orgName},{date:date||null,timezone:timezone||null,shifts:sanitizeShifts(shifts),staff:sanitizeStaff(staff),units:sanitizeUnits(units),assignments:sanitizeAssignments(assignments)}); }
 
 function read(kind, org = {}) {
   try {
