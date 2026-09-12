@@ -7,6 +7,16 @@ const { requireOrg } = require("../middleware/orgGuard");
 function validDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""));
 }
+function dateInTimeZone(timezone) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const get = (type) => parts.find((p) => p.type === type)?.value;
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
 
 router.use(requireAuth);
 router.use(requireOrg);
@@ -15,9 +25,9 @@ router.get("/", async (req, res) => {
   try {
     const orgId = req.orgId;
     const orgCode = req.orgCode || req.org_code;
-    const date = String(req.query.date || "");
+    const requestedDate = String(req.query.date || "");
 
-    if (!validDate(date)) {
+    if (requestedDate && !validDate(requestedDate)) {
       return res.status(400).json({ error: "date must be YYYY-MM-DD" });
     }
 
@@ -27,6 +37,19 @@ router.get("/", async (req, res) => {
         return res.status(403).json({ error: "Dashboard access required" });
       }
     }
+
+    const { data: settings, error: settingsError } = await supabaseAdmin
+      .from("org_settings")
+      .select("timezone")
+      .eq("org_id", orgId)
+      .maybeSingle();
+    if (settingsError) throw settingsError;
+
+    let timezone = String(settings?.timezone || "America/Los_Angeles");
+    try { new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date()); }
+    catch { timezone = "America/Los_Angeles"; }
+
+    const date = requestedDate || dateInTimeZone(timezone);
 
     const [shiftResult, bedResult] = await Promise.all([
       supabaseAdmin
@@ -92,6 +115,7 @@ router.get("/", async (req, res) => {
 
     return res.json({
       date,
+      timezone,
       census: { occupied, leave, empty, total },
       shifts,
       staff: staffResult.data || [],
