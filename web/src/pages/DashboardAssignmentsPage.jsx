@@ -3,9 +3,9 @@ import api from "../services/api";
 import { useUser } from "../contexts/UserContext.jsx";
 
 const ASSIGNMENT_VIEW_SECONDS = 30;
+const DASHBOARD_REFRESH_MS = 20000;
 
 function todayYmd(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
-function norm(s){const v=String(s||"empty").toLowerCase();return ["occupied","leave","empty"].includes(v)?v:"empty";}
 function shiftHours(s){if(!s?.start_time||!s?.end_time)return 0;return Math.max((new Date(s.end_time)-new Date(s.start_time))/3600000,0);}
 function fmtHours(v){const n=Number(v||0);return Number.isInteger(n)?`${n} hours`:`${n.toFixed(1)} hours`;}
 function compactTime(value){
@@ -32,18 +32,28 @@ function shiftTimeRange(s){
 export default function DashboardAssignmentsPage(){
   const {orgLogo}=useUser();
   const [clock,setClock]=useState(new Date());
-  const [shifts,setShifts]=useState([]);const [staff,setStaff]=useState([]);const [bedBoard,setBedBoard]=useState([]);const [assignments,setAssignments]=useState([]);const [loading,setLoading]=useState(true);
+  const [shifts,setShifts]=useState([]);const [staff,setStaff]=useState([]);const [assignments,setAssignments]=useState([]);const [census,setCensus]=useState({occupied:0,leave:0,empty:0,total:0});const [loading,setLoading]=useState(true);
   const [showAssignments,setShowAssignments]=useState(false);
   const [secondsLeft,setSecondsLeft]=useState(ASSIGNMENT_VIEW_SECONDS);
   const date=todayYmd();
 
   async function load(){
     try{
-      const [s,p,b,a]=await Promise.all([api.get("/shifts"),api.get("/staff"),api.get("/census/bed-board"),api.get(`/shift-assignments?date=${date}`)]);
-      setShifts((Array.isArray(s)?s:[]).filter(x=>x.shift_date===date));setStaff(Array.isArray(p)?p:[]);setBedBoard(Array.isArray(b)?b:[]);setAssignments(Array.isArray(a)?a:[]);
+      const data=await api.get(`/dashboard?date=${encodeURIComponent(date)}`);
+      setShifts(Array.isArray(data?.shifts)?data.shifts:[]);
+      setStaff(Array.isArray(data?.staff)?data.staff:[]);
+      setAssignments(Array.isArray(data?.assignments)?data.assignments:[]);
+      setCensus(data?.census&&typeof data.census==="object"?data.census:{occupied:0,leave:0,empty:0,total:0});
     }finally{setLoading(false)}
   }
-  useEffect(()=>{load();const a=setInterval(load,5000);const b=setInterval(()=>setClock(new Date()),1000);return()=>{clearInterval(a);clearInterval(b)};},[]);
+  useEffect(()=>{
+    load();
+    const refresh=setInterval(()=>{if(document.visibilityState!=="hidden")load();},DASHBOARD_REFRESH_MS);
+    const clockTimer=setInterval(()=>setClock(new Date()),1000);
+    const onVisibility=()=>{if(document.visibilityState==="visible")load();};
+    document.addEventListener("visibilitychange",onVisibility);
+    return()=>{clearInterval(refresh);clearInterval(clockTimer);document.removeEventListener("visibilitychange",onVisibility)};
+  },[]);
   useEffect(()=>{
     if(!showAssignments)return;
     setSecondsLeft(ASSIGNMENT_VIEW_SECONDS);
@@ -56,8 +66,7 @@ export default function DashboardAssignmentsPage(){
 
   const staffById=useMemo(()=>Object.fromEntries(staff.map(x=>[String(x.id),x])),[staff]);
   const asgByShift=useMemo(()=>Object.fromEntries(assignments.map(x=>[String(x.shift_id),x])),[assignments]);
-  const census=useMemo(()=>{const total=bedBoard.length,occupied=bedBoard.filter(x=>norm(x.status)==="occupied").length,leave=bedBoard.filter(x=>norm(x.status)==="leave").length;return{total,occupied,leave,empty:total-occupied-leave}},[bedBoard]);
-  const patientDays=census.occupied+census.leave;
+  const patientDays=Number(census.occupied||0)+Number(census.leave||0);
   const groups=useMemo(()=>{const g={Day:[],Evening:[],Night:[]};shifts.forEach(s=>{const key=s.shift_type||"Day";(g[key]||(g[key]=[])).push(s)});return g},[shifts]);
   const visible=["Day","Evening","Night"].filter(k=>groups[k]?.length||k!=="Evening");
   const current=(()=>{const h=clock.getHours();return h>=6&&h<14?"Day":h>=14&&h<22?"Evening":"Night"})();
