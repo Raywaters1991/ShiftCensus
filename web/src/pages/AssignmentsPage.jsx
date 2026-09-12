@@ -9,7 +9,7 @@ export default function AssignmentsPage(){
   const [loading,setLoading]=useState(true);const [saving,setSaving]=useState(null);
 
   async function loadStable(){
-    const [p,u]=await Promise.all([api.get("/staff"),api.get("/units")]);
+    const [p,u]=await Promise.all([api.get("/staff/lookup"),api.get("/units")]);
     setStaff(Array.isArray(p)?p:[]);setUnits(Array.isArray(u)?u:[]);
   }
   async function loadDay(targetDate=date){
