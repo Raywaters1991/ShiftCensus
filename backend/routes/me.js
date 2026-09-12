@@ -208,7 +208,14 @@ router.get("/home-summary", requireAuth, async (req, res) => {
     if (openErr) throw openErr;
     const openShifts = (open || []).map((s) => ({ ...s, date: s.shift_date, unit_name: s.unit || null }));
 
-    return res.json({ myShifts, openShifts, pending: [], timeOff: [], staffId, activeOrg: org, activeOrgSource: resolved.source, appRole: appRole || null, isSuperadmin });
+    let timeOff = [];
+    if (staffId) {
+      const { data, error } = await supabaseAdmin.from("shift_requests").select("id,start_date,end_date,status,reason,decided_at,decision_note").eq("org_code", orgCode).eq("staff_id", staffId).eq("request_type", "time_off").eq("status", "approved").lt("start_date", range.end).gte("end_date", range.start).order("start_date", { ascending: true });
+      if (error) throw error;
+      timeOff = data || [];
+    }
+
+    return res.json({ myShifts, openShifts, pending: [], timeOff, staffId, activeOrg: org, activeOrgSource: resolved.source, appRole: appRole || null, isSuperadmin });
   } catch (e) {
     console.error("ME HOME SUMMARY ERROR:", e);
     return res.status(500).json({ error: e?.message || "Server error" });
