@@ -1,104 +1,20 @@
 // backend/routes/templates.js
-const express = require("express");
-const router = express.Router();
-const supabaseAdmin = require("../supabaseAdmin");
-const { requireAuth } = require("../middleware/auth");
-const { requireOrg } = require("../middleware/orgGuard");
-const { requireScheduleAccess } = require("../middleware/scheduleAccess");
-
-router.use(requireAuth);
-router.use(requireOrg);
-router.use(requireScheduleAccess);
-
-function canManageTemplates(req) {
-  if (String(req.role || "").toLowerCase() === "superadmin") return true;
-  return !!req.schedulePermissions?.canWrite;
-}
-function normalizeDays(days) {
-  if (!Array.isArray(days)) return [];
-  return [...new Set(days.map(Number).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort();
-}
-async function validateStaffIds(orgCode, staffIds) {
-  if (!Array.isArray(staffIds) || staffIds.length === 0) return { valid: false, ids: [] };
-  const raw = staffIds.map(String);
-  const ids = [...new Set(staffIds.map(Number).filter(Number.isFinite))];
-  if (ids.length !== new Set(raw).size) return { valid: false, ids: [] };
-  const { data, error } = await supabaseAdmin.from("staff").select("id").eq("org_code", orgCode).in("id", ids);
-  if (error) throw error;
-  return { valid: (data || []).length === ids.length, ids };
-}
-function publicTemplate(t, staffIds) {
-  return { id:t.id, name:t.name, role:t.role, shift_type:t.shift_type, days_of_week:t.days_of_week || [], staff_ids:staffIds || [] };
-}
-
-router.get("/", async (req, res) => {
-  try {
-    const orgCode = req.orgCode || req.org_code;
-    const { data: templates, error: templateErr } = await supabaseAdmin.from("schedule_templates").select("id,name,role,shift_type,days_of_week").eq("org_code", orgCode).order("id", { ascending: true });
-    if (templateErr) throw templateErr;
-    if (!templates?.length) return res.json([]);
-    const ids = templates.map(t => t.id);
-    const { data: links, error } = await supabaseAdmin.from("schedule_template_staff").select("template_id,staff_id").in("template_id", ids);
-    if (error) throw error;
-    res.json(templates.map(t => publicTemplate(t, (links||[]).filter(x=>x.template_id===t.id).map(x=>x.staff_id))));
-  } catch (err) { console.error("TEMPLATE GET ERROR:", err); res.status(500).json({ error:"Failed to load templates" }); }
-});
-
-router.post("/", async (req, res) => {
-  try {
-    if (!canManageTemplates(req)) return res.status(403).json({ error:"Not allowed" });
-    const orgCode = req.orgCode || req.org_code;
-    const { name, role, shift_type, staff_ids } = req.body || {};
-    const days = normalizeDays(req.body?.days_of_week);
-    if (!String(name||"").trim() || !String(shift_type||"").trim() || !days.length) return res.status(400).json({ error:"Name, shift type, and at least one day are required" });
-    const check = await validateStaffIds(orgCode, staff_ids);
-    if (!check.valid) return res.status(400).json({ error:"Select valid staff from this organization" });
-    const { data: workers, error: workerErr } = await supabaseAdmin.from("staff").select("id,role").eq("org_code",orgCode).in("id",check.ids);
-    if (workerErr) throw workerErr;
-    const roles = [...new Set((workers||[]).map(w=>String(w.role||"")))];
-    const storedRole = roles.length === 1 ? roles[0] : (String(role||"").trim() || "Mixed");
-    const { data:t, error } = await supabaseAdmin.from("schedule_templates").insert([{name:String(name).trim(),role:storedRole,shift_type,days_of_week:days,unit:null,assignment_number:null,org_code:orgCode}]).select().single();
-    if (error) throw error;
-    const { error:linkErr } = await supabaseAdmin.from("schedule_template_staff").insert(check.ids.map(staff_id=>({template_id:t.id,staff_id})));
-    if (linkErr) { await supabaseAdmin.from("schedule_templates").delete().eq("id",t.id).eq("org_code",orgCode); throw linkErr; }
-    res.json(publicTemplate(t, check.ids));
-  } catch (err) { console.error("TEMPLATE CREATE ERROR:", err); res.status(500).json({ error:"Failed to create template" }); }
-});
-
-router.put("/:id", async (req, res) => {
-  try {
-    if (!canManageTemplates(req)) return res.status(403).json({ error:"Not allowed" });
-    const orgCode = req.orgCode || req.org_code, id=req.params.id;
-    const { data:owned, error:ownErr } = await supabaseAdmin.from("schedule_templates").select("id").eq("id",id).eq("org_code",orgCode).maybeSingle();
-    if (ownErr) throw ownErr;
-    if (!owned) return res.status(404).json({ error:"Template not found in this organization" });
-    const { name, role, shift_type, staff_ids } = req.body || {};
-    const days=normalizeDays(req.body?.days_of_week);
-    if (!String(name||"").trim() || !String(shift_type||"").trim() || !days.length) return res.status(400).json({ error:"Name, shift type, and at least one day are required" });
-    const check=await validateStaffIds(orgCode,staff_ids);
-    if(!check.valid) return res.status(400).json({ error:"Select valid staff from this organization" });
-    const { data:workers, error:workerErr }=await supabaseAdmin.from("staff").select("id,role").eq("org_code",orgCode).in("id",check.ids);
-    if(workerErr) throw workerErr;
-    const roles=[...new Set((workers||[]).map(w=>String(w.role||"")))];
-    const storedRole=roles.length===1?roles[0]:(String(role||"").trim()||"Mixed");
-    const { data:t,error }=await supabaseAdmin.from("schedule_templates").update({name:String(name).trim(),role:storedRole,shift_type,days_of_week:days,unit:null,assignment_number:null}).eq("id",id).eq("org_code",orgCode).select().single();
-    if(error) throw error;
-    await supabaseAdmin.from("schedule_template_staff").delete().eq("template_id",id);
-    const { error:linkErr }=await supabaseAdmin.from("schedule_template_staff").insert(check.ids.map(staff_id=>({template_id:id,staff_id})));
-    if(linkErr) throw linkErr;
-    res.json(publicTemplate(t,check.ids));
-  } catch(err){ console.error("TEMPLATE UPDATE ERROR:",err); res.status(500).json({error:"Failed to update template"}); }
-});
-
-router.delete("/:id", async (req,res)=>{
-  try{
-    if(!canManageTemplates(req)) return res.status(403).json({error:"Not allowed"});
-    const orgCode=req.orgCode||req.org_code,id=req.params.id;
-    const {data:owned,error}=await supabaseAdmin.from("schedule_templates").select("id").eq("id",id).eq("org_code",orgCode).maybeSingle();
-    if(error) throw error;if(!owned) return res.status(404).json({error:"Template not found in this organization"});
-    await supabaseAdmin.from("schedule_template_staff").delete().eq("template_id",id);
-    await supabaseAdmin.from("schedule_templates").delete().eq("id",id).eq("org_code",orgCode);
-    res.json({success:true});
-  }catch(err){console.error("TEMPLATE DELETE ERROR:",err);res.status(500).json({error:"Failed to delete template"});}
-});
+const express=require("express"),router=express.Router();
+const supabaseAdmin=require("../supabaseAdmin");
+const {requireAuth}=require("../middleware/auth"),{requireOrg}=require("../middleware/orgGuard"),{requireScheduleAccess}=require("../middleware/scheduleAccess");
+router.use(requireAuth);router.use(requireOrg);router.use(requireScheduleAccess);
+const validDate=v=>typeof v==="string"&&/^\d{4}-\d{2}-\d{2}$/.test(v);
+function canWrite(req){return String(req.role||"").toLowerCase()==="superadmin"||!!req.schedulePermissions?.canWrite;}
+function days(v){return Array.isArray(v)?[...new Set(v.map(Number).filter(x=>Number.isInteger(x)&&x>=0&&x<=6))].sort():[];}
+async function staffCheck(orgCode,v){if(!Array.isArray(v)||!v.length)return{valid:false,ids:[]};const raw=new Set(v.map(String)),ids=[...new Set(v.map(Number).filter(Number.isFinite))];if(ids.length!==raw.size)return{valid:false,ids:[]};const{data,error}=await supabaseAdmin.from("staff").select("id,role").eq("org_code",orgCode).in("id",ids);if(error)throw error;return{valid:(data||[]).length===ids.length,ids,staff:data||[]};}
+const pub=(t,ids)=>({id:t.id,name:t.name,role:t.role,shift_type:t.shift_type,days_of_week:t.days_of_week||[],staff_ids:ids||[]});
+async function timezone(orgId){const{data}=await supabaseAdmin.from("org_settings").select("timezone").eq("org_id",orgId).maybeSingle();return String(data?.timezone||"America/Los_Angeles");}
+function utc(date,time,tz){const local=new Date(`${date}T${time}`),probe=new Date(local.toLocaleString("en-US",{timeZone:tz})),offset=local.getTime()-probe.getTime();return new Date(local.getTime()+offset).toISOString();}
+function shiftTimes(date,s,tz){let start=utc(date,s.start_local,tz),end=utc(date,s.end_local,tz);if(s.end_local<s.start_local){const d=new Date(end);d.setUTCDate(d.getUTCDate()+1);end=d.toISOString();}return{start,end};}
+router.get("/",async(req,res)=>{try{const org=req.orgCode||req.org_code,{data:t,error}=await supabaseAdmin.from("schedule_templates").select("id,name,role,shift_type,days_of_week").eq("org_code",org).order("id");if(error)throw error;if(!t?.length)return res.json([]);const{data:l,error:e}=await supabaseAdmin.from("schedule_template_staff").select("template_id,staff_id").in("template_id",t.map(x=>x.id));if(e)throw e;res.json(t.map(x=>pub(x,(l||[]).filter(y=>y.template_id===x.id).map(y=>y.staff_id))));}catch(e){console.error(e);res.status(500).json({error:"Failed to load templates"});}});
+router.post("/",async(req,res)=>{try{if(!canWrite(req))return res.status(403).json({error:"Not allowed"});const org=req.orgCode||req.org_code,{name,shift_type,staff_ids}=req.body||{},dow=days(req.body?.days_of_week),c=await staffCheck(org,staff_ids);if(!String(name||"").trim()||!String(shift_type||"").trim()||!dow.length||!c.valid)return res.status(400).json({error:"Name, staff, shift type, and at least one day are required"});const roles=[...new Set(c.staff.map(x=>String(x.role||"")))],role=roles.length===1?roles[0]:"Mixed";const{data:t,error}=await supabaseAdmin.from("schedule_templates").insert([{name:String(name).trim(),role,shift_type,days_of_week:dow,unit:null,assignment_number:null,org_code:org}]).select().single();if(error)throw error;const{error:le}=await supabaseAdmin.from("schedule_template_staff").insert(c.ids.map(staff_id=>({template_id:t.id,staff_id})));if(le){await supabaseAdmin.from("schedule_templates").delete().eq("id",t.id).eq("org_code",org);throw le;}res.json(pub(t,c.ids));}catch(e){console.error(e);res.status(500).json({error:"Failed to create template"});}});
+router.post("/:id/apply",async(req,res)=>{try{if(!canWrite(req))return res.status(403).json({error:"Not allowed"});const org=req.orgCode||req.org_code,{from,to}=req.body||{};if(!validDate(from)||!validDate(to)||from>to)return res.status(400).json({error:"Valid from/to dates are required"});const a=new Date(`${from}T00:00:00`),b=new Date(`${to}T00:00:00`);if((b-a)/86400000>62)return res.status(400).json({error:"Template range cannot exceed 63 days"});const{data:t,error}=await supabaseAdmin.from("schedule_templates").select("id,shift_type,days_of_week").eq("id",req.params.id).eq("org_code",org).maybeSingle();if(error)throw error;if(!t)return res.status(404).json({error:"Template not found"});const{data:links,error:le}=await supabaseAdmin.from("schedule_template_staff").select("staff_id").eq("template_id",t.id);if(le)throw le;const c=await staffCheck(org,(links||[]).map(x=>x.staff_id));if(!c.valid)return res.status(400).json({error:"Template staff is no longer valid"});const{data:settingRows,error:se}=await supabaseAdmin.from("shift_settings").select("role,shift_type,start_local,end_local").eq("org_code",org).eq("shift_type",t.shift_type);if(se)throw se;const settingByRole=Object.fromEntries((settingRows||[]).map(s=>[String(s.role),s]));const tz=await timezone(req.orgId),dates=[];for(let d=new Date(a);d<=b;d.setDate(d.getDate()+1))if(days(t.days_of_week).includes(d.getDay()))dates.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`);if(!dates.length)return res.json({created:0,skipped:0});const{data:existing,error:ee}=await supabaseAdmin.from("shifts").select("staff_id,shift_date,shift_type").eq("org_code",org).gte("shift_date",from).lte("shift_date",to).in("staff_id",c.ids);if(ee)throw ee;const seen=new Set((existing||[]).map(x=>`${x.staff_id}|${x.shift_date}|${x.shift_type}`)),rows=[];let skipped=0;for(const worker of c.staff){const s=settingByRole[String(worker.role)];if(!s)return res.status(400).json({error:`No shift settings found for ${worker.role} ${t.shift_type}`});for(const date of dates){const key=`${worker.id}|${date}|${t.shift_type}`;if(seen.has(key)){skipped++;continue;}const times=shiftTimes(date,s,tz);rows.push({staff_id:worker.id,role:worker.role,unit:null,assignment_number:null,shift_date:date,shift_type:t.shift_type,start_local:s.start_local,end_local:s.end_local,start_time:times.start,end_time:times.end,timezone:tz,org_code:org});}}
+if(rows.length){const{error:ie}=await supabaseAdmin.from("shifts").insert(rows);if(ie)throw ie;}res.json({created:rows.length,skipped});}catch(e){console.error("TEMPLATE APPLY ERROR",e);res.status(500).json({error:"Failed to apply template"});}});
+router.put("/:id",async(req,res)=>{try{if(!canWrite(req))return res.status(403).json({error:"Not allowed"});const org=req.orgCode||req.org_code,{data:o}=await supabaseAdmin.from("schedule_templates").select("id").eq("id",req.params.id).eq("org_code",org).maybeSingle();if(!o)return res.status(404).json({error:"Template not found"});const{name,shift_type,staff_ids}=req.body||{},dow=days(req.body?.days_of_week),c=await staffCheck(org,staff_ids);if(!String(name||"").trim()||!String(shift_type||"").trim()||!dow.length||!c.valid)return res.status(400).json({error:"Name, staff, shift type, and at least one day are required"});const roles=[...new Set(c.staff.map(x=>String(x.role||"")))],role=roles.length===1?roles[0]:"Mixed";const{data:t,error}=await supabaseAdmin.from("schedule_templates").update({name:String(name).trim(),role,shift_type,days_of_week:dow,unit:null,assignment_number:null}).eq("id",req.params.id).eq("org_code",org).select().single();if(error)throw error;await supabaseAdmin.from("schedule_template_staff").delete().eq("template_id",req.params.id);const{error:le}=await supabaseAdmin.from("schedule_template_staff").insert(c.ids.map(staff_id=>({template_id:req.params.id,staff_id})));if(le)throw le;res.json(pub(t,c.ids));}catch(e){console.error(e);res.status(500).json({error:"Failed to update template"});}});
+router.delete("/:id",async(req,res)=>{try{if(!canWrite(req))return res.status(403).json({error:"Not allowed"});const org=req.orgCode||req.org_code,{data:o}=await supabaseAdmin.from("schedule_templates").select("id").eq("id",req.params.id).eq("org_code",org).maybeSingle();if(!o)return res.status(404).json({error:"Template not found"});await supabaseAdmin.from("schedule_template_staff").delete().eq("template_id",req.params.id);await supabaseAdmin.from("schedule_templates").delete().eq("id",req.params.id).eq("org_code",org);res.json({success:true});}catch(e){console.error(e);res.status(500).json({error:"Failed to delete template"});}});
 module.exports=router;
