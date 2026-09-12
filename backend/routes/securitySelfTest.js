@@ -30,23 +30,12 @@ async function request(url, token, org, method = "GET", body = undefined, overri
   });
 
   let payload = null;
-  try {
-    payload = await response.json();
-  } catch {
-    payload = null;
-  }
-
+  try { payload = await response.json(); } catch { payload = null; }
   return { status: response.status, payload };
 }
 
 function result(name, actual, expected, detail) {
-  return {
-    name,
-    expected_status: expected,
-    actual_status: actual,
-    passed: actual === expected,
-    detail,
-  };
+  return { name, expected_status: expected, actual_status: actual, passed: actual === expected, detail };
 }
 
 router.post("/run", async (req, res) => {
@@ -111,19 +100,40 @@ router.post("/run", async (req, res) => {
     if (loginErr || !login?.session?.access_token) throw loginErr || new Error("Security test login failed");
     const token = login.session.access_token;
     const root = baseUrl(req);
-
+    const testDate = "2026-01-01";
     const tests = [];
 
-    let r = await request(`${root}/api/shifts`, token, sourceOrg);
+    let r = await request(`${root}/api/shifts?date=${testDate}`, token, sourceOrg);
     tests.push(result("Allowed org schedule read", r.status, 200, "Read-only test user may read schedule in its own org."));
 
     r = await request(`${root}/api/shifts`, token, sourceOrg, "POST", {});
     tests.push(result("Denied schedule write", r.status, 403, "Read-only test user must not create shifts."));
 
+    r = await request(`${root}/api/shift-assignments?date=${testDate}`, token, sourceOrg);
+    tests.push(result("Allowed org assignment read", r.status, 200, "Read-only schedule permission may read daily assignments in its own org."));
+
+    r = await request(`${root}/api/staff/lookup`, token, sourceOrg);
+    tests.push(result("Allowed scoped staff lookup", r.status, 200, "Schedule readers may load only the lightweight name/role lookup in their own org."));
+
+    r = await request(`${root}/api/dashboard?date=${testDate}`, token, sourceOrg);
+    tests.push(result("Denied dashboard without permission", r.status, 403, "Schedule read permission must not implicitly grant dashboard access."));
+
     r = await request(`${root}/api/census/bed-board`, token, targetOrg);
     tests.push(result("Denied cross-org census read", r.status, 403, "User must not read census from an org without membership."));
 
-    r = await request(`${root}/api/shifts`, token, sourceOrg, "GET", undefined, {
+    r = await request(`${root}/api/shifts?date=${testDate}`, token, targetOrg);
+    tests.push(result("Denied cross-org schedule read", r.status, 403, "User must not read another organization's schedule."));
+
+    r = await request(`${root}/api/shift-assignments?date=${testDate}`, token, targetOrg);
+    tests.push(result("Denied cross-org assignment read", r.status, 403, "User must not read another organization's unit assignments."));
+
+    r = await request(`${root}/api/staff/lookup`, token, targetOrg);
+    tests.push(result("Denied cross-org staff lookup", r.status, 403, "User must not enumerate staff names or roles in another organization."));
+
+    r = await request(`${root}/api/dashboard?date=${testDate}`, token, targetOrg);
+    tests.push(result("Denied cross-org dashboard read", r.status, 403, "User must not read another organization's dashboard data."));
+
+    r = await request(`${root}/api/shifts?date=${testDate}`, token, sourceOrg, "GET", undefined, {
       "x-org-id": String(sourceOrg.id),
       "x-org-code": String(targetOrg.org_code),
     });
