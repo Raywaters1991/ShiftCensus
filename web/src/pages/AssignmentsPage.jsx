@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import api from "../services/api";
 
 function todayYmd(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
@@ -6,17 +6,11 @@ function todayYmd(){const d=new Date();return `${d.getFullYear()}-${String(d.get
 export default function AssignmentsPage(){
   const [date,setDate]=useState(todayYmd());
   const [shifts,setShifts]=useState([]);const [staff,setStaff]=useState([]);const [units,setUnits]=useState([]);const [assigned,setAssigned]=useState([]);
-  const [loading,setLoading]=useState(true);const [saving,setSaving]=useState(null);
+  const [loading,setLoading]=useState(true);const [saving,setSaving]=useState(null);const dayRequest=useRef(0);
 
-  async function loadStable(){
-    const [p,u]=await Promise.all([api.get("/staff/lookup"),api.get("/units")]);
-    setStaff(Array.isArray(p)?p:[]);setUnits(Array.isArray(u)?u:[]);
-  }
-  async function loadDay(targetDate=date){
-    const [s,a]=await Promise.all([api.get(`/shifts?date=${encodeURIComponent(targetDate)}`),api.get(`/shift-assignments?date=${encodeURIComponent(targetDate)}`)]);
-    setShifts(Array.isArray(s)?s:[]);setAssigned(Array.isArray(a)?a:[]);
-  }
-  useEffect(()=>{let alive=true;(async()=>{setLoading(true);try{await Promise.all([loadStable(),loadDay(date)]);}finally{if(alive)setLoading(false);}})();return()=>{alive=false};},[]);
+  async function loadStable(){const [p,u]=await Promise.all([api.get("/staff/lookup"),api.get("/units")]);setStaff(Array.isArray(p)?p:[]);setUnits(Array.isArray(u)?u:[]);}
+  async function loadDay(targetDate=date){const requestId=++dayRequest.current;const [s,a]=await Promise.all([api.get(`/shifts?date=${encodeURIComponent(targetDate)}`),api.get(`/shift-assignments?date=${encodeURIComponent(targetDate)}`)]);if(requestId!==dayRequest.current)return;setShifts(Array.isArray(s)?s:[]);setAssigned(Array.isArray(a)?a:[]);}
+  useEffect(()=>{let alive=true;(async()=>{setLoading(true);try{await Promise.all([loadStable(),loadDay(date)]);}finally{if(alive)setLoading(false);}})();return()=>{alive=false;dayRequest.current++;};},[]);
   useEffect(()=>{if(loading)return;loadDay(date);},[date]);
 
   const staffById=useMemo(()=>Object.fromEntries(staff.map(s=>[String(s.id),s])),[staff]);
