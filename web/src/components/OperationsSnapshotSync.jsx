@@ -3,8 +3,6 @@ import api from "../services/api";
 import { saveOfflineOperationsSnapshot } from "../services/offlineCache.js";
 import { useUser } from "../contexts/UserContext.jsx";
 
-function todayYmd(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
-
 export default function OperationsSnapshotSync() {
   const { user, orgId, orgCode, orgName, permissions, isSuperadmin } = useUser();
 
@@ -19,13 +17,19 @@ export default function OperationsSnapshotSync() {
       if (cancelled || syncing || document.visibilityState === "hidden") return;
       syncing = true;
       try {
-        const date=todayYmd();
-        const [shifts, staff, units, assignments] = await Promise.all([
-          api.get(`/shifts?date=${date}`), api.get("/staff/lookup"), api.get("/units"), api.get(`/shift-assignments?date=${date}`)
-        ]);
+        const data = await api.get("/operations-snapshot");
         if (cancelled) return;
-        saveOfflineOperationsSnapshot({ orgId, orgCode, orgName, shifts, staff, units, assignments });
+        saveOfflineOperationsSnapshot({
+          orgId,
+          orgCode,
+          orgName,
+          shifts: Array.isArray(data?.shifts) ? data.shifts : [],
+          staff: Array.isArray(data?.staff) ? data.staff : [],
+          units: Array.isArray(data?.units) ? data.units : [],
+          assignments: Array.isArray(data?.assignments) ? data.assignments : [],
+        });
       } catch (e) {
+        // Preserve the previous Last Known Good snapshot on any failure.
         console.warn("Operations snapshot not updated", e);
       } finally { syncing = false; }
     }
