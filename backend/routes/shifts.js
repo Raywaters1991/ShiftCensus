@@ -31,6 +31,21 @@ async function getFacilityTimezone(orgId) {
   catch { timezone = "America/Los_Angeles"; }
   return timezone;
 }
+async function approvedTimeOff(orgCode, staffId, shiftDate) {
+  if (!staffId || !shiftDate) return null;
+  const { data, error } = await supabaseAdmin
+    .from("shift_requests")
+    .select("id,start_date,end_date,reason")
+    .eq("org_code", orgCode)
+    .eq("staff_id", staffId)
+    .eq("request_type", "time_off")
+    .eq("status", "approved")
+    .lte("start_date", shiftDate)
+    .gte("end_date", shiftDate)
+    .limit(1);
+  if (error) throw error;
+  return data?.[0] || null;
+}
 
 router.use(requireAuth);
 router.use(requireOrg);
@@ -74,6 +89,8 @@ router.post("/", async (req, res) => {
     const { staff_id, shift_date, shiftType } = req.body || {};
     if (!staff_id || !shift_date || !shiftType) return res.status(400).json({ error: "Missing required fields: staff_id, shift_date, shiftType" });
     if (!validDate(shift_date)) return res.status(400).json({ error: "Invalid shift_date" });
+    const leave = await approvedTimeOff(orgCode, staff_id, shift_date);
+    if (leave) return res.status(409).json({ error: "This employee has approved time off on this date.", code: "APPROVED_TIME_OFF", time_off: leave });
     const facilityTimezone = await getFacilityTimezone(req.orgId);
     const { data: staffData, error: staffErr } = await supabaseAdmin.from("staff").select("role").eq("id", staff_id).eq("org_code", orgCode).maybeSingle();
     if (staffErr || !staffData) return res.status(400).json({ error: "Invalid staff_id" });
@@ -94,6 +111,8 @@ router.put("/:id", async (req, res) => {
     const { staff_id, shift_date, shiftType } = req.body || {};
     if (!staff_id || !shift_date || !shiftType) return res.status(400).json({ error: "Missing required fields: staff_id, shift_date, shiftType" });
     if (!validDate(shift_date)) return res.status(400).json({ error: "Invalid shift_date" });
+    const leave = await approvedTimeOff(orgCode, staff_id, shift_date);
+    if (leave) return res.status(409).json({ error: "This employee has approved time off on this date.", code: "APPROVED_TIME_OFF", time_off: leave });
     const facilityTimezone = await getFacilityTimezone(req.orgId);
     const { data: staffData } = await supabaseAdmin.from("staff").select("role").eq("id", staff_id).eq("org_code", orgCode).maybeSingle();
     if (!staffData) return res.status(400).json({ error: "Invalid staff_id" });
