@@ -52,6 +52,22 @@ router.get("/", async (req, res) => {
   } catch (err) { console.error("SHIFT GET ERROR:", err); res.status(500).json({ error: "Server error" }); }
 });
 
+router.post("/open", async (req,res)=>{
+  try{
+    const orgCode=req.orgCode||req.org_code;
+    const { role, shift_date, shiftType }=req.body||{};
+    if(!role||!shift_date||!shiftType) return res.status(400).json({error:"Missing required fields: role, shift_date, shiftType"});
+    if(!validDate(shift_date)) return res.status(400).json({error:"Invalid shift_date"});
+    const facilityTimezone=await getFacilityTimezone(req.orgId);
+    const {data:setting,error:settingErr}=await supabaseAdmin.from("shift_settings").select("*").eq("org_code",orgCode).eq("role",role).eq("shift_type",shiftType).maybeSingle();
+    if(settingErr||!setting) return res.status(400).json({error:`No shift settings found for ${role} ${shiftType}`});
+    const {startUtc,endUtc}=computeShiftTimes(shift_date,setting,facilityTimezone);
+    const {data,error}=await supabaseAdmin.from("shifts").insert([{staff_id:null,role,unit:null,assignment_number:null,shift_date,shift_type:shiftType,start_local:setting.start_local,end_local:setting.end_local,start_time:startUtc,end_time:endUtc,timezone:facilityTimezone,org_code:orgCode}]).select();
+    if(error) throw error;
+    res.json(data?.[0]||null);
+  }catch(err){console.error("OPEN SHIFT POST ERROR:",err);res.status(500).json({error:"Server error"})}
+});
+
 router.post("/", async (req, res) => {
   try {
     const orgCode = req.orgCode || req.org_code;
