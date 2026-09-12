@@ -1,0 +1,40 @@
+import {useEffect,useMemo,useState} from "react";
+import api from "../services/api";
+import {useUser} from "../contexts/UserContext.jsx";
+
+const COMMON_TIMEZONES=[
+  "America/Los_Angeles","America/Denver","America/Phoenix","America/Chicago","America/New_York","America/Anchorage","Pacific/Honolulu"
+];
+const SHIFT_TYPES=["Day","Evening","Night"];
+
+export default function FacilityOperationsSettingsPage(){
+  const{orgName}=useUser();
+  const[settings,setSettings]=useState({timezone:"America/Los_Angeles",lunch_break_minutes:30,pay_period_length_days:14,pay_period_anchor_date:"",week_starts_on:"Sunday"});
+  const[shiftSettings,setShiftSettings]=useState([]);
+  const[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[editing,setEditing]=useState(null);
+  const[form,setForm]=useState({role:"",shift_type:"Day",start_local:"07:00",end_local:"15:00"});
+  async function load(){setLoading(true);try{const[a,b]=await Promise.all([api.get("/org-settings/operations"),api.get("/shift-settings")]);setSettings({timezone:a?.timezone||"America/Los_Angeles",lunch_break_minutes:Number(a?.lunch_break_minutes??30),pay_period_length_days:Number(a?.pay_period_length_days??14),pay_period_anchor_date:a?.pay_period_anchor_date||"",week_starts_on:a?.week_starts_on||"Sunday"});setShiftSettings(Array.isArray(b)?b:[]);}finally{setLoading(false)}}
+  useEffect(()=>{load()},[]);
+  const roles=useMemo(()=>[...new Set(shiftSettings.map(x=>x.role).filter(Boolean))].sort(),[shiftSettings]);
+  async function saveOperations(){setSaving(true);try{const out=await api.put("/org-settings/operations",{...settings,lunch_break_minutes:Number(settings.lunch_break_minutes),pay_period_length_days:Number(settings.pay_period_length_days),pay_period_anchor_date:settings.pay_period_anchor_date||null});setSettings(s=>({...s,...out,pay_period_anchor_date:out?.pay_period_anchor_date||""}));alert("Facility operations settings saved.");}catch(e){alert(e?.message||"Unable to save facility settings.")}finally{setSaving(false)}}
+  function beginEdit(x){setEditing(x);setForm({role:x.role||"",shift_type:x.shift_type||"Day",start_local:String(x.start_local||"07:00").slice(0,5),end_local:String(x.end_local||"15:00").slice(0,5)})}
+  function beginNew(){setEditing({id:null});setForm({role:roles[0]||"CNA",shift_type:"Day",start_local:"07:00",end_local:"15:00"})}
+  async function saveShift(){if(!form.role||!form.shift_type||!form.start_local||!form.end_local)return alert("Complete all shift fields.");setSaving(true);try{if(editing?.id)await api.patch(`/shift-settings/${editing.id}`,form);else await api.post("/shift-settings",form);const rows=await api.get("/shift-settings");setShiftSettings(Array.isArray(rows)?rows:[]);setEditing(null)}catch(e){alert(e?.message||"Unable to save shift settings.")}finally{setSaving(false)}}
+  async function removeShift(x){if(!confirm(`Delete ${x.role} ${x.shift_type} shift settings?`))return;await api.delete(`/shift-settings/${x.id}`);setShiftSettings(v=>v.filter(y=>y.id!==x.id));}
+  if(loading)return <div style={{padding:32}}>Loading facility settings…</div>;
+  return <div style={{padding:24,color:"var(--text)",maxWidth:1100,margin:"0 auto"}}>
+    <div style={{marginBottom:18}}><h1 style={{marginBottom:4}}>Facility Operations Settings</h1><div style={{opacity:.65}}>{orgName||"Current facility"} · One place for the rules that drive scheduling and reporting.</div></div>
+    <section style={card}><h2 style={{marginTop:0}}>Operational Rules</h2><div style={grid}>
+      <label style={label}>Facility timezone<select style={input} value={settings.timezone} onChange={e=>setSettings(s=>({...s,timezone:e.target.value}))}>{COMMON_TIMEZONES.map(z=><option key={z}>{z}</option>)}</select></label>
+      <label style={label}>Default meal deduction (minutes)<input style={input} type="number" min="0" max="180" value={settings.lunch_break_minutes} onChange={e=>setSettings(s=>({...s,lunch_break_minutes:e.target.value}))}/></label>
+      <label style={label}>Week starts on<select style={input} value={settings.week_starts_on} onChange={e=>setSettings(s=>({...s,week_starts_on:e.target.value}))}><option>Sunday</option><option>Monday</option></select></label>
+      <label style={label}>Pay period length (days)<input style={input} type="number" min="7" max="31" value={settings.pay_period_length_days} onChange={e=>setSettings(s=>({...s,pay_period_length_days:e.target.value}))}/></label>
+      <label style={label}>Pay period anchor date<input style={input} type="date" value={settings.pay_period_anchor_date||""} onChange={e=>setSettings(s=>({...s,pay_period_anchor_date:e.target.value}))}/></label>
+    </div><div style={{fontSize:12,opacity:.65,marginTop:8}}>Meal deduction is an operational planning setting, not a payroll timecard. ShiftCensus should not be treated as the system of record for worked hours.</div><button disabled={saving} onClick={saveOperations} style={{...btn,background:"#2563eb",color:"white",marginTop:14}}>{saving?"Saving…":"Save Operational Rules"}</button></section>
+    <section style={card}><div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",flexWrap:"wrap"}}><div><h2 style={{margin:"0 0 4px"}}>Shift Hours</h2><div style={{opacity:.65,fontSize:13}}>These start/end times determine scheduled shift spans for each role and shift type.</div></div><button onClick={beginNew} style={btn}>Add Shift Rule</button></div>
+      <div style={{display:"grid",gap:8,marginTop:14}}>{shiftSettings.map(x=><div key={x.id} style={{display:"grid",gridTemplateColumns:"1.2fr 1fr 1fr auto",gap:10,alignItems:"center",padding:12,border:"1px solid var(--border)",borderRadius:10}}><b>{x.role}</b><span>{x.shift_type}</span><span>{String(x.start_local||"").slice(0,5)}–{String(x.end_local||"").slice(0,5)}</span><div style={{display:"flex",gap:6}}><button style={btn} onClick={()=>beginEdit(x)}>Edit</button><button style={{...btn,color:"#fca5a5"}} onClick={()=>removeShift(x)}>Delete</button></div></div>)}</div>
+    </section>
+    {editing&&<div style={overlay} onMouseDown={()=>!saving&&setEditing(null)}><div style={dialog} onMouseDown={e=>e.stopPropagation()}><h2>{editing.id?"Edit Shift Rule":"Add Shift Rule"}</h2><label style={label}>Role<input style={input} value={form.role} onChange={e=>setForm(f=>({...f,role:e.target.value}))} placeholder="CNA, LPN, RN…"/></label><label style={label}>Shift<select style={input} value={form.shift_type} onChange={e=>setForm(f=>({...f,shift_type:e.target.value}))}>{SHIFT_TYPES.map(x=><option key={x}>{x}</option>)}</select></label><label style={label}>Start<input style={input} type="time" value={form.start_local} onChange={e=>setForm(f=>({...f,start_local:e.target.value}))}/></label><label style={label}>End<input style={input} type="time" value={form.end_local} onChange={e=>setForm(f=>({...f,end_local:e.target.value}))}/></label><div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:16}}><button style={btn} onClick={()=>setEditing(null)}>Cancel</button><button disabled={saving} style={{...btn,background:"#2563eb",color:"white"}} onClick={saveShift}>{saving?"Saving…":"Save"}</button></div></div></div>}
+  </div>
+}
+const card={padding:18,border:"1px solid var(--border)",borderRadius:14,background:"var(--surface)",marginBottom:16};const grid={display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:12};const label={display:"grid",gap:6,fontWeight:800};const input={padding:"10px 11px",borderRadius:9,border:"1px solid var(--border)",background:"var(--surface)",color:"inherit"};const btn={padding:"9px 12px",borderRadius:10,border:"1px solid var(--border)",background:"var(--surface)",color:"inherit",fontWeight:800};const overlay={position:"fixed",inset:0,background:"rgba(0,0,0,.65)",display:"grid",placeItems:"center",zIndex:10000,padding:18};const dialog={width:"min(460px,95vw)",background:"#111",border:"1px solid #333",borderRadius:16,padding:20,color:"white"};
