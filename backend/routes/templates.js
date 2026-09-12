@@ -16,6 +16,15 @@ function canManageTemplates(req) {
   return !!req.schedulePermissions?.canWrite;
 }
 
+async function validateStaffIds(orgCode, staffIds) {
+  if (!Array.isArray(staffIds) || staffIds.length === 0) return { valid: true, ids: [] };
+  const ids = [...new Set(staffIds.map((id) => Number(id)).filter(Number.isFinite))];
+  if (ids.length !== new Set(staffIds.map(String)).size) return { valid: false, ids: [] };
+  const { data, error } = await supabaseAdmin.from("staff").select("id").eq("org_code", orgCode).in("id", ids);
+  if (error) throw error;
+  return { valid: (data || []).length === ids.length, ids };
+}
+
 router.get("/", async (req, res) => {
   try {
     const orgCode = req.orgCode || req.org_code;
@@ -37,16 +46,24 @@ router.post("/", async (req, res) => {
     if (!canManageTemplates(req)) return res.status(403).json({ error: "Not allowed" });
     const orgCode = req.orgCode || req.org_code;
     const { name, role, shift_type, unit, assignment_number, days_of_week, staff_ids } = req.body || {};
+
+    // Validate every referenced employee before creating the template so an invalid
+    // cross-org staff id cannot leave behind an orphan/partial template row.
+    const staffCheck = await validateStaffIds(orgCode, staff_ids);
+    if (!staffCheck.valid) return res.status(400).json({ error: "One or more staff members do not belong to this organization" });
+
     const { data: template, error } = await supabaseAdmin.from("schedule_templates").insert([{name,role,shift_type,unit,assignment_number,days_of_week,org_code:orgCode}]).select().single();
     if (error) throw error;
-    if (Array.isArray(staff_ids) && staff_ids.length > 0) {
-      const { data: validStaff, error: staffCheckErr } = await supabaseAdmin.from("staff").select("id").eq("org_code", orgCode).in("id", staff_ids);
-      if (staffCheckErr) throw staffCheckErr;
-      if ((validStaff || []).length !== new Set(staff_ids.map(String)).size) return res.status(400).json({ error: "One or more staff members do not belong to this organization" });
-      const { error: staffErr } = await supabaseAdmin.from("schedule_template_staff").insert(staff_ids.map(staff_id => ({template_id:template.id,staff_id})));
-      if (staffErr) throw staffErr;
+
+    if (staffCheck.ids.length > 0) {
+      const { error: staffErr } = await supabaseAdmin.from("schedule_template_staff").insert(staffCheck.ids.map(staff_id => ({template_id:template.id,staff_id})));
+      if (staffErr) {
+        // Best-effort cleanup keeps failed creates from persisting partial rows.
+        await supabaseAdmin.from("schedule_templates").delete().eq("id", template.id).eq("org_code", orgCode);
+        throw staffErr;
+      }
     }
-    res.json(template);
+    res.json({...template, staff_ids:staffCheck.ids});
   } catch (err) {
     console.error("TEMPLATE CREATE ERROR:", err);
     res.status(500).json({ error: "Failed to create template" });
@@ -62,16 +79,18 @@ router.put("/:id", async (req, res) => {
     if (ownErr) throw ownErr;
     if (!owned) return res.status(404).json({ error: "Template not found in this organization" });
     const { name, role, shift_type, unit, assignment_number, days_of_week, staff_ids } = req.body || {};
-    if (Array.isArray(staff_ids) && staff_ids.length > 0) {
-      const { data: validStaff, error: staffCheckErr } = await supabaseAdmin.from("staff").select("id").eq("org_code", orgCode).in("id", staff_ids);
-      if (staffCheckErr) throw staffCheckErr;
-      if ((validStaff || []).length !== new Set(staff_ids.map(String)).size) return res.status(400).json({ error: "One or more staff members do not belong to this organization" });
-    }
+
+    const staffCheck = await validateStaffIds(orgCode, staff_ids);
+    if (!staffCheck.valid) return res.status(400).json({ error: "One or more staff members do not belong to this organization" });
+
     const { data: updated, error } = await supabaseAdmin.from("schedule_templates").update({name,role,shift_type,unit,assignment_number,days_of_week}).eq("id",id).eq("org_code",orgCode).select().single();
     if (error) throw error;
     await supabaseAdmin.from("schedule_template_staff").delete().eq("template_id",id);
-    if (Array.isArray(staff_ids) && staff_ids.length > 0) await supabaseAdmin.from("schedule_template_staff").insert(staff_ids.map(staff_id=>({template_id:id,staff_id})));
-    res.json(updated);
+    if (staffCheck.ids.length > 0) {
+      const { error: linkErr } = await supabaseAdmin.from("schedule_template_staff").insert(staffCheck.ids.map(staff_id=>({template_id:id,staff_id})));
+      if (linkErr) throw linkErr;
+    }
+    res.json({...updated, staff_ids:staffCheck.ids});
   } catch (err) {
     console.error("TEMPLATE UPDATE ERROR:", err);
     res.status(500).json({ error: "Failed to update template" });
