@@ -66,6 +66,7 @@ app.use("/api/adminmanagement", requireAuth, requireOrg, requireManageAdmins, re
 app.use("/api/units", require("./routes/units"));
 app.use("/api/admin", require("./routes/admin"));
 app.use("/api/census", requireAuth, requireOrg, requireCensusAccess, require("./routes/census"));
+app.use("/api/dashboard", require("./routes/dashboard"));
 app.use("/api/shifts", require("./routes/shifts"));
 app.use("/api/shift-assignments", require("./routes/shiftAssignments"));
 app.use("/api/staff", require("./routes/staff"));
