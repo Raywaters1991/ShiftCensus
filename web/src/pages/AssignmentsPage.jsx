@@ -8,9 +8,16 @@ export default function AssignmentsPage(){
   const [shifts,setShifts]=useState([]);const [staff,setStaff]=useState([]);const [units,setUnits]=useState([]);const [assigned,setAssigned]=useState([]);
   const [loading,setLoading]=useState(true);const [saving,setSaving]=useState(null);const dayRequest=useRef(0);
 
-  async function loadStable(){const [p,u]=await Promise.all([api.get("/staff/lookup"),api.get("/units")]);setStaff(Array.isArray(p)?p:[]);setUnits(Array.isArray(u)?u:[]);}
-  async function loadDay(targetDate=date){const requestId=++dayRequest.current;const [s,a]=await Promise.all([api.get(`/shifts?date=${encodeURIComponent(targetDate)}`),api.get(`/shift-assignments?date=${encodeURIComponent(targetDate)}`)]);if(requestId!==dayRequest.current)return;setShifts(Array.isArray(s)?s:[]);setAssigned(Array.isArray(a)?a:[]);}
-  useEffect(()=>{let alive=true;(async()=>{setLoading(true);try{await Promise.all([loadStable(),loadDay(date)]);}finally{if(alive)setLoading(false);}})();return()=>{alive=false;dayRequest.current++;};},[]);
+  async function loadDay(targetDate=date){
+    const requestId=++dayRequest.current;
+    const data=await api.get(`/operations-snapshot?date=${encodeURIComponent(targetDate)}`);
+    if(requestId!==dayRequest.current)return;
+    setShifts(Array.isArray(data?.shifts)?data.shifts:[]);
+    setStaff(Array.isArray(data?.staff)?data.staff:[]);
+    setUnits(Array.isArray(data?.units)?data.units:[]);
+    setAssigned(Array.isArray(data?.assignments)?data.assignments:[]);
+  }
+  useEffect(()=>{let alive=true;(async()=>{setLoading(true);try{await loadDay(date);}finally{if(alive)setLoading(false);}})();return()=>{alive=false;dayRequest.current++;};},[]);
   useEffect(()=>{if(loading)return;loadDay(date);},[date]);
 
   const staffById=useMemo(()=>Object.fromEntries(staff.map(s=>[String(s.id),s])),[staff]);
