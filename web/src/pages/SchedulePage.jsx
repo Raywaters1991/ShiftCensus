@@ -5,7 +5,7 @@ function monthRange(month){return{from:ymd(new Date(month.getFullYear(),month.ge
 export default function SchedulePage(){
  const[shifts,setShifts]=useState([]),[staff,setStaff]=useState([]),[month,setMonth]=useState(()=>new Date(new Date().getFullYear(),new Date().getMonth(),1)),[modal,setModal]=useState(null),[form,setForm]=useState({staffId:"",date:"",shiftType:""}),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false);
  async function loadMonth(m=month){const{from,to}=monthRange(m);const s=await api.get(`/shifts?from=${from}&to=${to}`);setShifts(Array.isArray(s)?s:[]);}
- useEffect(()=>{(async()=>{setLoading(true);try{const[p]=await Promise.all([api.get("/staff"),loadMonth(month)]);setStaff(Array.isArray(p)?p:[]);}finally{setLoading(false)}})();},[]);
+ useEffect(()=>{(async()=>{setLoading(true);try{const[p]=await Promise.all([api.get("/staff/lookup"),loadMonth(month)]);setStaff(Array.isArray(p)?p:[]);}finally{setLoading(false)}})();},[]);
  useEffect(()=>{if(!loading)loadMonth(month);},[month]);
  const staffById=useMemo(()=>Object.fromEntries(staff.map(s=>[String(s.id),s])),[staff]);
  const days=useMemo(()=>{const first=new Date(month.getFullYear(),month.getMonth(),1),last=new Date(month.getFullYear(),month.getMonth()+1,0),out=Array(first.getDay()).fill(null);for(let i=1;i<=last.getDate();i++)out.push(new Date(month.getFullYear(),month.getMonth(),i));return out},[month]);
