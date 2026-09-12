@@ -22,14 +22,7 @@ router.get("/", async (req, res) => {
     }
 
     if (String(req.role || "").toLowerCase() !== "superadmin") {
-      const { data: membership, error: membershipError } = await supabaseAdmin
-        .from("org_memberships")
-        .select("can_dashboard_read,is_active")
-        .eq("user_id", req.userId)
-        .eq("org_id", orgId)
-        .maybeSingle();
-
-      if (membershipError) throw membershipError;
+      const membership = req.orgMembership;
       if (!membership?.is_active || !membership?.can_dashboard_read) {
         return res.status(403).json({ error: "Dashboard access required" });
       }
