@@ -4,6 +4,7 @@ const router = express.Router();
 const supabaseAdmin = require("../supabaseAdmin");
 const { requireAuth } = require("../middleware/auth");
 const { requireOrg } = require("../middleware/orgGuard");
+const { requireScheduleAccess } = require("../middleware/scheduleAccess");
 
 const PERMISSION_KEYS = ["is_admin","can_manage_admins","can_dashboard_read","can_schedule_read","can_schedule_write","can_census_read","can_census_write"];
 
@@ -34,6 +35,7 @@ async function getAuthUserByEmail(email) {
   return (data?.users||[]).find(u=>String(u.email||"").toLowerCase()===e)||null;
 }
 async function getMyMembership(req) {
+  if(req.orgMembership)return req.orgMembership;
   if(req._myMembership)return req._myMembership; const userId=req.user?.id||req.userId; if(!userId||!req.orgId)return null;
   const {data,error}=await supabaseAdmin.from("org_memberships").select("role,is_active,is_admin,can_manage_admins,can_dashboard_read,can_schedule_write,can_schedule_read,can_census_write,can_census_read,department_id,department_locked").eq("user_id",userId).eq("org_id",req.orgId).maybeSingle();
   if(error){console.error("GET MY MEMBERSHIP ERROR:",error);return null;} req._myMembership=data||null; return req._myMembership;
@@ -57,7 +59,7 @@ async function getOrCreateAuthUserByEmail(email,orgCode,staffId){
 
 router.use(requireAuth); router.use(requireOrg);
 
-router.get("/lookup",async(req,res)=>{try{
+router.get("/lookup",requireScheduleAccess,async(req,res)=>{try{
   const orgCode=req.orgCode||req.org_code;
   const {data,error}=await supabaseAdmin.from("staff").select("id,name,role").eq("org_code",orgCode).order("name");
   if(error)throw error;
