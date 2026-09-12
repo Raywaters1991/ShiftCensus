@@ -23,6 +23,8 @@ export default function OperationsSnapshotSync() {
           orgId,
           orgCode,
           orgName,
+          date: data?.date || null,
+          timezone: data?.timezone || null,
           shifts: Array.isArray(data?.shifts) ? data.shifts : [],
           staff: Array.isArray(data?.staff) ? data.staff : [],
           units: Array.isArray(data?.units) ? data.units : [],
