@@ -23,22 +23,13 @@ function compactTime(value){
   return m===0?`${hour}${suffix}`:`${hour}:${String(m).padStart(2,"0")}${suffix}`;
 }
 function shiftTimeRange(s){return `${compactTime(s?.start_local||s?.start_time)}–${compactTime(s?.end_local||s?.end_time)}`;}
-function minutesFromTime(value){const m=String(value||"").match(/^(\d{1,2}):(\d{2})/);return m?Number(m[1])*60+Number(m[2]):null;}
-function currentMinutes(date,timezone){
-  const parts=new Intl.DateTimeFormat("en-US",{timeZone:timezone,hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(date);
-  const h=Number(parts.find(p=>p.type==="hour")?.value||0),m=Number(parts.find(p=>p.type==="minute")?.value||0);return h*60+m;
-}
-function isCurrentShift(s,mins){
-  const start=minutesFromTime(s?.start_local),end=minutesFromTime(s?.end_local);if(start==null||end==null)return false;
-  return end>start?(mins>=start&&mins<end):(mins>=start||mins<end);
-}
 
 export default function DashboardAssignmentsPage(){
   const {orgLogo}=useUser();
   const [clock,setClock]=useState(new Date());
   const [facilityTimezone,setFacilityTimezone]=useState("America/Los_Angeles");
   const [facilityDate,setFacilityDate]=useState("");
-  const [shifts,setShifts]=useState([]);const [staff,setStaff]=useState([]);const [assignments,setAssignments]=useState([]);const [census,setCensus]=useState({occupied:0,leave:0,empty:0,total:0});const [loading,setLoading]=useState(true);
+  const [shifts,setShifts]=useState([]);const [activeShifts,setActiveShifts]=useState([]);const [staff,setStaff]=useState([]);const [assignments,setAssignments]=useState([]);const [census,setCensus]=useState({occupied:0,leave:0,empty:0,total:0});const [loading,setLoading]=useState(true);
   const [showAssignments,setShowAssignments]=useState(false);
   const [secondsLeft,setSecondsLeft]=useState(ASSIGNMENT_VIEW_SECONDS);
 
@@ -46,6 +37,7 @@ export default function DashboardAssignmentsPage(){
     try{
       const data=await api.get("/dashboard");
       setShifts(Array.isArray(data?.shifts)?data.shifts:[]);
+      setActiveShifts(Array.isArray(data?.active_shifts)?data.active_shifts:[]);
       setStaff(Array.isArray(data?.staff)?data.staff:[]);
       setAssignments(Array.isArray(data?.assignments)?data.assignments:[]);
       setCensus(data?.census&&typeof data.census==="object"?data.census:{occupied:0,leave:0,empty:0,total:0});
@@ -74,9 +66,14 @@ export default function DashboardAssignmentsPage(){
   const scheduledHours=useMemo(()=>shifts.reduce((sum,s)=>sum+shiftHours(s),0),[shifts]);
   const projectedPpd=patientDays?scheduledHours/patientDays:null;
   const groups=useMemo(()=>{const g={Day:[],Evening:[],Night:[]};shifts.forEach(s=>{const key=s.shift_type||"Day";(g[key]||(g[key]=[])).push(s)});return g},[shifts]);
-  const visible=["Day","Evening","Night"].filter(k=>groups[k]?.length||k!=="Evening");
-  const mins=currentMinutes(clock,facilityTimezone);
-  const current=(["Day","Evening","Night"].find(key=>(groups[key]||[]).some(s=>isCurrentShift(s,mins))))||null;
+  const activeGroups=useMemo(()=>{const g={Day:[],Evening:[],Night:[]};activeShifts.forEach(s=>{const key=s.shift_type||"Day";(g[key]||(g[key]=[])).push(s)});return g},[activeShifts]);
+  const current=(["Day","Evening","Night"].find(key=>(activeGroups[key]||[]).length))||null;
+  const displayGroups=useMemo(()=>{
+    const g={Day:groups.Day||[],Evening:groups.Evening||[],Night:groups.Night||[]};
+    if(current&&activeGroups[current]?.length)g[current]=activeGroups[current];
+    return g;
+  },[groups,activeGroups,current]);
+  const visible=["Day","Evening","Night"].filter(k=>displayGroups[k]?.length||k!=="Evening");
   const clockText=new Intl.DateTimeFormat("en-US",{timeZone:facilityTimezone,dateStyle:"medium",timeStyle:"medium"}).format(clock);
 
   if(loading)return <div style={{padding:40}}>Loading Dashboard…</div>;
@@ -92,10 +89,10 @@ export default function DashboardAssignmentsPage(){
     <div style={{maxWidth:900,margin:"0 auto 24px",display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:12}}><Stat label="Scheduled Nursing Hours" value={scheduledHours.toFixed(1)}/><Stat label="Projected PPD (24 hr)" value={projectedPpd==null?"—":projectedPpd.toFixed(2)} note="Scheduled span before meal deductions"/></div>
 
     <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.min(visible.length,3)},minmax(0,1fr))`,gap:24,maxWidth:visible.length===2?1100:1500,margin:"0 auto"}}>
-      {visible.map(key=><ShiftCard key={key} label={`${key} Shift`} active={current===key} rows={groups[key]||[]} staffById={staffById} asgByShift={asgByShift}/>) }
+      {visible.map(key=><ShiftCard key={key} label={`${key} Shift`} active={current===key} rows={displayGroups[key]||[]} staffById={staffById} asgByShift={asgByShift}/>) }
     </div>
 
-    {showAssignments&&<AssignmentOverlay groups={groups} staffById={staffById} asgByShift={asgByShift} secondsLeft={secondsLeft} onClose={()=>setShowAssignments(false)}/>} 
+    {showAssignments&&<AssignmentOverlay groups={displayGroups} staffById={staffById} asgByShift={asgByShift} secondsLeft={secondsLeft} onClose={()=>setShowAssignments(false)}/>} 
   </div>
 }
 
