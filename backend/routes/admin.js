@@ -27,10 +27,20 @@ router.get("/profile", requireAuth, async (req, res) => {
     const headerOrgCode = req.headers["x-org-code"] ? String(req.headers["x-org-code"]).trim() : "";
     const metaOrgCode = user?.user_metadata?.org_code ? String(user.user_metadata.org_code).trim() : "";
 
+    const { data: profileRow } = await supabaseAdmin.from("profiles").select("full_name").eq("id", user.id).maybeSingle();
+    let displayName = profileRow?.full_name || null;
+    if (!displayName) {
+      let staffQuery = supabaseAdmin.from("staff").select("name,org_code").eq("user_id", user.id);
+      if (headerOrgCode) staffQuery = staffQuery.eq("org_code", headerOrgCode);
+      const { data: staffRows } = await staffQuery.limit(1);
+      displayName = staffRows?.[0]?.name || null;
+    }
+
     const profile = {
       email: user.email,
       uid: user.id,
       role,
+      full_name: displayName,
       org_code: null,
       org_name: null,
       org_logo: null,
@@ -45,10 +55,7 @@ router.get("/profile", requireAuth, async (req, res) => {
     else query = query.eq("org_code", metaOrgCode).maybeSingle();
 
     const { data: org, error } = await query;
-    if (error || !org?.id) {
-      // Never echo an unverified caller-supplied org code back to the client.
-      return res.json(profile);
-    }
+    if (error || !org?.id) return res.json(profile);
 
     if (!superadmin) {
       const { data: membership, error: membershipError } = await supabaseAdmin
@@ -65,8 +72,6 @@ router.get("/profile", requireAuth, async (req, res) => {
       }
 
       if (!membership) {
-        // An explicit forged org header is an authorization failure. A stale
-        // metadata org is simply ignored so login can recover normally.
         if (headerOrgId || headerOrgCode) return res.status(403).json({ error: "No access to this organization" });
         return res.json(profile);
       }
