@@ -17,6 +17,16 @@ function dateInTimeZone(timezone) {
   const get = (type) => parts.find((p) => p.type === type)?.value;
   return `${get("year")}-${get("month")}-${get("day")}`;
 }
+function addDays(dateString, amount) {
+  const [year, month, day] = String(dateString).split("-").map(Number);
+  const d = new Date(Date.UTC(year, month - 1, day + amount));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+function isActiveNow(shift, nowMs) {
+  const start = Date.parse(shift?.start_time || "");
+  const end = Date.parse(shift?.end_time || "");
+  return Number.isFinite(start) && Number.isFinite(end) && start <= nowMs && nowMs < end;
+}
 
 router.use(requireAuth);
 router.use(requireOrg);
@@ -50,14 +60,30 @@ router.get("/", async (req, res) => {
     catch { timezone = "America/Los_Angeles"; }
 
     const date = requestedDate || dateInTimeZone(timezone);
+    const previousDate = addDays(date, -1);
+    const shiftSelect = "id,staff_id,role,shift_date,shift_type,start_local,end_local,start_time,end_time,timezone";
 
-    const [shiftResult, bedResult] = await Promise.all([
-      supabaseAdmin
-        .from("shifts")
-        .select("id,staff_id,role,shift_date,shift_type,start_local,end_local,start_time,end_time,timezone")
-        .eq("org_code", orgCode)
-        .eq("shift_date", date)
-        .order("start_time", { ascending: true }),
+    const shiftQuery = supabaseAdmin
+      .from("shifts")
+      .select(shiftSelect)
+      .eq("org_code", orgCode)
+      .eq("shift_date", date)
+      .order("start_time", { ascending: true });
+
+    // For the live wallboard only, also inspect yesterday's shifts so a shift that
+    // started before midnight can remain the active crew after the calendar date rolls.
+    const priorShiftQuery = requestedDate
+      ? Promise.resolve({ data: [], error: null })
+      : supabaseAdmin
+          .from("shifts")
+          .select(shiftSelect)
+          .eq("org_code", orgCode)
+          .eq("shift_date", previousDate)
+          .order("start_time", { ascending: true });
+
+    const [shiftResult, priorShiftResult, bedResult] = await Promise.all([
+      shiftQuery,
+      priorShiftQuery,
       supabaseAdmin
         .from("facility_beds")
         .select("id")
@@ -66,12 +92,21 @@ router.get("/", async (req, res) => {
     ]);
 
     if (shiftResult.error) throw shiftResult.error;
+    if (priorShiftResult.error) throw priorShiftResult.error;
     if (bedResult.error) throw bedResult.error;
 
     const shifts = shiftResult.data || [];
+    const nowMs = Date.now();
+    const candidateActiveShifts = requestedDate ? [] : [...(priorShiftResult.data || []), ...shifts];
+    const activeShifts = candidateActiveShifts.filter((shift) => isActiveNow(shift, nowMs));
+    const supportShifts = [...shifts];
+    for (const shift of activeShifts) {
+      if (!supportShifts.some((existing) => String(existing.id) === String(shift.id))) supportShifts.push(shift);
+    }
+
     const activeBeds = bedResult.data || [];
-    const staffIds = [...new Set(shifts.map((s) => s.staff_id).filter(Boolean))];
-    const shiftIds = shifts.map((s) => s.id).filter(Boolean);
+    const staffIds = [...new Set(supportShifts.map((s) => s.staff_id).filter(Boolean))];
+    const shiftIds = supportShifts.map((s) => s.id).filter(Boolean);
     const bedIds = activeBeds.map((b) => b.id).filter(Boolean);
 
     const [staffResult, assignmentResult, censusResult] = await Promise.all([
@@ -118,6 +153,7 @@ router.get("/", async (req, res) => {
       timezone,
       census: { occupied, leave, empty, total },
       shifts,
+      active_shifts: activeShifts,
       staff: staffResult.data || [],
       assignments: assignmentResult.data || [],
     });
