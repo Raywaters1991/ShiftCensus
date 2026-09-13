@@ -60,7 +60,7 @@ function ShiftCard({label,active,rows,staffById,asgByShift}){
   const cnas=rows.filter(s=>String(staffById[String(s.staff_id)]?.role||s.role).toUpperCase()==="CNA");
   const hours=rows.reduce((sum,s)=>sum+shiftHours(s),0);
   const line=s=>{const a=asgByShift[String(s.id)]||{};return `${a.unit||"Unassigned"} — ${fmtHours(shiftHours(s))}`};
-  return <div style={{padding:"14px 16px",minHeight:"clamp(170px,26vh,225px)",maxHeight:"clamp(210px,31vh,270px)",overflow:"hidden",borderRadius:14,background:"var(--card-bg,rgba(255,255,255,.08))",border:active?"2px solid #3b82f6":"1px solid var(--border)",boxSizing:"border-box",fontSize:"clamp(11px,1.35vh,13px)"}}>
+  return <div style={{padding:"14px 16px",minHeight:"clamp(170px,26vh,225px)",overflow:"visible",borderRadius:14,background:"var(--card-bg,rgba(255,255,255,.08))",border:active?"2px solid #3b82f6":"1px solid var(--border)",boxSizing:"border-box",fontSize:"clamp(11px,1.35vh,13px)"}}>
     <h2 style={{margin:"0 0 6px",fontSize:"clamp(17px,2.2vh,21px)"}}>{label}</h2>
     <h3 style={{margin:"5px 0",fontSize:"clamp(12px,1.65vh,15px)"}}>Licensed Staff</h3>{licensed.length?licensed.map(s=><div key={s.id} style={{marginBottom:2,lineHeight:1.25}}>{line(s)}</div>):<div style={{opacity:.7}}>No licensed staff scheduled.</div>}
     <h3 style={{margin:"7px 0 5px",fontSize:"clamp(12px,1.65vh,15px)"}}>CNAs</h3>{cnas.length?cnas.map(s=><div key={s.id} style={{marginBottom:2,lineHeight:1.25}}>{line(s)}</div>):<div style={{opacity:.7}}>No CNAs scheduled.</div>}
