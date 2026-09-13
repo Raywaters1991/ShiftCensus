@@ -3,6 +3,7 @@ import api from "../services/api";
 import { useUser } from "../contexts/UserContext.jsx";
 
 const DASHBOARD_REFRESH_MS = 20000;
+const ASSIGNMENTS_AUTO_CLOSE_MS = 30000;
 
 function shiftHours(s){if(!s?.start_time||!s?.end_time)return 0;return Math.max((new Date(s.end_time)-new Date(s.start_time))/3600000,0);}
 function fmtHours(v){const n=Number(v||0);return Number.isInteger(n)?`${n} hours`:`${n.toFixed(1)} hours`;}
@@ -63,6 +64,11 @@ export default function DashboardAssignmentsPage(){
     document.addEventListener("visibilitychange",onVisibility);
     return()=>{clearInterval(refresh);clearInterval(clockTimer);document.removeEventListener("visibilitychange",onVisibility)};
   },[]);
+  useEffect(()=>{
+    if(!showAssignments)return;
+    const timer=window.setTimeout(()=>setShowAssignments(false),ASSIGNMENTS_AUTO_CLOSE_MS);
+    return()=>window.clearTimeout(timer);
+  },[showAssignments]);
 
   const staffById=useMemo(()=>Object.fromEntries(staff.map(x=>[String(x.id),x])),[staff]);
   const asgByShift=useMemo(()=>Object.fromEntries(assignments.map(x=>[String(x.shift_id),x])),[assignments]);
