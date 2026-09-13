@@ -14,6 +14,7 @@ function shiftTimeRange(s){return `${compactTime(s?.start_local||s?.start_time)}
 function minuteOfDay(v){const m=String(v||"").match(/^(\d{1,2}):(\d{2})/);if(!m)return null;return Number(m[1])*60+Number(m[2]);}
 function overlap(start,end,blockStart,blockEnd){let total=0;const ranges=end>1440?[[start,1440],[0,end-1440]]:[[start,end]];for(const[a,b]of ranges){const left=Math.max(a,blockStart),right=Math.min(b,blockEnd);if(right>left)total+=right-left;}return total;}
 function shiftBucket(s,configured){const available=(configured?.length?configured:["Day","Night"]).filter(x=>["Day","Evening","Night"].includes(x));const type=String(s?.shift_type||"");if(available.includes(type))return type;let start=minuteOfDay(s?.start_local),end=minuteOfDay(s?.end_local);if(start==null||end==null)return available[0]||"Day";if(end<=start)end+=1440;const scores={Day:overlap(start,end,360,840),Evening:overlap(start,end,840,1320),Night:overlap(start,end,1320,1440)+overlap(start,end,0,360)};return available.sort((a,b)=>(scores[b]||0)-(scores[a]||0))[0]||"Day";}
+function unitHourRows(rows,units,asgByShift){return units.map(unit=>{const hours=rows.reduce((sum,s)=>{const a=asgByShift[String(s.id)]||{};const sameId=a.unit_id!=null&&String(a.unit_id)===String(unit.id);const sameName=a.unit&&String(a.unit)===String(unit.name);return sum+((sameId||sameName)?shiftHours(s):0);},0);return {id:unit.id,name:unit.name,hours};});}
 
 export default function DashboardAssignmentsPage(){
   const {orgLogo}=useUser();
@@ -21,10 +22,10 @@ export default function DashboardAssignmentsPage(){
   const [facilityTimezone,setFacilityTimezone]=useState("America/Los_Angeles");
   const [configuredShiftTypes,setConfiguredShiftTypes]=useState(["Day","Night"]);
   const [lunchBreakMinutes,setLunchBreakMinutes]=useState(30);
-  const [shifts,setShifts]=useState([]);const [activeShifts,setActiveShifts]=useState([]);const [staff,setStaff]=useState([]);const [assignments,setAssignments]=useState([]);const [census,setCensus]=useState({occupied:0,leave:0,empty:0,total:0});const [loading,setLoading]=useState(true);
+  const [shifts,setShifts]=useState([]);const [activeShifts,setActiveShifts]=useState([]);const [staff,setStaff]=useState([]);const [assignments,setAssignments]=useState([]);const [units,setUnits]=useState([]);const [census,setCensus]=useState({occupied:0,leave:0,empty:0,total:0});const [loading,setLoading]=useState(true);
   const [showAssignments,setShowAssignments]=useState(false);
 
-  async function load(){try{const data=await api.get("/dashboard");setShifts(Array.isArray(data?.shifts)?data.shifts:[]);setActiveShifts(Array.isArray(data?.active_shifts)?data.active_shifts:[]);setStaff(Array.isArray(data?.staff)?data.staff:[]);setAssignments(Array.isArray(data?.assignments)?data.assignments:[]);setCensus(data?.census&&typeof data.census==="object"?data.census:{occupied:0,leave:0,empty:0,total:0});if(data?.timezone)setFacilityTimezone(String(data.timezone));if(Number.isFinite(Number(data?.lunch_break_minutes)))setLunchBreakMinutes(Math.max(0,Number(data.lunch_break_minutes)));if(Array.isArray(data?.configured_shift_types)&&data.configured_shift_types.length)setConfiguredShiftTypes(data.configured_shift_types);}finally{setLoading(false)}}
+  async function load(){try{const data=await api.get("/dashboard");setShifts(Array.isArray(data?.shifts)?data.shifts:[]);setActiveShifts(Array.isArray(data?.active_shifts)?data.active_shifts:[]);setStaff(Array.isArray(data?.staff)?data.staff:[]);setAssignments(Array.isArray(data?.assignments)?data.assignments:[]);setUnits(Array.isArray(data?.units)?data.units:[]);setCensus(data?.census&&typeof data.census==="object"?data.census:{occupied:0,leave:0,empty:0,total:0});if(data?.timezone)setFacilityTimezone(String(data.timezone));if(Number.isFinite(Number(data?.lunch_break_minutes)))setLunchBreakMinutes(Math.max(0,Number(data.lunch_break_minutes)));if(Array.isArray(data?.configured_shift_types)&&data.configured_shift_types.length)setConfiguredShiftTypes(data.configured_shift_types);}finally{setLoading(false)}}
   useEffect(()=>{load();const refresh=setInterval(()=>{if(document.visibilityState!=="hidden")load();},DASHBOARD_REFRESH_MS);const clockTimer=setInterval(()=>setClock(new Date()),1000);const onVisibility=()=>{if(document.visibilityState==="visible")load();};document.addEventListener("visibilitychange",onVisibility);return()=>{clearInterval(refresh);clearInterval(clockTimer);document.removeEventListener("visibilitychange",onVisibility)};},[]);
   useEffect(()=>{if(!showAssignments)return;const timer=window.setTimeout(()=>setShowAssignments(false),ASSIGNMENTS_AUTO_CLOSE_MS);return()=>window.clearTimeout(timer);},[showAssignments]);
 
@@ -49,22 +50,23 @@ export default function DashboardAssignmentsPage(){
       <div style={{textAlign:"center",fontWeight:800,fontSize:"clamp(12px,1.7vh,15px)"}}>Facility Time: {clockText}</div>
       <div><div style={{textAlign:"center",fontSize:11,opacity:.7,marginBottom:5}}>Census</div><div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:10,maxWidth:900,margin:"0 auto"}}><Stat label="Occupied" value={census.occupied}/><Stat label="Leave" value={census.leave}/><Stat label="Empty" value={census.empty}/><Stat label="Total" value={census.total}/></div></div>
       <div style={{maxWidth:900,width:"100%",margin:"0 auto",display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:10}}><Stat label="Scheduled Nursing Hours (Net)" value={scheduledHours.toFixed(1)}/><Stat label="Projected PPD (24 hr)" value={projectedPpd==null?"—":projectedPpd.toFixed(2)} note={lunchBreakMinutes?`After ${lunchBreakMinutes}-minute meal deduction per staffed shift`:"No meal deduction configured"}/></div>
-      <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.min(visible.length,3)},minmax(0,1fr))`,gap:14,width:"100%",minHeight:0,alignItems:"start"}}>{visible.map(key=><ShiftCard key={key} label={`${key} Shift`} active={current===key} rows={displayGroups[key]||[]} staffById={staffById} asgByShift={asgByShift}/>)}</div>
+      <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.min(visible.length,3)},minmax(0,1fr))`,gap:14,width:"100%",minHeight:0,alignItems:"stretch"}}>{visible.map(key=><ShiftCard key={key} label={`${key} Shift`} active={current===key} rows={displayGroups[key]||[]} units={units} staffById={staffById} asgByShift={asgByShift}/>)}</div>
     </div>
     {showAssignments&&<AssignmentModal shiftTypes={configuredShiftTypes} groups={displayGroups} staffById={staffById} asgByShift={asgByShift} onClose={()=>setShowAssignments(false)}/>} 
   </div>
 }
 
-function ShiftCard({label,active,rows,staffById,asgByShift}){
+function ShiftCard({label,active,rows,units,staffById,asgByShift}){
   const licensed=rows.filter(s=>["RN","LPN"].includes(String(staffById[String(s.staff_id)]?.role||s.role).toUpperCase()));
   const cnas=rows.filter(s=>String(staffById[String(s.staff_id)]?.role||s.role).toUpperCase()==="CNA");
   const hours=rows.reduce((sum,s)=>sum+shiftHours(s),0);
-  const line=s=>{const a=asgByShift[String(s.id)]||{};return `${a.unit||"Unassigned"} — ${fmtHours(shiftHours(s))}`};
-  return <div style={{padding:"14px 16px",minHeight:"clamp(170px,26vh,225px)",overflow:"visible",borderRadius:14,background:"var(--card-bg,rgba(255,255,255,.08))",border:active?"2px solid #3b82f6":"1px solid var(--border)",boxSizing:"border-box",fontSize:"clamp(11px,1.35vh,13px)"}}>
+  const licensedUnits=unitHourRows(licensed,units,asgByShift);
+  const cnaUnits=unitHourRows(cnas,units,asgByShift);
+  return <div style={{height:"100%",padding:"14px 16px",minHeight:"clamp(170px,26vh,225px)",overflow:"visible",borderRadius:14,background:"var(--card-bg,rgba(255,255,255,.08))",border:active?"2px solid #3b82f6":"1px solid var(--border)",boxSizing:"border-box",fontSize:"clamp(11px,1.35vh,13px)"}}>
     <h2 style={{margin:"0 0 6px",fontSize:"clamp(17px,2.2vh,21px)"}}>{label}</h2>
-    <h3 style={{margin:"5px 0",fontSize:"clamp(12px,1.65vh,15px)"}}>Licensed Staff</h3>{licensed.length?licensed.map(s=><div key={s.id} style={{marginBottom:2,lineHeight:1.25}}>{line(s)}</div>):<div style={{opacity:.7}}>No licensed staff scheduled.</div>}
-    <h3 style={{margin:"7px 0 5px",fontSize:"clamp(12px,1.65vh,15px)"}}>CNAs</h3>{cnas.length?cnas.map(s=><div key={s.id} style={{marginBottom:2,lineHeight:1.25}}>{line(s)}</div>):<div style={{opacity:.7}}>No CNAs scheduled.</div>}
-    {!rows.length&&<div style={{marginTop:5,opacity:.7}}>No staff scheduled today.</div>}
+    <h3 style={{margin:"5px 0",fontSize:"clamp(12px,1.65vh,15px)"}}>Licensed Staff</h3>{licensedUnits.map(u=><div key={`n-${u.id}`} style={{marginBottom:2,lineHeight:1.25}}>{u.name} — {fmtHours(u.hours)}</div>)}
+    <h3 style={{margin:"7px 0 5px",fontSize:"clamp(12px,1.65vh,15px)"}}>CNAs</h3>{cnaUnits.map(u=><div key={`c-${u.id}`} style={{marginBottom:2,lineHeight:1.25}}>{u.name} — {fmtHours(u.hours)}</div>)}
+    {!units.length&&<div style={{marginTop:5,opacity:.7}}>No units configured.</div>}
     <div style={{borderTop:"1px solid var(--border)",marginTop:8,paddingTop:6}}><small style={{opacity:.65}}>Scheduled Span</small><div style={{fontSize:17,fontWeight:900,lineHeight:1.1}}>{hours.toFixed(1)}</div></div>
   </div>
 }
