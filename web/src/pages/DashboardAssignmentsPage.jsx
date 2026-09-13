@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import api from "../services/api";
 import { useUser } from "../contexts/UserContext.jsx";
+import { mergeActiveOvernightGroups } from "../utils/overnightDisplay.js";
 
 const DASHBOARD_REFRESH_MS = 20000;
 const ASSIGNMENTS_AUTO_CLOSE_MS = 30000;
@@ -36,7 +37,7 @@ export default function DashboardAssignmentsPage(){
   const groups=useMemo(()=>{const g=Object.fromEntries(configuredShiftTypes.map(k=>[k,[]]));staffedShifts.forEach(s=>{const key=shiftBucket(s,configuredShiftTypes);(g[key]||(g[key]=[])).push(s)});return g},[staffedShifts,configuredShiftTypes]);
   const activeGroups=useMemo(()=>{const g=Object.fromEntries(configuredShiftTypes.map(k=>[k,[]]));activeShifts.filter(s=>s.staff_id!=null).forEach(s=>{const key=shiftBucket(s,configuredShiftTypes);(g[key]||(g[key]=[])).push(s)});return g},[activeShifts,configuredShiftTypes]);
   const current=configuredShiftTypes.find(key=>(activeGroups[key]||[]).length)||null;
-  const displayGroups=groups;
+  const displayGroups=useMemo(()=>mergeActiveOvernightGroups(groups,staffedShifts,activeShifts,configuredShiftTypes,shiftBucket),[groups,staffedShifts,activeShifts,configuredShiftTypes]);
   const visible=configuredShiftTypes;
   const clockText=new Intl.DateTimeFormat("en-US",{timeZone:facilityTimezone,dateStyle:"medium",timeStyle:"medium"}).format(clock);
 
