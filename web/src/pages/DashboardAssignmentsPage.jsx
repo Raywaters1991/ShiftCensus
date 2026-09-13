@@ -69,7 +69,7 @@ function AssignmentModal({shiftTypes,groups,staffById,asgByShift,onClose}){
   return <div onMouseDown={onClose} style={{position:"fixed",inset:0,zIndex:5000,background:"rgba(0,0,0,.58)",display:"grid",placeItems:"center",padding:18}}>
     <div onMouseDown={e=>e.stopPropagation()} style={{width:"min(1180px,96vw)",maxHeight:"86vh",overflowY:"auto",borderRadius:20,border:"1px solid var(--border)",background:"var(--surface)",color:"var(--text)",boxShadow:"0 28px 80px rgba(0,0,0,.45)"}}>
       <div style={{position:"sticky",top:0,zIndex:2,display:"flex",justifyContent:"space-between",alignItems:"center",gap:16,padding:"18px 20px",borderBottom:"1px solid var(--border)",background:"var(--surface)"}}><div><div style={{fontSize:12,fontWeight:900,letterSpacing:".12em",textTransform:"uppercase",opacity:.6}}>ShiftCensus</div><h2 style={{margin:"3px 0 0",fontSize:28}}>Assignments</h2></div><button onClick={onClose} style={{width:40,height:40,borderRadius:10,border:"1px solid var(--border)",background:"var(--surface-glass)",color:"inherit",fontSize:22,fontWeight:900,cursor:"pointer"}}>×</button></div>
-      <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.min(shiftTypes.length,3)},minmax(0,1fr))`,gap:14,padding:18}}>{shiftTypes.map(type=><AssignmentSection key={type} label={`${type} Shift`} rows={groups[type]||[]} staffById={staffById} asgByShift={asgByShift}/>)}</div>
+      <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.min(shiftTypes.length,3)},minmax(0,1fr))`,gap:14,padding:18}}>{shiftTypes.map(type=><AssignmentSection key={type} label={`${type} Shift`} rows={(groups[type]||[]).filter(s=>s.staff_id!=null)} staffById={staffById} asgByShift={asgByShift}/>)}</div>
     </div>
   </div>
 }
