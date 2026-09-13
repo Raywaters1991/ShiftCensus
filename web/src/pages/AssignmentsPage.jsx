@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import api from "../services/api";
 
 function todayYmd(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
+function minuteOfDay(v){const m=String(v||"").match(/^(\d{1,2}):(\d{2})/);if(!m)return null;return Number(m[1])*60+Number(m[2]);}
+function overlap(start,end,blockStart,blockEnd){let total=0;const ranges=end>1440?[[start,1440],[0,end-1440]]:[[start,end]];for(const[a,b]of ranges){const left=Math.max(a,blockStart),right=Math.min(b,blockEnd);if(right>left)total+=right-left;}return total;}
+function shiftBucket(s){const type=String(s?.shift_type||"");if(["Day","Evening","Night"].includes(type))return type;let start=minuteOfDay(s?.start_local),end=minuteOfDay(s?.end_local);if(start==null||end==null)return "Day";if(end<=start)end+=1440;const scores={Day:overlap(start,end,360,840),Evening:overlap(start,end,840,1320),Night:overlap(start,end,1320,1440)+overlap(start,end,0,360)};return Object.entries(scores).sort((a,b)=>b[1]-a[1])[0][0];}
 
 export default function AssignmentsPage(){
   const [date,setDate]=useState(todayYmd());
@@ -22,7 +25,7 @@ export default function AssignmentsPage(){
 
   const staffById=useMemo(()=>Object.fromEntries(staff.map(s=>[String(s.id),s])),[staff]);
   const assignedByShift=useMemo(()=>Object.fromEntries(assigned.map(a=>[String(a.shift_id),a])),[assigned]);
-  const grouped=useMemo(()=>{const out={Day:[],Evening:[],Night:[]};shifts.forEach(s=>{const key=s.shift_type||"Day";(out[key]||(out[key]=[])).push(s)});return out;},[shifts]);
+  const grouped=useMemo(()=>{const out={Day:[],Evening:[],Night:[]};shifts.forEach(s=>out[shiftBucket(s)].push(s));return out;},[shifts]);
 
   async function setUnit(shift,unitName){
     const unit=units.find(u=>u.name===unitName);const shiftKey=String(shift.id);const previous=assignedByShift[shiftKey]||null;
@@ -38,7 +41,7 @@ export default function AssignmentsPage(){
   if(loading)return <div style={{padding:32}}>Loading assignments…</div>;
   return <div style={{padding:24,color:"var(--text)",maxWidth:1100,margin:"0 auto"}}>
     <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",flexWrap:"wrap",marginBottom:20}}><div><h1 style={{margin:0}}>Assignments</h1><div style={{opacity:.65,marginTop:4}}>Everyone scheduled for the day appears here. Assign each working staff member to a unit.</div></div><input type="date" value={date} onChange={e=>setDate(e.target.value)} style={input}/></div>
-    {shifts.length===0?<div style={empty}>No staff are scheduled for this date.</div>:["Day","Evening","Night"].map(block=>grouped[block]?.length?<section key={block} style={{marginBottom:24}}><h2>{block} Shift</h2><div style={{display:"grid",gap:10}}>{grouped[block].map(shift=>{const person=staffById[String(shift.staff_id)]||{};const current=assignedByShift[String(shift.id)]||{};return <div key={shift.id} style={row}><div style={{minWidth:220}}><div style={{fontWeight:900,fontSize:16}}>{person.name||`Staff #${shift.staff_id}`}</div><div style={{opacity:.65,fontSize:12}}>{person.role||shift.role} · {shift.start_local||""}–{shift.end_local||""}</div></div><label style={field}><span>Unit</span><select value={current.unit||""} disabled={saving===shift.id} onChange={e=>setUnit(shift,e.target.value)} style={input}><option value="">Unassigned</option>{units.map(u=><option key={u.id} value={u.name}>{u.name}</option>)}</select></label><div style={{fontWeight:900,minWidth:100,color:current.unit?"#22c55e":"#f59e0b"}}>{saving===shift.id?"Saving…":current.unit?"Assigned":"Unassigned"}</div></div>})}</div></section>:null)}
+    {shifts.length===0?<div style={empty}>No staff are scheduled for this date.</div>:["Day","Evening","Night"].map(block=>grouped[block]?.length?<section key={block} style={{marginBottom:24}}><h2>{block} Shift</h2><div style={{display:"grid",gap:10}}>{grouped[block].map(shift=>{const person=staffById[String(shift.staff_id)]||{};const current=assignedByShift[String(shift.id)]||{};return <div key={shift.id} style={row}><div style={{minWidth:220}}><div style={{fontWeight:900,fontSize:16}}>{person.name||`Staff #${shift.staff_id}`}</div><div style={{opacity:.65,fontSize:12}}>{person.role||shift.role} · {shift.shift_type==="Custom"?"Custom · ":""}{shift.start_local||""}–{shift.end_local||""}</div></div><label style={field}><span>Unit</span><select value={current.unit||""} disabled={saving===shift.id} onChange={e=>setUnit(shift,e.target.value)} style={input}><option value="">Unassigned</option>{units.map(u=><option key={u.id} value={u.name}>{u.name}</option>)}</select></label><div style={{fontWeight:900,minWidth:100,color:current.unit?"#22c55e":"#f59e0b"}}>{saving===shift.id?"Saving…":current.unit?"Assigned":"Unassigned"}</div></div>})}</div></section>:null)}
   </div>;
 }
 const input={padding:"10px 12px",borderRadius:10,border:"1px solid var(--border)",background:"var(--surface)",color:"inherit"};
