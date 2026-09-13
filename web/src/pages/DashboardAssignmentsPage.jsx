@@ -78,27 +78,28 @@ export default function DashboardAssignmentsPage(){
   const groups=useMemo(()=>{const g=Object.fromEntries(configuredShiftTypes.map(k=>[k,[]]));shifts.forEach(s=>{const key=shiftBucket(s,configuredShiftTypes);(g[key]||(g[key]=[])).push(s)});return g},[shifts,configuredShiftTypes]);
   const activeGroups=useMemo(()=>{const g=Object.fromEntries(configuredShiftTypes.map(k=>[k,[]]));activeShifts.forEach(s=>{const key=shiftBucket(s,configuredShiftTypes);(g[key]||(g[key]=[])).push(s)});return g},[activeShifts,configuredShiftTypes]);
   const current=configuredShiftTypes.find(key=>(activeGroups[key]||[]).length)||null;
-  const displayGroups=useMemo(()=>{
-    const g={...groups};
-    if(current&&activeGroups[current]?.length)g[current]=activeGroups[current];
-    return g;
-  },[groups,activeGroups,current]);
+  const displayGroups=groups;
   const visible=configuredShiftTypes;
   const clockText=new Intl.DateTimeFormat("en-US",{timeZone:facilityTimezone,dateStyle:"medium",timeStyle:"medium"}).format(clock);
 
   if(loading)return <div style={{height:"calc(100dvh - 64px)",display:"grid",placeItems:"center",overflow:"hidden"}}>Loading Dashboard…</div>;
-  return <div style={{height:"calc(100dvh - 64px)",minHeight:0,overflow:"hidden",padding:"clamp(8px,1.4vh,16px) clamp(12px,2vw,28px)",color:"var(--text)",position:"relative",boxSizing:"border-box",display:"flex",flexDirection:"column"}}>
+  return <div style={{height:"calc(100dvh - 64px)",minHeight:0,overflow:"hidden",padding:"10px 24px 14px",color:"var(--text)",position:"relative",boxSizing:"border-box"}}>
     <button onClick={()=>setShowAssignments(true)} style={{position:"fixed",top:14,right:18,zIndex:1200,padding:"10px 18px",borderRadius:12,border:"1px solid rgba(127,29,29,.65)",background:"#dc2626",color:"white",fontWeight:950,fontSize:14,cursor:"pointer",boxShadow:"0 8px 20px rgba(220,38,38,.28)"}}>Assignments</button>
 
-    <div style={{textAlign:"center",marginBottom:"clamp(4px,1vh,10px)",flex:"0 0 auto"}}>{orgLogo&&<img src={orgLogo} alt="Facility Logo" style={{height:"clamp(48px,9vh,96px)",maxWidth:"100%",objectFit:"contain"}}/>}</div>
-    <div style={{textAlign:"center",fontWeight:800,fontSize:"clamp(12px,1.7vh,15px)",marginBottom:"clamp(5px,1vh,10px)",flex:"0 0 auto"}}>Facility Time: {clockText}</div>
+    <div style={{maxWidth:1180,height:"100%",margin:"0 auto",display:"grid",gridTemplateRows:"auto auto auto auto minmax(0,1fr)",rowGap:"8px"}}>
+      <div style={{textAlign:"center"}}>{orgLogo&&<img src={orgLogo} alt="Facility Logo" style={{height:"clamp(58px,8vh,82px)",maxWidth:"100%",objectFit:"contain"}}/>}</div>
+      <div style={{textAlign:"center",fontWeight:800,fontSize:"clamp(12px,1.7vh,15px)"}}>Facility Time: {clockText}</div>
 
-    <div style={{textAlign:"center",fontSize:"clamp(10px,1.35vh,12px)",opacity:.7,flex:"0 0 auto"}}>Census</div>
-    <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:"clamp(6px,1vw,10px)",maxWidth:900,width:"100%",margin:"clamp(4px,.8vh,8px) auto clamp(6px,1vh,10px)",flex:"0 0 auto"}}><Stat label="Occupied" value={census.occupied}/><Stat label="Leave" value={census.leave}/><Stat label="Empty" value={census.empty}/><Stat label="Total" value={census.total}/></div>
-    <div style={{maxWidth:900,width:"100%",margin:"0 auto clamp(6px,1vh,12px)",display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:"clamp(6px,1vw,10px)",flex:"0 0 auto"}}><Stat label="Scheduled Nursing Hours" value={scheduledHours.toFixed(1)}/><Stat label="Projected PPD (24 hr)" value={projectedPpd==null?"—":projectedPpd.toFixed(2)} note="Scheduled span before meal deductions"/></div>
+      <div>
+        <div style={{textAlign:"center",fontSize:11,opacity:.7,marginBottom:5}}>Census</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:10,maxWidth:900,margin:"0 auto"}}><Stat label="Occupied" value={census.occupied}/><Stat label="Leave" value={census.leave}/><Stat label="Empty" value={census.empty}/><Stat label="Total" value={census.total}/></div>
+      </div>
 
-    <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.min(visible.length,3)},minmax(0,1fr))`,gap:"clamp(8px,1.4vw,16px)",maxWidth:visible.length===2?1100:1500,width:"100%",margin:"0 auto",flex:"1 1 auto",minHeight:0,overflow:"hidden"}}>
-      {visible.map(key=><ShiftCard key={key} label={`${key} Shift`} active={current===key} rows={displayGroups[key]||[]} staffById={staffById} asgByShift={asgByShift}/>) }
+      <div style={{maxWidth:900,width:"100%",margin:"0 auto",display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:10}}><Stat label="Scheduled Nursing Hours" value={scheduledHours.toFixed(1)}/><Stat label="Projected PPD (24 hr)" value={projectedPpd==null?"—":projectedPpd.toFixed(2)} note="Scheduled span before meal deductions"/></div>
+
+      <div style={{display:"grid",gridTemplateColumns:`repeat(${Math.min(visible.length,3)},minmax(0,1fr))`,gap:14,width:"100%",minHeight:0,alignItems:"start"}}>
+        {visible.map(key=><ShiftCard key={key} label={`${key} Shift`} active={current===key} rows={displayGroups[key]||[]} staffById={staffById} asgByShift={asgByShift}/>) }
+      </div>
     </div>
 
     {showAssignments&&<AssignmentModal shiftTypes={configuredShiftTypes} groups={displayGroups} staffById={staffById} asgByShift={asgByShift} onClose={()=>setShowAssignments(false)}/>} 
@@ -110,12 +111,12 @@ function ShiftCard({label,active,rows,staffById,asgByShift}){
   const cnas=rows.filter(s=>String(staffById[String(s.staff_id)]?.role||s.role).toUpperCase()==="CNA");
   const hours=rows.reduce((sum,s)=>sum+shiftHours(s),0);
   const line=s=>{const p=staffById[String(s.staff_id)]||{};const a=asgByShift[String(s.id)]||{};const role=String(p.role||s.role||"STAFF").toUpperCase();return `${role} — ${a.unit||"Unassigned"} — ${fmtHours(shiftHours(s))}${s.shift_type==="Custom"?` (${shiftTimeRange(s)})`:""}`};
-  return <div style={{padding:"clamp(10px,1.8vh,18px)",height:"100%",minHeight:0,overflow:"hidden",borderRadius:14,background:"var(--card-bg,rgba(255,255,255,.08))",border:active?"2px solid #3b82f6":"1px solid var(--border)",boxSizing:"border-box",fontSize:"clamp(11px,1.45vh,14px)"}}>
-    <h2 style={{margin:"0 0 clamp(5px,1vh,10px)",fontSize:"clamp(18px,2.5vh,24px)"}}>{label}</h2>
-    <h3 style={{margin:"clamp(4px,.8vh,8px) 0",fontSize:"clamp(13px,1.8vh,17px)"}}>Licensed Staff</h3>{licensed.length?licensed.map(s=><div key={s.id} style={{marginBottom:3}}>{line(s)}</div>):<div style={{opacity:.7}}>No licensed staff scheduled.</div>}
-    <h3 style={{margin:"clamp(6px,1vh,10px) 0 clamp(4px,.7vh,7px)",fontSize:"clamp(13px,1.8vh,17px)"}}>CNAs</h3>{cnas.length?cnas.map(s=><div key={s.id} style={{marginBottom:3}}>{line(s)}</div>):<div style={{opacity:.7}}>No CNAs scheduled.</div>}
-    {!rows.length&&<div style={{marginTop:6,opacity:.7}}>No staff scheduled today.</div>}
-    <div style={{borderTop:"1px solid var(--border)",marginTop:"clamp(6px,1vh,10px)",paddingTop:"clamp(5px,.8vh,8px)"}}><small style={{opacity:.65}}>Scheduled Hours</small><div style={{fontSize:"clamp(16px,2.2vh,20px)",fontWeight:900}}>{hours.toFixed(1)}</div></div>
+  return <div style={{padding:"14px 16px",minHeight:"clamp(170px,26vh,225px)",maxHeight:"clamp(210px,31vh,270px)",overflow:"hidden",borderRadius:14,background:"var(--card-bg,rgba(255,255,255,.08))",border:active?"2px solid #3b82f6":"1px solid var(--border)",boxSizing:"border-box",fontSize:"clamp(11px,1.35vh,13px)"}}>
+    <h2 style={{margin:"0 0 6px",fontSize:"clamp(17px,2.2vh,21px)"}}>{label}</h2>
+    <h3 style={{margin:"5px 0",fontSize:"clamp(12px,1.65vh,15px)"}}>Licensed Staff</h3>{licensed.length?licensed.map(s=><div key={s.id} style={{marginBottom:2,lineHeight:1.25}}>{line(s)}</div>):<div style={{opacity:.7}}>No licensed staff scheduled.</div>}
+    <h3 style={{margin:"7px 0 5px",fontSize:"clamp(12px,1.65vh,15px)"}}>CNAs</h3>{cnas.length?cnas.map(s=><div key={s.id} style={{marginBottom:2,lineHeight:1.25}}>{line(s)}</div>):<div style={{opacity:.7}}>No CNAs scheduled.</div>}
+    {!rows.length&&<div style={{marginTop:5,opacity:.7}}>No staff scheduled today.</div>}
+    <div style={{borderTop:"1px solid var(--border)",marginTop:8,paddingTop:6}}><small style={{opacity:.65}}>Scheduled Hours</small><div style={{fontSize:17,fontWeight:900,lineHeight:1.1}}>{hours.toFixed(1)}</div></div>
   </div>
 }
 
@@ -136,4 +137,4 @@ function AssignmentSection({label,rows,staffById,asgByShift}){
 function RoleGroup({title,rows,staffById,asgByShift}){
   return <div style={{padding:"14px 15px",borderBottom:"1px solid var(--border)"}}><div style={{fontSize:12,fontWeight:950,textTransform:"uppercase",letterSpacing:".08em",opacity:.6,marginBottom:8}}>{title}</div>{rows.length===0?<div style={{fontSize:13,opacity:.55}}>None scheduled.</div>:rows.map(s=>{const p=staffById[String(s.staff_id)]||{},a=asgByShift[String(s.id)]||{},role=String(p.role||s.role||"STAFF").toUpperCase();return <div key={s.id} style={{padding:"9px 0",borderTop:"1px solid rgba(127,127,127,.12)"}}><div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"baseline"}}><div style={{fontWeight:950,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name||`Staff #${s.staff_id}`}</div><div style={{fontWeight:900,fontSize:12,opacity:.7}}>{role}</div></div><div style={{display:"flex",justifyContent:"space-between",gap:10,marginTop:3,fontSize:12,opacity:.75}}><span>{a.unit||"Unassigned"}</span><span>{s.shift_type==="Custom"?"Custom ":""}{shiftTimeRange(s)}</span></div></div>})}</div>
 }
-function Stat({label,value,note}){return <div style={{padding:"clamp(7px,1.15vh,11px) clamp(8px,1vw,14px)",borderRadius:14,border:"1px solid var(--border)",background:"var(--surface)",textAlign:"center",minHeight:0}}><div style={{fontSize:"clamp(9px,1.25vh,11px)",fontWeight:900,textTransform:"uppercase",opacity:.7}}>{label}</div><div style={{fontSize:"clamp(20px,3.2vh,28px)",fontWeight:950,marginTop:2,lineHeight:1}}>{value}</div>{note&&<div style={{fontSize:"clamp(8px,1.05vh,10px)",opacity:.55,marginTop:3}}>{note}</div>}</div>}
+function Stat({label,value,note}){return <div style={{padding:"7px 12px",borderRadius:13,border:"1px solid var(--border)",background:"var(--surface)",textAlign:"center",minHeight:0}}><div style={{fontSize:10,fontWeight:900,textTransform:"uppercase",opacity:.7}}>{label}</div><div style={{fontSize:"clamp(20px,3vh,27px)",fontWeight:950,marginTop:1,lineHeight:1}}>{value}</div>{note&&<div style={{fontSize:9,opacity:.55,marginTop:2}}>{note}</div>}</div>}
