@@ -23,7 +23,7 @@ router.get("/", async (req, res) => {
 router.post("/", async (req, res) => {
   try {
     const orgCode = req.orgCode || req.org_code;
-    const { name } = req.body;
+    const name = String(req.body?.name || "").trim();
     if (!name) return res.status(400).json({ error: "Unit name required" });
     const { data, error } = await supabaseAdmin.from("units").insert([{ name, org_code: orgCode }]).select();
     if (error) throw error;
@@ -31,16 +31,21 @@ router.post("/", async (req, res) => {
   } catch (err) { console.error("UNITS POST ERROR:", err); res.status(500).json({ error: "Server error" }); }
 });
 
-router.put("/:id", async (req, res) => {
+async function updateUnit(req, res) {
   try {
     const orgCode = req.orgCode || req.org_code;
-    const { name } = req.body;
+    const name = String(req.body?.name || "").trim();
+    if (!name) return res.status(400).json({ error: "Unit name required" });
     const { data, error } = await supabaseAdmin.from("units").update({ name }).eq("id", req.params.id).eq("org_code", orgCode).select();
     if (error) throw error;
     if (!data || data.length === 0) return res.status(404).json({ error: "Unit not found" });
     res.json(data[0]);
-  } catch (err) { console.error("UNITS PUT ERROR:", err); res.status(500).json({ error: "Server error" }); }
-});
+  } catch (err) { console.error("UNITS UPDATE ERROR:", err); res.status(500).json({ error: "Server error" }); }
+}
+
+// Support both verbs: the current Admin UI uses PATCH while older clients used PUT.
+router.put("/:id", updateUnit);
+router.patch("/:id", updateUnit);
 
 router.delete("/:id", async (req, res) => {
   try {
