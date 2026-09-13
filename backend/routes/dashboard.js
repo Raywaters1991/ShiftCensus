@@ -80,7 +80,7 @@ router.get("/", async (req, res) => {
           .eq("shift_date", previousDate)
           .order("start_time", { ascending: true });
 
-    const [shiftResult, priorShiftResult, bedResult, shiftSettingResult] = await Promise.all([
+    const [shiftResult, priorShiftResult, bedResult, shiftSettingResult, unitResult] = await Promise.all([
       shiftQuery,
       priorShiftQuery,
       supabaseAdmin
@@ -92,12 +92,18 @@ router.get("/", async (req, res) => {
         .from("shift_settings")
         .select("shift_type")
         .eq("org_code", orgCode),
+      supabaseAdmin
+        .from("units")
+        .select("id,name")
+        .eq("org_code", orgCode)
+        .order("name", { ascending: true }),
     ]);
 
     if (shiftResult.error) throw shiftResult.error;
     if (priorShiftResult.error) throw priorShiftResult.error;
     if (bedResult.error) throw bedResult.error;
     if (shiftSettingResult.error) throw shiftSettingResult.error;
+    if (unitResult.error) throw unitResult.error;
 
     const configuredShiftTypes = ["Day", "Evening", "Night"].filter((type) =>
       (shiftSettingResult.data || []).some((row) => String(row.shift_type || "") === type)
@@ -167,6 +173,7 @@ router.get("/", async (req, res) => {
       active_shifts: activeShifts,
       staff: staffResult.data || [],
       assignments: assignmentResult.data || [],
+      units: unitResult.data || [],
     });
   } catch (err) {
     console.error("DASHBOARD GET ERROR:", err);
