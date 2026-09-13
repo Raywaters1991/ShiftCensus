@@ -23,6 +23,9 @@ function compactTime(value){
   return m===0?`${hour}${suffix}`:`${hour}:${String(m).padStart(2,"0")}${suffix}`;
 }
 function shiftTimeRange(s){return `${compactTime(s?.start_local||s?.start_time)}–${compactTime(s?.end_local||s?.end_time)}`;}
+function minuteOfDay(v){const m=String(v||"").match(/^(\d{1,2}):(\d{2})/);if(!m)return null;return Number(m[1])*60+Number(m[2]);}
+function overlap(start,end,blockStart,blockEnd){let total=0;const ranges=end>1440?[[start,1440],[0,end-1440]]:[[start,end]];for(const[a,b]of ranges){const left=Math.max(a,blockStart),right=Math.min(b,blockEnd);if(right>left)total+=right-left;}return total;}
+function shiftBucket(s){const type=String(s?.shift_type||"");if(["Day","Evening","Night"].includes(type))return type;let start=minuteOfDay(s?.start_local),end=minuteOfDay(s?.end_local);if(start==null||end==null)return "Day";if(end<=start)end+=1440;const scores={Day:overlap(start,end,360,840),Evening:overlap(start,end,840,1320),Night:overlap(start,end,1320,1440)+overlap(start,end,0,360)};return Object.entries(scores).sort((a,b)=>b[1]-a[1])[0][0];}
 
 export default function DashboardAssignmentsPage(){
   const {orgLogo}=useUser();
@@ -65,8 +68,8 @@ export default function DashboardAssignmentsPage(){
   const patientDays=Number(census.occupied||0)+Number(census.leave||0);
   const scheduledHours=useMemo(()=>shifts.reduce((sum,s)=>sum+shiftHours(s),0),[shifts]);
   const projectedPpd=patientDays?scheduledHours/patientDays:null;
-  const groups=useMemo(()=>{const g={Day:[],Evening:[],Night:[]};shifts.forEach(s=>{const key=s.shift_type||"Day";(g[key]||(g[key]=[])).push(s)});return g},[shifts]);
-  const activeGroups=useMemo(()=>{const g={Day:[],Evening:[],Night:[]};activeShifts.forEach(s=>{const key=s.shift_type||"Day";(g[key]||(g[key]=[])).push(s)});return g},[activeShifts]);
+  const groups=useMemo(()=>{const g={Day:[],Evening:[],Night:[]};shifts.forEach(s=>g[shiftBucket(s)].push(s));return g},[shifts]);
+  const activeGroups=useMemo(()=>{const g={Day:[],Evening:[],Night:[]};activeShifts.forEach(s=>g[shiftBucket(s)].push(s));return g},[activeShifts]);
   const current=(["Day","Evening","Night"].find(key=>(activeGroups[key]||[]).length))||null;
   const displayGroups=useMemo(()=>{
     const g={Day:groups.Day||[],Evening:groups.Evening||[],Night:groups.Night||[]};
@@ -100,7 +103,7 @@ function ShiftCard({label,active,rows,staffById,asgByShift}){
   const licensed=rows.filter(s=>["RN","LPN"].includes(String(staffById[String(s.staff_id)]?.role||s.role).toUpperCase()));
   const cnas=rows.filter(s=>String(staffById[String(s.staff_id)]?.role||s.role).toUpperCase()==="CNA");
   const hours=rows.reduce((sum,s)=>sum+shiftHours(s),0);
-  const line=s=>{const p=staffById[String(s.staff_id)]||{};const a=asgByShift[String(s.id)]||{};const role=String(p.role||s.role||"STAFF").toUpperCase();return `${role} — ${a.unit||"Unassigned"} — ${fmtHours(shiftHours(s))}`};
+  const line=s=>{const p=staffById[String(s.staff_id)]||{};const a=asgByShift[String(s.id)]||{};const role=String(p.role||s.role||"STAFF").toUpperCase();return `${role} — ${a.unit||"Unassigned"} — ${fmtHours(shiftHours(s))}${s.shift_type==="Custom"?` (${shiftTimeRange(s)})`:""}`};
   return <div style={{padding:28,minHeight:260,borderRadius:14,background:"var(--card-bg,rgba(255,255,255,.08))",border:active?"2px solid #3b82f6":"1px solid var(--border)"}}>
     <h2 style={{marginTop:0}}>{label}</h2>
     <h3>Licensed Staff</h3>{licensed.length?licensed.map(s=><div key={s.id} style={{marginBottom:5}}>{line(s)}</div>):<div style={{opacity:.7}}>No licensed staff scheduled.</div>}
@@ -117,6 +120,6 @@ function AssignmentOverlay({groups,staffById,asgByShift,secondsLeft,onClose}){
 }
 function AssignmentSection({label,rows,staffById,asgByShift}){
   const ordered=[...rows].sort((a,b)=>{const aa=asgByShift[String(a.id)]?.unit||"Unassigned",ba=asgByShift[String(b.id)]?.unit||"Unassigned";if(aa!==ba)return aa.localeCompare(ba);const ar=String(staffById[String(a.staff_id)]?.role||a.role||""),br=String(staffById[String(b.staff_id)]?.role||b.role||"");return ar.localeCompare(br)||String(staffById[String(a.staff_id)]?.name||"").localeCompare(String(staffById[String(b.staff_id)]?.name||""));});
-  return <section style={{border:"1px solid rgba(255,255,255,.16)",borderRadius:16,overflow:"hidden",background:"rgba(255,255,255,.04)"}}><div style={{padding:"14px 18px",fontSize:24,fontWeight:950,borderBottom:"1px solid rgba(255,255,255,.14)",background:"rgba(255,255,255,.06)"}}>{label}</div>{ordered.length===0?<div style={{padding:24,textAlign:"center",fontSize:18,opacity:.6}}>No staff scheduled.</div>:<div>{ordered.map(s=>{const p=staffById[String(s.staff_id)]||{},a=asgByShift[String(s.id)]||{},role=String(p.role||s.role||"STAFF").toUpperCase();return <div key={s.id} style={{display:"grid",gridTemplateColumns:"minmax(150px,1.35fr) 70px minmax(110px,.9fr) 105px",gap:10,alignItems:"center",padding:"13px 16px",borderBottom:"1px solid rgba(255,255,255,.08)",fontSize:17}}><div style={{fontWeight:950,fontSize:19,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name||`Staff #${s.staff_id}`}</div><div style={{fontWeight:950}}>{role}</div><div style={{fontWeight:800}}>{a.unit||"Unassigned"}</div><div style={{textAlign:"right",fontWeight:900}}>{shiftTimeRange(s)}</div></div>})}</div>}</section>
+  return <section style={{border:"1px solid rgba(255,255,255,.16)",borderRadius:16,overflow:"hidden",background:"rgba(255,255,255,.04)"}}><div style={{padding:"14px 18px",fontSize:24,fontWeight:950,borderBottom:"1px solid rgba(255,255,255,.14)",background:"rgba(255,255,255,.06)"}}>{label}</div>{ordered.length===0?<div style={{padding:24,textAlign:"center",fontSize:18,opacity:.6}}>No staff scheduled.</div>:<div>{ordered.map(s=>{const p=staffById[String(s.staff_id)]||{},a=asgByShift[String(s.id)]||{},role=String(p.role||s.role||"STAFF").toUpperCase();return <div key={s.id} style={{display:"grid",gridTemplateColumns:"minmax(150px,1.35fr) 70px minmax(110px,.9fr) 105px",gap:10,alignItems:"center",padding:"13px 16px",borderBottom:"1px solid rgba(255,255,255,.08)",fontSize:17}}><div style={{fontWeight:950,fontSize:19,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{p.name||`Staff #${s.staff_id}`}</div><div style={{fontWeight:950}}>{role}</div><div style={{fontWeight:800}}>{a.unit||"Unassigned"}</div><div style={{textAlign:"right",fontWeight:900}}>{s.shift_type==="Custom"?"Custom ":""}{shiftTimeRange(s)}</div></div>})}</div>}</section>
 }
 function Stat({label,value,note}){return <div style={{padding:"14px 16px",borderRadius:14,border:"1px solid var(--border)",background:"var(--surface)",textAlign:"center"}}><div style={{fontSize:11,fontWeight:900,textTransform:"uppercase",opacity:.7}}>{label}</div><div style={{fontSize:30,fontWeight:950,marginTop:6}}>{value}</div>{note&&<div style={{fontSize:10,opacity:.55,marginTop:4}}>{note}</div>}</div>}
