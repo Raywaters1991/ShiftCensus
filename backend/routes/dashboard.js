@@ -70,8 +70,6 @@ router.get("/", async (req, res) => {
       .eq("shift_date", date)
       .order("start_time", { ascending: true });
 
-    // For the live wallboard only, also inspect yesterday's shifts so a shift that
-    // started before midnight can remain the active crew after the calendar date rolls.
     const priorShiftQuery = requestedDate
       ? Promise.resolve({ data: [], error: null })
       : supabaseAdmin
@@ -81,7 +79,7 @@ router.get("/", async (req, res) => {
           .eq("shift_date", previousDate)
           .order("start_time", { ascending: true });
 
-    const [shiftResult, priorShiftResult, bedResult] = await Promise.all([
+    const [shiftResult, priorShiftResult, bedResult, shiftSettingResult] = await Promise.all([
       shiftQuery,
       priorShiftQuery,
       supabaseAdmin
@@ -89,11 +87,21 @@ router.get("/", async (req, res) => {
         .select("id")
         .eq("org_id", orgId)
         .eq("is_active", true),
+      supabaseAdmin
+        .from("shift_settings")
+        .select("shift_type")
+        .eq("org_code", orgCode),
     ]);
 
     if (shiftResult.error) throw shiftResult.error;
     if (priorShiftResult.error) throw priorShiftResult.error;
     if (bedResult.error) throw bedResult.error;
+    if (shiftSettingResult.error) throw shiftSettingResult.error;
+
+    const configuredShiftTypes = ["Day", "Evening", "Night"].filter((type) =>
+      (shiftSettingResult.data || []).some((row) => String(row.shift_type || "") === type)
+    );
+    if (!configuredShiftTypes.length) configuredShiftTypes.push("Day", "Night");
 
     const shifts = shiftResult.data || [];
     const nowMs = Date.now();
@@ -151,6 +159,7 @@ router.get("/", async (req, res) => {
     return res.json({
       date,
       timezone,
+      configured_shift_types: configuredShiftTypes,
       census: { occupied, leave, empty, total },
       shifts,
       active_shifts: activeShifts,
