@@ -34,11 +34,38 @@ router.post("/", async (req, res) => {
 async function updateUnit(req, res) {
   try {
     const orgCode = req.orgCode || req.org_code;
+    const unitId = Number(req.params.id);
     const name = String(req.body?.name || "").trim();
+    if (!Number.isFinite(unitId)) return res.status(400).json({ error: "Invalid unit id" });
     if (!name) return res.status(400).json({ error: "Unit name required" });
-    const { data, error } = await supabaseAdmin.from("units").update({ name }).eq("id", req.params.id).eq("org_code", orgCode).select();
+
+    const { data: existing, error: existingError } = await supabaseAdmin
+      .from("units")
+      .select("id,name")
+      .eq("id", unitId)
+      .eq("org_code", orgCode)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (!existing) return res.status(404).json({ error: "Unit not found" });
+
+    const { data, error } = await supabaseAdmin
+      .from("units")
+      .update({ name })
+      .eq("id", unitId)
+      .eq("org_code", orgCode)
+      .select();
     if (error) throw error;
     if (!data || data.length === 0) return res.status(404).json({ error: "Unit not found" });
+
+    // shift_assignments stores both unit_id and a display-name snapshot.
+    // Keep the snapshot synchronized so dashboards/offline snapshots reflect renames immediately.
+    const { error: assignmentError } = await supabaseAdmin
+      .from("shift_assignments")
+      .update({ unit: name, updated_at: new Date().toISOString() })
+      .eq("org_code", orgCode)
+      .eq("unit_id", unitId);
+    if (assignmentError) throw assignmentError;
+
     res.json(data[0]);
   } catch (err) { console.error("UNITS UPDATE ERROR:", err); res.status(500).json({ error: "Server error" }); }
 }
