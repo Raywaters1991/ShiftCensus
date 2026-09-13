@@ -59,15 +59,15 @@ export default function DashboardAssignmentsPage(){
 function ShiftCard({label,active,rows,units,staffById,asgByShift}){
   const licensed=rows.filter(s=>["RN","LPN"].includes(String(staffById[String(s.staff_id)]?.role||s.role).toUpperCase()));
   const cnas=rows.filter(s=>String(staffById[String(s.staff_id)]?.role||s.role).toUpperCase()==="CNA");
-  const hours=rows.reduce((sum,s)=>sum+shiftHours(s),0);
   const licensedUnits=unitHourRows(licensed,units,asgByShift);
   const cnaUnits=unitHourRows(cnas,units,asgByShift);
+  const cnaByUnit=Object.fromEntries(cnaUnits.map(u=>[String(u.id),u]));
   return <div style={{height:"100%",padding:"14px 16px",minHeight:"clamp(170px,26vh,225px)",overflow:"visible",borderRadius:14,background:"var(--card-bg,rgba(255,255,255,.08))",border:active?"2px solid #3b82f6":"1px solid var(--border)",boxSizing:"border-box",fontSize:"clamp(11px,1.35vh,13px)"}}>
-    <h2 style={{margin:"0 0 6px",fontSize:"clamp(17px,2.2vh,21px)"}}>{label}</h2>
-    <h3 style={{margin:"5px 0",fontSize:"clamp(12px,1.65vh,15px)"}}>Licensed Staff</h3>{licensedUnits.map(u=><div key={`n-${u.id}`} style={{marginBottom:2,lineHeight:1.25}}>{u.name} — {fmtHours(u.hours)}</div>)}
-    <h3 style={{margin:"7px 0 5px",fontSize:"clamp(12px,1.65vh,15px)"}}>CNAs</h3>{cnaUnits.map(u=><div key={`c-${u.id}`} style={{marginBottom:2,lineHeight:1.25}}>{u.name} — {fmtHours(u.hours)}</div>)}
-    {!units.length&&<div style={{marginTop:5,opacity:.7}}>No units configured.</div>}
-    <div style={{borderTop:"1px solid var(--border)",marginTop:8,paddingTop:6}}><small style={{opacity:.65}}>Scheduled Span</small><div style={{fontSize:17,fontWeight:900,lineHeight:1.1}}>{hours.toFixed(1)}</div></div>
+    <h2 style={{margin:"0 0 8px",fontSize:"clamp(17px,2.2vh,21px)"}}>{label}</h2>
+    {units.length?<div style={{border:"1px solid var(--border)",borderRadius:10,overflow:"hidden"}}>
+      <div style={{display:"grid",gridTemplateColumns:"minmax(110px,1.1fr) minmax(105px,1fr) minmax(90px,.85fr)",fontWeight:950,borderBottom:"1px solid var(--border)",background:"rgba(127,127,127,.08)"}}><div style={{padding:"7px 9px"}}>Unit</div><div style={{padding:"7px 9px",textAlign:"center"}}>Licensed Staff</div><div style={{padding:"7px 9px",textAlign:"center"}}>CNAs</div></div>
+      {licensedUnits.map((u,i)=><div key={u.id} style={{display:"grid",gridTemplateColumns:"minmax(110px,1.1fr) minmax(105px,1fr) minmax(90px,.85fr)",borderBottom:i===licensedUnits.length-1?"none":"1px solid rgba(127,127,127,.14)"}}><div style={{padding:"7px 9px",fontWeight:850}}>{u.name}</div><div style={{padding:"7px 9px",textAlign:"center"}}>{fmtHours(u.hours)}</div><div style={{padding:"7px 9px",textAlign:"center"}}>{fmtHours(cnaByUnit[String(u.id)]?.hours||0)}</div></div>)}
+    </div>:<div style={{marginTop:5,opacity:.7}}>No units configured.</div>}
   </div>
 }
 
