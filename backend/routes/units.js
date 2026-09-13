@@ -77,8 +77,43 @@ router.patch("/:id", updateUnit);
 router.delete("/:id", async (req, res) => {
   try {
     const orgCode = req.orgCode || req.org_code;
-    const { error } = await supabaseAdmin.from("units").delete().eq("id", req.params.id).eq("org_code", orgCode);
+    const unitId = Number(req.params.id);
+    if (!Number.isFinite(unitId)) return res.status(400).json({ error: "Invalid unit id" });
+
+    const { data: existing, error: existingError } = await supabaseAdmin
+      .from("units")
+      .select("id,name")
+      .eq("id", unitId)
+      .eq("org_code", orgCode)
+      .maybeSingle();
+    if (existingError) throw existingError;
+    if (!existing) return res.status(404).json({ error: "Unit not found" });
+
+    const [{ count: shiftCount, error: shiftError }, { count: assignmentCount, error: assignmentError }] = await Promise.all([
+      supabaseAdmin.from("shifts").select("id", { count: "exact", head: true }).eq("org_code", orgCode).eq("unit_id", unitId),
+      supabaseAdmin.from("shift_assignments").select("id", { count: "exact", head: true }).eq("org_code", orgCode).eq("unit_id", unitId),
+    ]);
+    if (shiftError) throw shiftError;
+    if (assignmentError) throw assignmentError;
+
+    const inUse = (shiftCount || 0) + (assignmentCount || 0);
+    if (inUse > 0) {
+      return res.status(409).json({
+        error: `Cannot delete ${existing.name} while it is still in use. Reassign or remove its shifts/assignments first.`,
+        shift_count: shiftCount || 0,
+        assignment_count: assignmentCount || 0,
+      });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from("units")
+      .delete()
+      .eq("id", unitId)
+      .eq("org_code", orgCode)
+      .select("id")
+      .maybeSingle();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: "Unit not found" });
     res.json({ message: "Unit deleted" });
   } catch (err) { console.error("UNITS DELETE ERROR:", err); res.status(500).json({ error: "Server error" }); }
 });
