@@ -50,7 +50,7 @@ router.get("/", async (req, res) => {
 
     const { data: settings, error: settingsError } = await supabaseAdmin
       .from("org_settings")
-      .select("timezone")
+      .select("timezone,lunch_break_minutes")
       .eq("org_id", orgId)
       .maybeSingle();
     if (settingsError) throw settingsError;
@@ -58,6 +58,7 @@ router.get("/", async (req, res) => {
     let timezone = String(settings?.timezone || "America/Los_Angeles");
     try { new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date()); }
     catch { timezone = "America/Los_Angeles"; }
+    const lunchBreakMinutes = Math.max(0, Math.min(180, Number(settings?.lunch_break_minutes ?? 30) || 0));
 
     const date = requestedDate || dateInTimeZone(timezone);
     const previousDate = addDays(date, -1);
@@ -159,6 +160,7 @@ router.get("/", async (req, res) => {
     return res.json({
       date,
       timezone,
+      lunch_break_minutes: lunchBreakMinutes,
       configured_shift_types: configuredShiftTypes,
       census: { occupied, leave, empty, total },
       shifts,
