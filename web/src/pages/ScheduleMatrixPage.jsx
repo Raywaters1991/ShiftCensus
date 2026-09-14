@@ -43,20 +43,21 @@ export default function ScheduleMatrixPage() {
   const [pto, setPto] = useState([]);
   const [requirements, setRequirements] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [roleFilter, setRoleFilter] = useState("Nurses (RN/LPN)");
   const [shiftFilter, setShiftFilter] = useState("All Shifts");
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [hoverCell, setHoverCell] = useState(null);
 
   const days = useMemo(() => Array.from({ length: rangeDays }, (_, i) => addDays(week, i)), [week, rangeDays]);
   const from = ymd(days[0]);
   const to = ymd(days[days.length - 1]);
   const today = ymd(new Date());
+  const hasData = staff.length > 0 || shifts.length > 0 || pto.length > 0 || requirements.length > 0;
 
   async function load() {
-    setLoading(true);
+    if (hasData) setRefreshing(true); else setLoading(true);
     try {
       const [shiftRows, staffRows, leaveRows, coverageRows] = await Promise.all([
         api.get(`/shifts?from=${from}&to=${to}`),
@@ -68,17 +69,44 @@ export default function ScheduleMatrixPage() {
       setStaff(Array.isArray(staffRows) ? staffRows : []);
       setPto(Array.isArray(leaveRows) ? leaveRows : []);
       setRequirements(Array.isArray(coverageRows) ? coverageRows : []);
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }
 
   useEffect(() => { load(); }, [from, to]);
 
   const staffById = useMemo(() => Object.fromEntries(staff.map((p) => [String(p.id), p])), [staff]);
-  const rangeHours = useMemo(() => {
-    const result = {};
-    shifts.forEach((shift) => { if (shift.staff_id != null) result[shift.staff_id] = (result[shift.staff_id] || 0) + shiftHours(shift); });
-    return result;
-  }, [shifts]);
+  const indexed = useMemo(() => {
+    const employeeDate = {};
+    const openDate = {};
+    const coverageCounts = {};
+    const hours = {};
+    let openCount = 0;
+
+    for (const shift of shifts) {
+      const type = normalizedShiftType(shift);
+      const enriched = { ...shift, _type: type };
+      const date = String(shift.shift_date || "");
+
+      if (shift.staff_id == null) {
+        openCount += 1;
+        (openDate[date] ||= []).push(enriched);
+        continue;
+      }
+
+      const staffId = String(shift.staff_id);
+      (employeeDate[`${staffId}|${date}`] ||= []).push(enriched);
+      hours[staffId] = (hours[staffId] || 0) + shiftHours(shift);
+      const group = roleGroup(staffById[staffId]?.role || shift.role);
+      const key = `${date}|${group}|${type}`;
+      coverageCounts[key] = (coverageCounts[key] || 0) + 1;
+    }
+
+    return { employeeDate, openDate, coverageCounts, hours, openCount };
+  }, [shifts, staffById]);
+
   const visibleStaff = useMemo(() => staff.filter((person) => {
     const r = String(person.role || "").toUpperCase();
     let roleMatches = roleFilter === "All Staff";
@@ -86,7 +114,7 @@ export default function ScheduleMatrixPage() {
     if (["RN","LPN","CNA"].includes(roleFilter)) roleMatches = r === roleFilter;
     return roleMatches && (!search || String(person.name || "").toLowerCase().includes(search.toLowerCase()));
   }).sort((a,b) => String(a.name || "").localeCompare(String(b.name || ""))), [staff, roleFilter, search]);
-  const shiftMap = useMemo(() => { const out = {}; shifts.forEach((s) => { if (s.staff_id == null) return; const k = `${s.staff_id}|${s.shift_date}`; (out[k] ||= []).push(s); }); return out; }, [shifts]);
+
   const ptoMap = useMemo(() => { const out = {}; pto.forEach((r) => { const d = new Date(`${r.start_date}T00:00:00`), end = new Date(`${r.end_date}T00:00:00`); while (d <= end) { out[`${r.staff_id}|${ymd(d)}`] = r; d.setDate(d.getDate()+1); } }); return out; }, [pto]);
   const requirementMap = useMemo(() => Object.fromEntries(requirements.map((r) => [`${r.role_group}|${r.shift_type}`, Number(r.required_count) || 0])), [requirements]);
   const coverageConfigured = requirements.some((r) => Number(r.required_count) > 0);
@@ -96,16 +124,15 @@ export default function ScheduleMatrixPage() {
       const date = ymd(day); let dayShortage = 0;
       ["Nurse","CNA"].forEach((group) => SHIFT_TYPES.forEach((shiftType) => {
         const required = requirementMap[`${group}|${shiftType}`] || 0; if (!required) return;
-        const scheduled = shifts.filter((s) => s.shift_date === date && s.staff_id != null && normalizedShiftType(s) === shiftType && roleGroup(staffById[String(s.staff_id)]?.role || s.role) === group).length;
+        const scheduled = indexed.coverageCounts[`${date}|${group}|${shiftType}`] || 0;
         if (scheduled >= required) coveredSlots += 1; else { const gap = required - scheduled; shortage += gap; dayShortage += gap; }
       }));
       perDay[date] = dayShortage;
     });
     return { shortage, coveredSlots, perDay };
-  }, [days, requirementMap, shifts, staffById]);
+  }, [days, requirementMap, indexed.coverageCounts]);
 
-  const openCount = shifts.filter((s) => s.staff_id == null).length;
-  const overtimeCount = Object.values(rangeHours).filter((h) => h > (rangeDays === 14 ? 80 : 40)).length;
+  const overtimeCount = Object.values(indexed.hours).filter((h) => h > (rangeDays === 14 ? 80 : 40)).length;
   const otThreshold = rangeDays === 14 ? 80 : 40;
 
   async function addShift() {
@@ -117,15 +144,8 @@ export default function ScheduleMatrixPage() {
     const form = modal?.form; if (!modal?.shiftId || !form?.staff_id || !form.date || !form.shift_type) return;
     setSaving(true);
     try {
-      await api.put(`/shifts/${modal.shiftId}`, {
-        staff_id: Number(form.staff_id),
-        shift_date: form.date,
-        shiftType: form.shift_type,
-        start_local: form.shift_type === "Custom" ? form.start_local : undefined,
-        end_local: form.shift_type === "Custom" ? form.end_local : undefined,
-      });
-      setModal(null);
-      await load();
+      await api.put(`/shifts/${modal.shiftId}`, { staff_id: Number(form.staff_id), shift_date: form.date, shiftType: form.shift_type, start_local: form.shift_type === "Custom" ? form.start_local : undefined, end_local: form.shift_type === "Custom" ? form.end_local : undefined });
+      setModal(null); await load();
     } catch (e) { alert(e?.message || "Unable to update shift"); }
     finally { setSaving(false); }
   }
@@ -133,26 +153,13 @@ export default function ScheduleMatrixPage() {
     if (!modal?.shiftId || saving) return;
     if (!window.confirm("Delete this shift? This cannot be undone.")) return;
     setSaving(true);
-    try {
-      await api.delete(`/shifts/${modal.shiftId}`);
-      setModal(null);
-      await load();
-    } catch (e) { alert(e?.message || "Unable to delete shift"); }
+    try { await api.delete(`/shifts/${modal.shiftId}`); setModal(null); await load(); }
+    catch (e) { alert(e?.message || "Unable to delete shift"); }
     finally { setSaving(false); }
   }
   function openEditShift(shift) {
-    const type = normalizedShiftType(shift);
-    setModal({
-      type: "editShift",
-      shiftId: shift.id,
-      form: {
-        staff_id: String(shift.staff_id),
-        date: shift.shift_date,
-        shift_type: EDIT_SHIFT_TYPES.includes(type) ? type : "Custom",
-        start_local: String(shift.start_local || "").slice(0,5),
-        end_local: String(shift.end_local || "").slice(0,5),
-      },
-    });
+    const type = shift._type || normalizedShiftType(shift);
+    setModal({ type: "editShift", shiftId: shift.id, form: { staff_id: String(shift.staff_id), date: shift.shift_date, shift_type: EDIT_SHIFT_TYPES.includes(type) ? type : "Custom", start_local: String(shift.start_local || "").slice(0,5), end_local: String(shift.end_local || "").slice(0,5) } });
   }
   async function addOpenShift() {
     const form = modal?.form; if (!form?.date || !form.role || !form.shift_type) return;
@@ -167,11 +174,11 @@ export default function ScheduleMatrixPage() {
     setModal((current) => { const rows = [...current.rows]; const i = rows.findIndex((r) => r.role_group === group && r.shift_type === shiftType); const next = { role_group: group, shift_type: shiftType, required_count: Number(value) || 0 }; if (i >= 0) rows[i] = { ...rows[i], ...next }; else rows.push(next); return { ...current, rows }; });
   }
 
-  if (loading) return <div style={{ padding: 32 }}>Loading schedule…</div>;
+  if (loading && !hasData) return <div style={{ padding: 32 }}>Loading schedule…</div>;
 
   return <div style={styles.page}>
     <div style={styles.header}>
-      <div><h1 style={{ margin: 0, fontSize: 38 }}>Schedule</h1><div style={styles.muted}>Build, manage, and review staffing by employee.</div></div>
+      <div><h1 style={{ margin: 0, fontSize: 38 }}>Schedule</h1><div style={styles.muted}>Build, manage, and review staffing by employee.{refreshing && <span style={styles.refreshing}> · Refreshing…</span>}</div></div>
       <div style={styles.toolbar}>
         <button style={styles.button} onClick={() => setWeek(startOfWeek(new Date()))}>Today</button>
         <button style={styles.button} onClick={() => setWeek(addDays(week, -rangeDays))}>‹</button>
@@ -194,7 +201,7 @@ export default function ScheduleMatrixPage() {
 
     <div style={styles.summaryGrid}>
       <SummaryCard title="Coverage" value={coverageConfigured ? (coverage.shortage ? `${coverage.shortage} short` : `${coverage.coveredSlots} covered`) : "Not configured"} tone={coverageConfigured ? (coverage.shortage ? "warn" : "ok") : "neutral"} />
-      <SummaryCard title="Open Shifts" value={openCount} tone={openCount ? "info" : "neutral"} />
+      <SummaryCard title="Open Shifts" value={indexed.openCount} tone={indexed.openCount ? "info" : "neutral"} />
       <SummaryCard title="PTO / Leave" value={pto.length} tone="purple" />
       <SummaryCard title="Overtime Risk" value={overtimeCount} tone={overtimeCount ? "warn" : "neutral"} />
     </div>
@@ -209,19 +216,17 @@ export default function ScheduleMatrixPage() {
         <td style={styles.stickyCell}><b>{person.name}</b><div style={styles.smallMuted}>{person.role}</div></td>
         {days.map((day) => {
           const date = ymd(day), leave = ptoMap[`${person.id}|${date}`], isToday = date === today;
-          const rows = (shiftMap[`${person.id}|${date}`] || []).filter((s) => shiftFilter === "All Shifts" || normalizedShiftType(s) === shiftFilter);
+          const rows = (indexed.employeeDate[`${person.id}|${date}`] || []).filter((s) => shiftFilter === "All Shifts" || s._type === shiftFilter);
           const empty = !leave && rows.length === 0;
-          const cellKey = `${person.id}|${date}`;
-          const hovering = empty && canWrite && hoverCell === cellKey;
-          return <td key={date} style={{ ...styles.cell, ...(isToday ? styles.todayCell : {}), ...(empty && canWrite ? styles.clickableCell : {}), ...(hovering ? styles.hoverCell : {}) }} onMouseEnter={() => empty && canWrite && setHoverCell(cellKey)} onMouseLeave={() => hoverCell === cellKey && setHoverCell(null)} onClick={() => empty && canWrite && setModal({ type: "shift", form: { staff_id: String(person.id), date, shift_type: "Day" } })}>
+          return <td key={date} style={{ ...styles.cell, ...(isToday ? styles.todayCell : {}), ...(empty && canWrite ? styles.clickableCell : {}) }} onClick={() => empty && canWrite && setModal({ type: "shift", form: { staff_id: String(person.id), date, shift_type: "Day" } })}>
             {leave && <div style={styles.ptoBox}>✈ PTO</div>}
-            {rows.map((shift) => { const type = normalizedShiftType(shift); return <div key={shift.id} onClick={(e) => { e.stopPropagation(); if (canWrite) openEditShift(shift); }} style={{ ...(type === "Night" ? styles.nightBox : type === "Evening" ? styles.eveningBox : styles.shiftBox), ...(canWrite ? styles.editableShift : {}) }} title={canWrite ? "Click to edit shift" : undefined}><b>{type.toUpperCase()}</b><small>{shift.start_local && shift.end_local ? `${formatTime(shift.start_local)}–${formatTime(shift.end_local)}` : ""}</small></div>; })}
-            {empty && <span style={{ ...styles.emptyHint, ...(hovering ? styles.emptyHintHover : {}) }}>{canWrite ? "+" : "—"}</span>}
+            {rows.map((shift) => { const type = shift._type; return <div key={shift.id} onClick={(e) => { e.stopPropagation(); if (canWrite) openEditShift(shift); }} style={{ ...(type === "Night" ? styles.nightBox : type === "Evening" ? styles.eveningBox : styles.shiftBox), ...(canWrite ? styles.editableShift : {}) }} title={canWrite ? "Click to edit shift" : undefined}><b>{type.toUpperCase()}</b><small>{shift.start_local && shift.end_local ? `${formatTime(shift.start_local)}–${formatTime(shift.end_local)}` : ""}</small></div>; })}
+            {empty && <span style={styles.emptyHint}>{canWrite ? "+" : "—"}</span>}
           </td>;
         })}
-        <td style={styles.stickyTotalCell}><div style={{ fontSize: 18, fontWeight: 900 }}>{Math.round((rangeHours[person.id] || 0) * 10) / 10}h</div>{(rangeHours[person.id] || 0) > otThreshold && <div style={styles.otBadge}>⚠ OT</div>}</td>
+        <td style={styles.stickyTotalCell}><div style={{ fontSize: 18, fontWeight: 900 }}>{Math.round((indexed.hours[String(person.id)] || 0) * 10) / 10}h</div>{(indexed.hours[String(person.id)] || 0) > otThreshold && <div style={styles.otBadge}>⚠ OT</div>}</td>
       </tr>)}
-      {canWrite && <tr><td style={styles.stickyCell}><b>Open Coverage</b></td>{days.map((day) => { const date = ymd(day); const rows = shifts.filter((s) => s.staff_id == null && s.shift_date === date && (shiftFilter === "All Shifts" || normalizedShiftType(s) === shiftFilter)); return <td key={date} style={{ ...styles.cell, ...(date === today ? styles.todayCell : {}) }}>{rows.map((s) => <div key={s.id} style={styles.openBox}>+ OPEN<small>{roleGroup(s.role)} · {normalizedShiftType(s)}</small></div>)}</td>; })}<td style={styles.stickyTotalCell}>—</td></tr>}
+      {canWrite && <tr><td style={styles.stickyCell}><b>Open Coverage</b></td>{days.map((day) => { const date = ymd(day); const rows = (indexed.openDate[date] || []).filter((s) => shiftFilter === "All Shifts" || s._type === shiftFilter); return <td key={date} style={{ ...styles.cell, ...(date === today ? styles.todayCell : {}) }}>{rows.map((s) => <div key={s.id} style={styles.openBox}>+ OPEN<small>{roleGroup(s.role)} · {s._type}</small></div>)}</td>; })}<td style={styles.stickyTotalCell}>—</td></tr>}
     </tbody></table></div>
 
     {modal && <Modal onClose={() => !saving && setModal(null)}>
@@ -238,5 +243,5 @@ function SummaryCard({ title, value, tone }) { const tones = { ok:["#062d1d","#2
 function Modal({ children, onClose }) { return <div style={styles.overlay} onMouseDown={onClose}><div style={styles.dialog} onMouseDown={(e) => e.stopPropagation()}>{children}</div></div>; }
 
 const styles = {
-  page:{padding:"24px 28px 40px",maxWidth:1700,margin:"0 auto"}, header:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:20,flexWrap:"wrap"}, toolbar:{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}, filters:{display:"flex",gap:10,margin:"22px 0 14px",flexWrap:"wrap"}, summaryGrid:{display:"grid",gridTemplateColumns:"repeat(4,minmax(170px,1fr))",gap:12,marginBottom:14}, notice:{padding:"12px 14px",border:"1px solid #a16207",background:"#2b2008",borderRadius:10,marginBottom:14,color:"#fde68a"}, tableWrap:{overflow:"auto",border:"1px solid var(--border)",borderRadius:14}, table:{width:"100%",borderCollapse:"separate",borderSpacing:0}, dayHead:{padding:"10px 8px",borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",textAlign:"center",background:"var(--nav-bg)",minWidth:112}, todayHead:{background:"#14243a",boxShadow:"inset 0 -2px 0 #3b82f6"}, todayBadge:{display:"inline-block",marginTop:4,padding:"2px 5px",borderRadius:999,background:"#1d4ed8",color:"white",fontSize:9,fontWeight:900,letterSpacing:.5}, stickyHead:{padding:"11px 14px",borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",textAlign:"left",background:"var(--nav-bg)",minWidth:210,position:"sticky",left:0,zIndex:4}, stickyTotalHead:{padding:"10px 8px",borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",textAlign:"center",background:"var(--nav-bg)",minWidth:88,position:"sticky",right:0,zIndex:4,boxShadow:"-8px 0 14px rgba(0,0,0,.18)"}, stickyCell:{padding:"10px 14px",borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",background:"var(--bg)",position:"sticky",left:0,zIndex:3,minWidth:210}, cell:{padding:5,borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",textAlign:"center",height:56,verticalAlign:"middle",transition:"background .12s ease, box-shadow .12s ease"}, todayCell:{background:"rgba(37,99,235,.055)"}, clickableCell:{cursor:"pointer"}, hoverCell:{background:"rgba(37,99,235,.12)",boxShadow:"inset 0 0 0 1px rgba(59,130,246,.35)"}, stickyTotalCell:{padding:6,borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",textAlign:"center",minWidth:88,background:"var(--bg)",position:"sticky",right:0,zIndex:3,boxShadow:"-8px 0 14px rgba(0,0,0,.12)"}, shiftBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #22c55e",background:"#08351f",margin:"1px 0",lineHeight:1.15}, eveningBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #f59e0b",background:"#3a2505",margin:"1px 0",lineHeight:1.15}, nightBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #3b82f6",background:"#0b2850",margin:"1px 0",lineHeight:1.15}, editableShift:{cursor:"pointer",boxShadow:"0 0 0 0 rgba(96,165,250,0)",transition:"transform .12s ease, box-shadow .12s ease"}, ptoBox:{padding:"7px 8px",borderRadius:8,border:"1px solid #a855f7",background:"#34134b",fontWeight:900}, openBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #38bdf8",background:"#0a2940",fontWeight:900,margin:"1px 0"}, emptyHint:{opacity:.28,fontSize:18,fontWeight:800,transition:"opacity .12s ease, transform .12s ease",display:"inline-block"}, emptyHintHover:{opacity:.8,transform:"scale(1.15)",color:"#60a5fa"}, otBadge:{fontSize:11,fontWeight:900,color:"#f87171",marginTop:2}, button:{background:"transparent",color:"inherit",border:"1px solid var(--border)",borderRadius:10,padding:"10px 14px",fontWeight:800}, activeButton:{background:"#0b4ea2",color:"white",border:"1px solid #3b82f6",borderRadius:10,padding:"10px 16px",fontWeight:900}, primaryButton:{background:"#2563eb",color:"white",border:"1px solid #3b82f6",borderRadius:10,padding:"10px 16px",fontWeight:900}, deleteButton:{background:"#7f1d1d",color:"#fee2e2",border:"1px solid #ef4444",borderRadius:10,padding:"10px 16px",fontWeight:900}, modalActions:{display:"flex",justifyContent:"space-between",gap:12,marginTop:20,flexWrap:"wrap"}, timeGrid:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}, input:{background:"var(--card-bg)",color:"inherit",border:"1px solid var(--border)",borderRadius:10,padding:"10px 12px",minWidth:150}, selectWrap:{position:"relative",minWidth:170}, select:{appearance:"none",WebkitAppearance:"none",width:"100%",background:"var(--card-bg)",color:"inherit",border:"1px solid var(--border)",borderRadius:10,padding:"10px 34px 10px 12px",fontWeight:800}, chevron:{position:"absolute",right:12,top:"50%",transform:"translateY(-54%)",pointerEvents:"none",opacity:.7,fontSize:18}, muted:{opacity:.65}, smallMuted:{opacity:.65,fontSize:13,marginTop:3}, label:{display:"grid",gap:6,fontWeight:800,margin:"12px 0"}, overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",display:"grid",placeItems:"center",zIndex:9999,padding:20}, dialog:{width:"min(620px,94vw)",maxHeight:"88vh",overflow:"auto",background:"var(--bg)",border:"1px solid var(--border)",borderRadius:16,padding:24,boxShadow:"0 24px 80px rgba(0,0,0,.45)"}
+  page:{padding:"24px 28px 40px",maxWidth:1700,margin:"0 auto"}, header:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:20,flexWrap:"wrap"}, toolbar:{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}, filters:{display:"flex",gap:10,margin:"22px 0 14px",flexWrap:"wrap"}, summaryGrid:{display:"grid",gridTemplateColumns:"repeat(4,minmax(170px,1fr))",gap:12,marginBottom:14}, notice:{padding:"12px 14px",border:"1px solid #a16207",background:"#2b2008",borderRadius:10,marginBottom:14,color:"#fde68a"}, tableWrap:{overflow:"auto",border:"1px solid var(--border)",borderRadius:14}, table:{width:"100%",borderCollapse:"separate",borderSpacing:0}, dayHead:{padding:"10px 8px",borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",textAlign:"center",background:"var(--nav-bg)",minWidth:112}, todayHead:{background:"#14243a",boxShadow:"inset 0 -2px 0 #3b82f6"}, todayBadge:{display:"inline-block",marginTop:4,padding:"2px 5px",borderRadius:999,background:"#1d4ed8",color:"white",fontSize:9,fontWeight:900,letterSpacing:.5}, refreshing:{fontSize:12,color:"#60a5fa",fontWeight:800}, stickyHead:{padding:"11px 14px",borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",textAlign:"left",background:"var(--nav-bg)",minWidth:210,position:"sticky",left:0,zIndex:4}, stickyTotalHead:{padding:"10px 8px",borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",textAlign:"center",background:"var(--nav-bg)",minWidth:88,position:"sticky",right:0,zIndex:4,boxShadow:"-8px 0 14px rgba(0,0,0,.18)"}, stickyCell:{padding:"10px 14px",borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",background:"var(--bg)",position:"sticky",left:0,zIndex:3,minWidth:210}, cell:{padding:5,borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",textAlign:"center",height:56,verticalAlign:"middle",transition:"background .12s ease"}, todayCell:{background:"rgba(37,99,235,.055)"}, clickableCell:{cursor:"pointer"}, stickyTotalCell:{padding:6,borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",textAlign:"center",minWidth:88,background:"var(--bg)",position:"sticky",right:0,zIndex:3,boxShadow:"-8px 0 14px rgba(0,0,0,.12)"}, shiftBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #22c55e",background:"#08351f",margin:"1px 0",lineHeight:1.15}, eveningBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #f59e0b",background:"#3a2505",margin:"1px 0",lineHeight:1.15}, nightBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #3b82f6",background:"#0b2850",margin:"1px 0",lineHeight:1.15}, editableShift:{cursor:"pointer",boxShadow:"0 0 0 0 rgba(96,165,250,0)",transition:"transform .12s ease, box-shadow .12s ease"}, ptoBox:{padding:"7px 8px",borderRadius:8,border:"1px solid #a855f7",background:"#34134b",fontWeight:900}, openBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #38bdf8",background:"#0a2940",fontWeight:900,margin:"1px 0"}, emptyHint:{opacity:.28,fontSize:18,fontWeight:800,display:"inline-block"}, otBadge:{fontSize:11,fontWeight:900,color:"#f87171",marginTop:2}, button:{background:"transparent",color:"inherit",border:"1px solid var(--border)",borderRadius:10,padding:"10px 14px",fontWeight:800}, activeButton:{background:"#0b4ea2",color:"white",border:"1px solid #3b82f6",borderRadius:10,padding:"10px 16px",fontWeight:900}, primaryButton:{background:"#2563eb",color:"white",border:"1px solid #3b82f6",borderRadius:10,padding:"10px 16px",fontWeight:900}, deleteButton:{background:"#7f1d1d",color:"#fee2e2",border:"1px solid #ef4444",borderRadius:10,padding:"10px 16px",fontWeight:900}, modalActions:{display:"flex",justifyContent:"space-between",gap:12,marginTop:20,flexWrap:"wrap"}, timeGrid:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}, input:{background:"var(--card-bg)",color:"inherit",border:"1px solid var(--border)",borderRadius:10,padding:"10px 12px",minWidth:150}, selectWrap:{position:"relative",minWidth:170}, select:{appearance:"none",WebkitAppearance:"none",width:"100%",background:"var(--card-bg)",color:"inherit",border:"1px solid var(--border)",borderRadius:10,padding:"10px 34px 10px 12px",fontWeight:800}, chevron:{position:"absolute",right:12,top:"50%",transform:"translateY(-54%)",pointerEvents:"none",opacity:.7,fontSize:18}, muted:{opacity:.65}, smallMuted:{opacity:.65,fontSize:13,marginTop:3}, label:{display:"grid",gap:6,fontWeight:800,margin:"12px 0"}, overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",display:"grid",placeItems:"center",zIndex:9999,padding:20}, dialog:{width:"min(620px,94vw)",maxHeight:"88vh",overflow:"auto",background:"var(--bg)",border:"1px solid var(--border)",borderRadius:16,padding:24,boxShadow:"0 24px 80px rgba(0,0,0,.45)"}
 };
