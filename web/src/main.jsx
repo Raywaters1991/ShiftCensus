@@ -17,9 +17,19 @@ ReactDOM.createRoot(document.getElementById("root")).render(
 );
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch((err) => {
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (refreshing) return;
+    refreshing = true;
+    window.location.reload();
+  });
+
+  window.addEventListener("load", async () => {
+    try {
+      const reg = await navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" });
+      await reg.update();
+    } catch (err) {
       console.warn("ShiftCensus service worker registration failed", err);
-    });
+    }
   });
 }
