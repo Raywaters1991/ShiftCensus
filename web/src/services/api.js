@@ -54,7 +54,6 @@ function readSupabaseAccessTokenFromStore(store) {
 }
 
 function getSupabaseAccessToken() {
-  // Prefer sessionStorage first, then localStorage
   return (
     readSupabaseAccessTokenFromStore(sessionStorage) ||
     readSupabaseAccessTokenFromStore(localStorage) ||
@@ -102,13 +101,12 @@ function getOrgContext() {
 // -------------------------
 // Lightweight GET cache
 // -------------------------
-// Goal: make repeat navigation feel instant without weakening auth or org scoping.
-// Fresh entries are returned immediately. Slightly stale entries are also returned
-// immediately while a background request refreshes them for the next view.
 const responseCache = new Map();
 const inFlightGets = new Map();
+const scheduleBundles = new Map();
 const FRESH_MS = 30_000;
 const STALE_MS = 5 * 60_000;
+const SCHEDULE_JOIN_MS = 1_000;
 
 function cacheScope() {
   const { orgId, orgCode } = getOrgContext();
@@ -123,6 +121,7 @@ function cacheKey(url, config = {}) {
 function clearResponseCache() {
   responseCache.clear();
   inFlightGets.clear();
+  scheduleBundles.clear();
 }
 
 const rawGet = api.get.bind(api);
@@ -139,7 +138,7 @@ async function refreshGet(key, url, config) {
   return promise;
 }
 
-api.get = async function cachedGet(url, config = {}) {
+async function regularCachedGet(url, config = {}) {
   if (config?.cache === false) return rawGet(url, config);
 
   const key = cacheKey(url, config);
@@ -149,12 +148,95 @@ api.get = async function cachedGet(url, config = {}) {
   if (cached && age <= FRESH_MS) return cached.data;
 
   if (cached && age <= STALE_MS) {
-    // Return immediately and refresh behind the scenes.
     refreshGet(key, url, config).catch(() => {});
     return cached.data;
   }
 
   return refreshGet(key, url, config);
+}
+
+function queryParts(url) {
+  try {
+    const parsed = new URL(String(url || ""), "https://shiftcensus.local");
+    return { path: parsed.pathname, params: parsed.searchParams };
+  } catch {
+    return { path: String(url || ""), params: new URLSearchParams() };
+  }
+}
+
+function recentScheduleBundle() {
+  const entry = scheduleBundles.get(cacheScope());
+  if (!entry || Date.now() - entry.started > SCHEDULE_JOIN_MS) return null;
+  return entry;
+}
+
+function scheduleBundle(from, to, config = {}) {
+  const scope = cacheScope();
+  const existing = scheduleBundles.get(scope);
+  if (existing && existing.from === from && existing.to === to && Date.now() - existing.started <= STALE_MS) {
+    return existing;
+  }
+
+  const url = `/schedule-view?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+  const promise = regularCachedGet(url, config);
+  const entry = { from, to, started: Date.now(), promise };
+  scheduleBundles.set(scope, entry);
+  promise.catch(() => {
+    if (scheduleBundles.get(scope) === entry) scheduleBundles.delete(scope);
+  });
+  return entry;
+}
+
+// Transparently collapse the Schedule page's four parallel reads into one HTTP
+// request. Existing page code does not need to change, and each legacy endpoint
+// remains available as a fallback if the bundle endpoint is unavailable.
+api.get = async function cachedGet(url, config = {}) {
+  const { path, params } = queryParts(url);
+
+  if (path === "/shifts" && params.get("from") && params.get("to") && !params.get("date")) {
+    const from = params.get("from");
+    const to = params.get("to");
+    try {
+      const bundle = await scheduleBundle(from, to, config).promise;
+      return Array.isArray(bundle?.shifts) ? bundle.shifts : [];
+    } catch {
+      return regularCachedGet(url, config);
+    }
+  }
+
+  if (path === "/shift-requests/approved-time-off" && params.get("from") && params.get("to")) {
+    const from = params.get("from");
+    const to = params.get("to");
+    const active = recentScheduleBundle();
+    if (active && active.from === from && active.to === to) {
+      try {
+        const bundle = await active.promise;
+        return Array.isArray(bundle?.pto) ? bundle.pto : [];
+      } catch {}
+    }
+  }
+
+  if (path === "/staff/lookup") {
+    const active = recentScheduleBundle();
+    if (active) {
+      try {
+        const bundle = await active.promise;
+        return Array.isArray(bundle?.staff) ? bundle.staff : [];
+      } catch {}
+    }
+  }
+
+  if (path === "/coverage-requirements") {
+    const active = recentScheduleBundle();
+    if (active) {
+      try {
+        const bundle = await active.promise;
+        return Array.isArray(bundle?.requirements) ? bundle.requirements : [];
+      } catch {}
+    }
+  }
+
+  return regularCachedGet(url, config);
 };
 
 api.clearResponseCache = clearResponseCache;
@@ -172,17 +254,12 @@ api.interceptors.request.use((config) => {
     else headers[k] = v;
   };
 
-  // 1) Auth
   const token = getSupabaseAccessToken();
   if (token) setHeader("Authorization", `Bearer ${token}`);
 
-  // 2) Org context
   const { orgId, orgCode } = getOrgContext();
-
   if (orgId) setHeader("X-Org-Id", orgId);
 
-  // ✅ IMPORTANT:
-  // Do NOT blindly send ADMIN org_code (it hijacks superadmin context).
   if (orgCode && String(orgCode).toUpperCase() !== "ADMIN") {
     setHeader("X-Org-Code", orgCode);
   }
@@ -193,15 +270,11 @@ api.interceptors.request.use((config) => {
 
 api.interceptors.response.use(
   (response) => {
-    // Any successful mutation can change data shown by multiple screens.
-    // Clear the read cache so the next navigation reflects the mutation.
     const method = String(response?.config?.method || "get").toLowerCase();
     if (method !== "get" && method !== "head") clearResponseCache();
     return response.data;
   },
   (error) => {
-    // Normalize Axios errors so the rest of the app can consistently read
-    // err.status / err.body instead of depending on Axios' response shape.
     const status = error?.response?.status ?? error?.status;
     const body = error?.response?.data ?? error?.body ?? null;
 
