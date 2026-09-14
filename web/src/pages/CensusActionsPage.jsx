@@ -65,7 +65,7 @@ export default function CensusActionsPage(){
   },[refreshKey,canWrite]);
 
   const refresh=()=>{ setTarget(null); setMode("actions"); setDraft(null); setToId(""); setRefreshKey(k=>k+1); };
-  const fail=(e)=>{ console.error(e); alert(e?.body?.details?.message || e?.message || "Could not update census."); };
+  const fail=(e)=>{ console.error(e); alert(e?.body?.details?.message || e?.body?.message || e?.message || "Could not update census."); };
   const isGenderMismatch=(e)=>e?.status===409&&(e?.body?.error==="GENDER_MISMATCH"||e?.message==="GENDER_MISMATCH");
 
   function intercept(e){
@@ -108,39 +108,56 @@ export default function CensusActionsPage(){
     catch(e){ fail(e); } finally { setBusy(false); }
   }
 
-  function residentPayload(r){ return {status:normStatus(r.status),payer_source:r.payer_source||null,care_type:r.care_type||null,admit_date:r.admit_date||null,expected_discharge:allowsDc(r.care_type)?r.expected_discharge||null:null,patient_label:String(r.patient_label||"").trim()||null,private_pay_note:String(r.private_pay_note||""),patient_gender:r.patient_gender||"Unknown",couple_override:!!r.couple_override,couple_note:String(r.couple_note||"").trim()||null}; }
   const emptyPayload={status:"empty",payer_source:null,care_type:null,admit_date:null,expected_discharge:null,patient_label:null,private_pay_note:"",patient_gender:"Unknown",couple_override:false,couple_note:null};
   async function move(){
     if(!canWrite) return;
-    const to=rows.find(r=>String(r.id)===String(toId)); if(!target||!to) return;
-    const swap=normStatus(to.status)!=="empty";
-    const originalDestination=swap?residentPayload(to):emptyPayload;
+    const to=rows.find(r=>String(r.id)===String(toId));
+    if(!target||!to) return;
+
+    const body={
+      source_id:target.id,
+      destination_id:to.id,
+      source_override:false,
+      source_override_note:null,
+      destination_override:false,
+      destination_override_note:null,
+    };
+
     setBusy(true);
-    let destinationChanged=false;
     try {
-      const moved=await putWithGenderOverride(to,residentPayload(target));
-      if(!moved) return;
-      destinationChanged=true;
-      try {
-        const clearedOrSwapped=await putWithGenderOverride(target,originalDestination);
-        if(!clearedOrSwapped) throw new Error("The source bed could not be updated.");
-      } catch(secondStepError) {
+      for(let attempt=0;attempt<3;attempt++){
         try {
-          await api.put(`/census/${to.id}`,originalDestination);
-          destinationChanged=false;
-        } catch(rollbackError) {
-          console.error("CENSUS MOVE ROLLBACK ERROR",rollbackError);
-          alert("The move could not be completed and the automatic rollback also failed. Do not make further census changes until the bed board is reviewed and corrected.");
-          await load();
+          await api.post("/census/move-swap",body);
+          refresh();
           return;
+        } catch(e){
+          if(!isGenderMismatch(e)) throw e;
+
+          const details=e?.body?.details||{};
+          const sourceToDestination=details.placement!=="destination_to_source";
+          const incomingRow=sourceToDestination?target:to;
+          const destinationRow=sourceToDestination?to:target;
+          const overrideKey=sourceToDestination?"source_override":"destination_override";
+          const noteKey=sourceToDestination?"source_override_note":"destination_override_note";
+
+          if(body[overrideKey]) throw e;
+
+          const incoming=details.incoming_gender||incomingRow.patient_gender||"resident";
+          const existing=details.room_gender||"the current room gender";
+          const room=roomNo(destinationRow)||destinationRow.room||"this room";
+          const ok=confirm(`Gender mismatch for Room ${room}.\n\nYou are placing a ${incoming} resident into a room currently designated ${existing}.\n\nOverride this restriction? Use only for an approved exception such as a married couple or other documented accommodation.`);
+          if(!ok) return;
+
+          const note=prompt("Enter the reason for the gender override:","Married couple / approved accommodation");
+          if(note===null) return;
+          body[overrideKey]=true;
+          body[noteKey]=String(note||"").trim()||"Approved room gender override";
         }
-        throw secondStepError;
       }
-      refresh();
+      throw new Error("The move could not be completed after validation.");
     } catch(e){
       fail(e);
-      if(destinationChanged) await load();
-      else await load();
+      await load();
     } finally { setBusy(false); }
   }
   async function discharge(){ if(!canWrite) return; if(!target||!confirm(`Discharge ${bedKey(target)}? This will mark the bed EMPTY.`)) return; setBusy(true); try { await api.put(`/census/${target.id}`,emptyPayload); refresh(); } catch(e){ fail(e); } finally { setBusy(false); } }
