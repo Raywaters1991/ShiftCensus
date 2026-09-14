@@ -72,11 +72,32 @@ async function resolveActiveOrg({ userId, headerOrgCode, isSuperadmin }) {
       const org = await getOrgByCode(headerOrgCode);
       if (org) return { org, source: "header", membershipRole: "superadmin" };
     }
+
     const fallback = await getFirstNonAdminOrg();
     if (fallback) return { org: fallback, source: "default", membershipRole: "superadmin" };
+
     return { org: null, source: "none", membershipRole: "superadmin" };
   }
 
+  // Honor the facility selected by a normal user, but only if
+  // they have an active membership in that facility.
+  if (headerOrgCode) {
+    const org = await getOrgByCode(headerOrgCode);
+
+    if (org) {
+      const membership = await getMembershipPerms(userId, org.id);
+
+      if (membership) {
+        return {
+          org,
+          source: "header",
+          membershipRole: membership.role || null,
+        };
+      }
+    }
+  }
+
+  // Fallback if the user has not selected a facility yet.
   const { data: memberships, error: memErr } = await supabaseAdmin
     .from("org_memberships")
     .select(`role, orgs:orgs!org_memberships_org_id_fkey ( id, org_code, name, logo_url )`)
@@ -85,14 +106,35 @@ async function resolveActiveOrg({ userId, headerOrgCode, isSuperadmin }) {
 
   if (!memErr && Array.isArray(memberships) && memberships.length > 0) {
     const m = memberships.find((x) => x?.orgs?.id) || null;
-    if (m?.orgs?.id) return { org: m.orgs, source: "membership", membershipRole: m.role || null };
+
+    if (m?.orgs?.id) {
+      return {
+        org: m.orgs,
+        source: "membership",
+        membershipRole: m.role || null,
+      };
+    }
   }
 
-  const { data: staff, error: staffErr } = await supabaseAdmin.from("staff").select("org_code").eq("user_id", userId).maybeSingle();
+  // Legacy fallback for older staff records.
+  const { data: staff, error: staffErr } = await supabaseAdmin
+    .from("staff")
+    .select("org_code")
+    .eq("user_id", userId)
+    .maybeSingle();
+
   if (!staffErr && staff?.org_code) {
     const org = await getOrgByCode(staff.org_code);
-    if (org) return { org, source: "staff", membershipRole: null };
+
+    if (org) {
+      return {
+        org,
+        source: "staff",
+        membershipRole: null,
+      };
+    }
   }
+
   return { org: null, source: "none", membershipRole: null };
 }
 
