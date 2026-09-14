@@ -61,16 +61,11 @@ export default function ScheduleMatrixPage() {
   async function load() {
     if (hasData) setRefreshing(true); else setLoading(true);
     try {
-      const [shiftRows, staffRows, leaveRows, coverageRows] = await Promise.all([
-        api.get(`/shifts?from=${from}&to=${to}`),
-        api.get("/staff/lookup"),
-        api.get(`/shift-requests/approved-time-off?from=${from}&to=${to}`),
-        api.get("/coverage-requirements"),
-      ]);
-      setShifts(Array.isArray(shiftRows) ? shiftRows : []);
-      setStaff(Array.isArray(staffRows) ? staffRows : []);
-      setPto(Array.isArray(leaveRows) ? leaveRows : []);
-      setRequirements(Array.isArray(coverageRows) ? coverageRows : []);
+      const bundle = await api.getScheduleView(from, to);
+      setShifts(Array.isArray(bundle?.shifts) ? bundle.shifts : []);
+      setStaff(Array.isArray(bundle?.staff) ? bundle.staff : []);
+      setPto(Array.isArray(bundle?.pto) ? bundle.pto : []);
+      setRequirements(Array.isArray(bundle?.requirements) ? bundle.requirements : []);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -90,7 +85,7 @@ export default function ScheduleMatrixPage() {
         to: ymd(addDays(start, rangeDays - 1)),
       }));
       for (const range of ranges) {
-        api.get(`/schedule-view?from=${range.from}&to=${range.to}`).catch(() => {});
+        api.prefetchScheduleView(range.from, range.to).catch(() => {});
       }
     };
     let idleId;
@@ -261,13 +256,13 @@ export default function ScheduleMatrixPage() {
       {modal.type === "shift" && <><h2>Add Shift</h2><label style={styles.label}>Employee<Select value={modal.form.staff_id} onChange={(e) => setModal((m) => ({ ...m, form: { ...m.form, staff_id: e.target.value } }))}>{staff.map((p) => <option value={p.id} key={p.id}>{p.name} ({p.role})</option>)}</Select></label><label style={styles.label}>Date<input style={styles.input} type="date" value={modal.form.date} onChange={(e) => setModal((m) => ({ ...m, form: { ...m.form, date: e.target.value } }))} /></label><label style={styles.label}>Shift<Select value={modal.form.shift_type} onChange={(e) => setModal((m) => ({ ...m, form: { ...m.form, shift_type: e.target.value } }))}>{SHIFT_TYPES.map((o) => <option key={o}>{o}</option>)}</Select></label><button style={styles.primaryButton} disabled={saving} onClick={addShift}>{saving ? "Saving…" : "Add Shift"}</button></>}
       {modal.type === "editShift" && <><h2>Edit Shift</h2><p style={styles.muted}>Changes update the existing shift and preserve its unit/assignment.</p><label style={styles.label}>Employee<Select value={modal.form.staff_id} onChange={(e) => setModal((m) => ({ ...m, form: { ...m.form, staff_id: e.target.value } }))}>{staff.map((p) => <option value={p.id} key={p.id}>{p.name} ({p.role})</option>)}</Select></label><label style={styles.label}>Date<input style={styles.input} type="date" value={modal.form.date} onChange={(e) => setModal((m) => ({ ...m, form: { ...m.form, date: e.target.value } }))} /></label><label style={styles.label}>Shift<Select value={modal.form.shift_type} onChange={(e) => setModal((m) => ({ ...m, form: { ...m.form, shift_type: e.target.value } }))}>{EDIT_SHIFT_TYPES.map((o) => <option key={o}>{o}</option>)}</Select></label>{modal.form.shift_type === "Custom" && <div style={styles.timeGrid}><label style={styles.label}>Start<input style={styles.input} type="time" value={modal.form.start_local} onChange={(e) => setModal((m) => ({ ...m, form: { ...m.form, start_local: e.target.value } }))} /></label><label style={styles.label}>End<input style={styles.input} type="time" value={modal.form.end_local} onChange={(e) => setModal((m) => ({ ...m, form: { ...m.form, end_local: e.target.value } }))} /></label></div>}<div style={styles.modalActions}><button style={styles.primaryButton} disabled={saving} onClick={saveEditedShift}>{saving ? "Saving…" : "Save Changes"}</button><button style={styles.deleteButton} disabled={saving} onClick={deleteEditedShift}>Delete Shift</button></div></>}
       {modal.type === "open" && <><h2>Post Open Shift</h2><label style={styles.label}>Coverage<Select value={modal.form.role} onChange={(e) => setModal((m) => ({ ...m, form: { ...m.form, role: e.target.value } }))}><option value="Nurse">Nurse (RN/LPN)</option><option value="CNA">CNA</option></Select></label><label style={styles.label}>Date<input style={styles.input} type="date" value={modal.form.date} onChange={(e) => setModal((m) => ({ ...m, form: { ...m.form, date: e.target.value } }))} /></label><label style={styles.label}>Shift<Select value={modal.form.shift_type} onChange={(e) => setModal((m) => ({ ...m, form: { ...m.form, shift_type: e.target.value } }))}>{SHIFT_TYPES.map((o) => <option key={o}>{o}</option>)}</Select></label><button style={styles.primaryButton} disabled={saving} onClick={addOpenShift}>{saving ? "Posting…" : "Post Open Shift"}</button></>}
-      {modal.type === "rules" && <><h2>Coverage Rules</h2><p style={styles.muted}>Required staff for each shift. These rules apply to every day of the week.</p>{["Nurse","CNA"].map((group) => <div key={group} style={{ marginBottom: 18 }}><b>{group}</b><div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginTop: 8 }}>{SHIFT_TYPES.map((shiftType) => { const existing = modal.rows.find((r) => r.role_group === group && r.shift_type === shiftType); return <label key={shiftType} style={styles.label}>{shiftType}<input style={styles.input} type="number" min="0" max="100" value={existing?.required_count || 0} onChange={(e) => updateCoverageRule(group, shiftType, e.target.value)} /></label>; })}</div></div>)}<button style={styles.primaryButton} disabled={saving} onClick={saveCoverageRules}>{saving ? "Saving…" : "Save Coverage Rules"}</button></>}
+      {modal.type === "rules" && <><h2>Coverage Rules</h2><p style={styles.muted}>Required staff for each shift. These rules apply to every day of the week.</p>{["Nurse","CNA"].map((group) => <div key={group} style={{ marginBottom: 18 }}><b>{group}</b><div style={{ display: "grid", gridTemplateColumns:"repeat(3,1fr)", gap:10, marginTop:8 }}>{SHIFT_TYPES.map((shiftType) => { const existing = modal.rows.find((r) => r.role_group === group && r.shift_type === shiftType); return <label key={shiftType} style={styles.label}>{shiftType}<input style={styles.input} type="number" min="0" max="100" value={existing?.required_count || 0} onChange={(e) => updateCoverageRule(group, shiftType, e.target.value)} /></label>; })}</div></div>)}<button style={styles.primaryButton} disabled={saving} onClick={saveCoverageRules}>{saving ? "Saving…" : "Save Coverage Rules"}</button></>}
     </Modal>}
   </div>;
 }
 
 function Select({ children, style, ...props }) { return <div style={{ ...styles.selectWrap, ...style }}><select style={styles.select} {...props}>{children}</select><span style={styles.chevron}>⌄</span></div>; }
-function SummaryCard({ title, value, tone }) { const tones = { ok:["#062d1d","#22c55e"], warn:["#332107","#f59e0b"], info:["#08233d","#38bdf8"], purple:["#251438","#c084fc"], neutral:["#171717","#6b7280"] }; const t = tones[tone] || tones.neutral; return <div style={{ padding: 18, borderRadius: 14, border: `1px solid ${t[1]}55`, background: t[0] }}><div style={styles.muted}>{title}</div><div style={{ fontSize: 26, fontWeight: 900, marginTop: 4 }}>{value}</div></div>; }
+function SummaryCard({ title, value, tone }) { const tones = { ok:["#062d1d","#22c55e"], warn:["#332107","#f59e0b"], info:["#08233d","#38bdf8"], purple:["#251438","#c084fc"], neutral:["#171717","#6b7280"] }; const t = tones[tone] || tones.neutral; return <div style={{ padding:18, borderRadius:14, border:`1px solid ${t[1]}55`, background:t[0] }}><div style={styles.muted}>{title}</div><div style={{ fontSize:26, fontWeight:900, marginTop:4 }}>{value}</div></div>; }
 function Modal({ children, onClose }) { return <div style={styles.overlay} onMouseDown={onClose}><div style={styles.dialog} onMouseDown={(e) => e.stopPropagation()}>{children}</div></div>; }
 
 const styles = {
