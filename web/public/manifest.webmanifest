@@ -3,9 +3,15 @@
   "short_name": "ShiftCensus",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0b0b0b",
-  "theme_color": "#0b0b0b",
+  "background_color": "#020817",
+  "theme_color": "#031a42",
   "icons": [
+    {
+      "src": "/shiftcensus-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
     {
       "src": "/favicon-256x256.png",
       "sizes": "256x256",
