@@ -9,10 +9,7 @@ const { requireOrg } = require("../middleware/orgGuard");
 router.use(requireAuth);
 router.use(requireOrg);
 
-function isPrivileged(role) {
-  const r = String(role || "").toLowerCase();
-  return ["superadmin", "admin", "don", "ed"].includes(r);
-}
+
 
 function toBool(v, fallback = false) {
   if (typeof v === "boolean") return v;
@@ -114,10 +111,6 @@ router.patch("/:userId", async (req, res) => {
   const userId = String(req.params.userId || "").trim();
 
   if (!userId) return res.status(400).json({ error: "Missing userId" });
-
-  if (!isPrivileged(req.role)) {
-    return res.status(403).json({ error: "Insufficient role" });
-  }
 
   const patch = req.body || {};
   const is_admin = toBool(patch.is_admin, false);
