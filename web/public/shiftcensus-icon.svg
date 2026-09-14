@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="ShiftCensus">
+<defs>
+  <radialGradient id="bg" cx="50%" cy="18%" r="95%"><stop offset="0" stop-color="#073b83"/><stop offset=".45" stop-color="#031a42"/><stop offset="1" stop-color="#020817"/></radialGradient>
+  <linearGradient id="b" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#1155ff"/><stop offset="1" stop-color="#12c9ff"/></linearGradient>
+  <linearGradient id="c" x1="0" y1="1" x2="1" y2="0"><stop stop-color="#079dff"/><stop offset="1" stop-color="#28f0cf"/></linearGradient>
+  <filter id="glow"><feGaussianBlur stdDeviation="7" result="x"/><feMerge><feMergeNode in="x"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+</defs>
+<rect width="1024" height="1024" fill="url(#bg)"/>
+<g filter="url(#glow)" stroke="#74f8ff" stroke-opacity=".5" stroke-width="2">
+ <path fill="url(#b)" d="M212 315Q212 286 236 269L350 187Q373 171 392 190L392 336Q392 354 373 359L236 397Q212 403 212 377Z"/>
+ <path fill="url(#c)" d="M421 166Q421 141 444 126L492 95Q512 82 532 95L580 126Q603 141 603 166V347Q603 368 582 368H442Q421 368 421 347Z"/>
+ <path fill="url(#c)" d="M632 190Q651 171 674 187L788 269Q812 286 812 315V377Q812 403 788 397L651 359Q632 354 632 336Z"/>
+ <path fill="url(#b)" d="M212 438Q212 419 230 414L373 375Q392 370 392 390V594Q392 614 373 609L230 570Q212 565 212 546Z"/>
+ <rect x="421" y="390" width="182" height="204" rx="28" fill="url(#c)"/>
+ <path fill="url(#c)" d="M632 390Q632 370 651 375L794 414Q812 419 812 438V546Q812 565 794 570L651 609Q632 614 632 594Z"/>
+ <path fill="url(#b)" d="M212 607Q212 581 236 587L373 625Q392 630 392 648V794Q373 813 350 797L236 715Q212 698 212 669Z"/>
+ <path fill="url(#c)" d="M421 649Q421 628 442 628H582Q603 628 603 649V830Q603 855 580 870L532 901Q512 914 492 901L444 870Q421 855 421 830Z"/>
+ <path fill="url(#b)" d="M632 648Q632 630 651 625L788 587Q812 581 812 607V669Q812 698 788 715L674 797Q651 813 632 794Z"/>
+</g>
+</svg>
