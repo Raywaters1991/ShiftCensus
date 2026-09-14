@@ -22,7 +22,7 @@ export default function ScheduleWorkspacePage(){
   const[message,setMessage]=useState("");
   const[bonusEdit,setBonusEdit]=useState(null);
 
-  async function loadOpen(){if(!canWrite||!from||!to)return;try{const rows=await api.get(`/shifts?from=${from}&to=${to}`);setOpenShifts((Array.isArray(rows)?rows:[]).filter(x=>x.staff_id==null))}catch{setOpenShifts([])}}
+  async function loadOpen(){if(!canWrite||!from||!to)return;try{const bundle=await api.getScheduleView(from,to);const rows=Array.isArray(bundle?.shifts)?bundle.shifts:[];setOpenShifts(rows.filter(x=>x.staff_id==null))}catch{setOpenShifts([])}}
   useEffect(()=>{loadOpen()},[from,to,canWrite]);
 
   async function publish(){
