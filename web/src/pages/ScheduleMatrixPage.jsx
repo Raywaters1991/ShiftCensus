@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../services/api";
 import { useUser } from "../contexts/UserContext.jsx";
@@ -47,12 +47,14 @@ export default function ScheduleMatrixPage() {
   const [roleFilter, setRoleFilter] = useState("Nurses (RN/LPN)");
   const [shiftFilter, setShiftFilter] = useState("All Shifts");
   const [search, setSearch] = useState("");
+  const deferredSearch = useDeferredValue(search);
   const [modal, setModal] = useState(null);
   const [saving, setSaving] = useState(false);
 
   const days = useMemo(() => Array.from({ length: rangeDays }, (_, i) => addDays(week, i)), [week, rangeDays]);
-  const from = ymd(days[0]);
-  const to = ymd(days[days.length - 1]);
+  const dayDates = useMemo(() => days.map(ymd), [days]);
+  const from = dayDates[0];
+  const to = dayDates[dayDates.length - 1];
   const today = ymd(new Date());
   const hasData = staff.length > 0 || shifts.length > 0 || pto.length > 0 || requirements.length > 0;
 
@@ -77,6 +79,34 @@ export default function ScheduleMatrixPage() {
 
   useEffect(() => { load(); }, [from, to]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const prefetch = () => {
+      if (cancelled) return;
+      const previousStart = addDays(week, -rangeDays);
+      const nextStart = addDays(week, rangeDays);
+      const ranges = [previousStart, nextStart].map((start) => ({
+        from: ymd(start),
+        to: ymd(addDays(start, rangeDays - 1)),
+      }));
+      for (const range of ranges) {
+        api.get(`/schedule-view?from=${range.from}&to=${range.to}`).catch(() => {});
+      }
+    };
+    let idleId;
+    let timeoutId;
+    if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
+      idleId = window.requestIdleCallback(prefetch, { timeout: 1500 });
+    } else {
+      timeoutId = setTimeout(prefetch, 350);
+    }
+    return () => {
+      cancelled = true;
+      if (idleId && typeof window?.cancelIdleCallback === "function") window.cancelIdleCallback(idleId);
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [week, rangeDays]);
+
   const staffById = useMemo(() => Object.fromEntries(staff.map((p) => [String(p.id), p])), [staff]);
   const indexed = useMemo(() => {
     const employeeDate = {};
@@ -84,18 +114,15 @@ export default function ScheduleMatrixPage() {
     const coverageCounts = {};
     const hours = {};
     let openCount = 0;
-
     for (const shift of shifts) {
       const type = normalizedShiftType(shift);
       const enriched = { ...shift, _type: type };
       const date = String(shift.shift_date || "");
-
       if (shift.staff_id == null) {
         openCount += 1;
         (openDate[date] ||= []).push(enriched);
         continue;
       }
-
       const staffId = String(shift.staff_id);
       (employeeDate[`${staffId}|${date}`] ||= []).push(enriched);
       hours[staffId] = (hours[staffId] || 0) + shiftHours(shift);
@@ -103,7 +130,6 @@ export default function ScheduleMatrixPage() {
       const key = `${date}|${group}|${type}`;
       coverageCounts[key] = (coverageCounts[key] || 0) + 1;
     }
-
     return { employeeDate, openDate, coverageCounts, hours, openCount };
   }, [shifts, staffById]);
 
@@ -112,16 +138,17 @@ export default function ScheduleMatrixPage() {
     let roleMatches = roleFilter === "All Staff";
     if (roleFilter === "Nurses (RN/LPN)") roleMatches = isNurse(r);
     if (["RN","LPN","CNA"].includes(roleFilter)) roleMatches = r === roleFilter;
-    return roleMatches && (!search || String(person.name || "").toLowerCase().includes(search.toLowerCase()));
-  }).sort((a,b) => String(a.name || "").localeCompare(String(b.name || ""))), [staff, roleFilter, search]);
+    const needle = String(deferredSearch || "").trim().toLowerCase();
+    return roleMatches && (!needle || String(person.name || "").toLowerCase().includes(needle));
+  }).sort((a,b) => String(a.name || "").localeCompare(String(b.name || ""))), [staff, roleFilter, deferredSearch]);
 
   const ptoMap = useMemo(() => { const out = {}; pto.forEach((r) => { const d = new Date(`${r.start_date}T00:00:00`), end = new Date(`${r.end_date}T00:00:00`); while (d <= end) { out[`${r.staff_id}|${ymd(d)}`] = r; d.setDate(d.getDate()+1); } }); return out; }, [pto]);
   const requirementMap = useMemo(() => Object.fromEntries(requirements.map((r) => [`${r.role_group}|${r.shift_type}`, Number(r.required_count) || 0])), [requirements]);
   const coverageConfigured = requirements.some((r) => Number(r.required_count) > 0);
   const coverage = useMemo(() => {
     const perDay = {}; let shortage = 0, coveredSlots = 0;
-    days.forEach((day) => {
-      const date = ymd(day); let dayShortage = 0;
+    dayDates.forEach((date) => {
+      let dayShortage = 0;
       ["Nurse","CNA"].forEach((group) => SHIFT_TYPES.forEach((shiftType) => {
         const required = requirementMap[`${group}|${shiftType}`] || 0; if (!required) return;
         const scheduled = indexed.coverageCounts[`${date}|${group}|${shiftType}`] || 0;
@@ -130,7 +157,7 @@ export default function ScheduleMatrixPage() {
       perDay[date] = dayShortage;
     });
     return { shortage, coveredSlots, perDay };
-  }, [days, requirementMap, indexed.coverageCounts]);
+  }, [dayDates, requirementMap, indexed.coverageCounts]);
 
   const overtimeCount = Object.values(indexed.hours).filter((h) => h > (rangeDays === 14 ? 80 : 40)).length;
   const otThreshold = rangeDays === 14 ? 80 : 40;
@@ -174,6 +201,23 @@ export default function ScheduleMatrixPage() {
     setModal((current) => { const rows = [...current.rows]; const i = rows.findIndex((r) => r.role_group === group && r.shift_type === shiftType); const next = { role_group: group, shift_type: shiftType, required_count: Number(value) || 0 }; if (i >= 0) rows[i] = { ...rows[i], ...next }; else rows.push(next); return { ...current, rows }; });
   }
 
+  const employeeRows = useMemo(() => visibleStaff.map((person) => <tr key={person.id}>
+    <td style={styles.stickyCell}><b>{person.name}</b><div style={styles.smallMuted}>{person.role}</div></td>
+    {dayDates.map((date) => {
+      const leave = ptoMap[`${person.id}|${date}`], isToday = date === today;
+      const rows = (indexed.employeeDate[`${person.id}|${date}`] || []).filter((s) => shiftFilter === "All Shifts" || s._type === shiftFilter);
+      const empty = !leave && rows.length === 0;
+      return <td key={date} style={{ ...styles.cell, ...(isToday ? styles.todayCell : {}), ...(empty && canWrite ? styles.clickableCell : {}) }} onClick={() => empty && canWrite && setModal({ type: "shift", form: { staff_id: String(person.id), date, shift_type: "Day" } })}>
+        {leave && <div style={styles.ptoBox}>✈ PTO</div>}
+        {rows.map((shift) => { const type = shift._type; return <div key={shift.id} onClick={(e) => { e.stopPropagation(); if (canWrite) openEditShift(shift); }} style={{ ...(type === "Night" ? styles.nightBox : type === "Evening" ? styles.eveningBox : styles.shiftBox), ...(canWrite ? styles.editableShift : {}) }} title={canWrite ? "Click to edit shift" : undefined}><b>{type.toUpperCase()}</b><small>{shift.start_local && shift.end_local ? `${formatTime(shift.start_local)}–${formatTime(shift.end_local)}` : ""}</small></div>; })}
+        {empty && <span style={styles.emptyHint}>{canWrite ? "+" : "—"}</span>}
+      </td>;
+    })}
+    <td style={styles.stickyTotalCell}><div style={{ fontSize: 18, fontWeight: 900 }}>{Math.round((indexed.hours[String(person.id)] || 0) * 10) / 10}h</div>{(indexed.hours[String(person.id)] || 0) > otThreshold && <div style={styles.otBadge}>⚠ OT</div>}</td>
+  </tr>), [visibleStaff, dayDates, ptoMap, indexed.employeeDate, indexed.hours, shiftFilter, canWrite, today, otThreshold]);
+
+  const openCoverageRow = useMemo(() => !canWrite ? null : <tr><td style={styles.stickyCell}><b>Open Coverage</b></td>{dayDates.map((date) => { const rows = (indexed.openDate[date] || []).filter((s) => shiftFilter === "All Shifts" || s._type === shiftFilter); return <td key={date} style={{ ...styles.cell, ...(date === today ? styles.todayCell : {}) }}>{rows.map((s) => <div key={s.id} style={styles.openBox}>+ OPEN<small>{roleGroup(s.role)} · {s._type}</small></div>)}</td>; })}<td style={styles.stickyTotalCell}>—</td></tr>, [canWrite, dayDates, indexed.openDate, shiftFilter, today]);
+
   if (loading && !hasData) return <div style={{ padding: 32 }}>Loading schedule…</div>;
 
   return <div style={styles.page}>
@@ -211,23 +255,7 @@ export default function ScheduleMatrixPage() {
       <th style={styles.stickyHead}>Employee</th>
       {days.map((day) => { const date = ymd(day), short = coverage.perDay[date] || 0, isToday = date === today; return <th key={date} style={{ ...styles.dayHead, ...(isToday ? styles.todayHead : {}) }}><div>{day.toLocaleDateString("en-US", { weekday: "short" })}</div><small>{day.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</small>{isToday && <div style={styles.todayBadge}>TODAY</div>}{coverageConfigured && <div style={{ fontSize: 11, marginTop: 4, color: short ? "#f59e0b" : "#22c55e" }}>{short ? `⚠ ${short} short` : "✓ Covered"}</div>}</th>; })}
       <th style={styles.stickyTotalHead}>Total</th>
-    </tr></thead><tbody>
-      {visibleStaff.map((person) => <tr key={person.id}>
-        <td style={styles.stickyCell}><b>{person.name}</b><div style={styles.smallMuted}>{person.role}</div></td>
-        {days.map((day) => {
-          const date = ymd(day), leave = ptoMap[`${person.id}|${date}`], isToday = date === today;
-          const rows = (indexed.employeeDate[`${person.id}|${date}`] || []).filter((s) => shiftFilter === "All Shifts" || s._type === shiftFilter);
-          const empty = !leave && rows.length === 0;
-          return <td key={date} style={{ ...styles.cell, ...(isToday ? styles.todayCell : {}), ...(empty && canWrite ? styles.clickableCell : {}) }} onClick={() => empty && canWrite && setModal({ type: "shift", form: { staff_id: String(person.id), date, shift_type: "Day" } })}>
-            {leave && <div style={styles.ptoBox}>✈ PTO</div>}
-            {rows.map((shift) => { const type = shift._type; return <div key={shift.id} onClick={(e) => { e.stopPropagation(); if (canWrite) openEditShift(shift); }} style={{ ...(type === "Night" ? styles.nightBox : type === "Evening" ? styles.eveningBox : styles.shiftBox), ...(canWrite ? styles.editableShift : {}) }} title={canWrite ? "Click to edit shift" : undefined}><b>{type.toUpperCase()}</b><small>{shift.start_local && shift.end_local ? `${formatTime(shift.start_local)}–${formatTime(shift.end_local)}` : ""}</small></div>; })}
-            {empty && <span style={styles.emptyHint}>{canWrite ? "+" : "—"}</span>}
-          </td>;
-        })}
-        <td style={styles.stickyTotalCell}><div style={{ fontSize: 18, fontWeight: 900 }}>{Math.round((indexed.hours[String(person.id)] || 0) * 10) / 10}h</div>{(indexed.hours[String(person.id)] || 0) > otThreshold && <div style={styles.otBadge}>⚠ OT</div>}</td>
-      </tr>)}
-      {canWrite && <tr><td style={styles.stickyCell}><b>Open Coverage</b></td>{days.map((day) => { const date = ymd(day); const rows = (indexed.openDate[date] || []).filter((s) => shiftFilter === "All Shifts" || s._type === shiftFilter); return <td key={date} style={{ ...styles.cell, ...(date === today ? styles.todayCell : {}) }}>{rows.map((s) => <div key={s.id} style={styles.openBox}>+ OPEN<small>{roleGroup(s.role)} · {s._type}</small></div>)}</td>; })}<td style={styles.stickyTotalCell}>—</td></tr>}
-    </tbody></table></div>
+    </tr></thead><tbody>{employeeRows}{openCoverageRow}</tbody></table></div>
 
     {modal && <Modal onClose={() => !saving && setModal(null)}>
       {modal.type === "shift" && <><h2>Add Shift</h2><label style={styles.label}>Employee<Select value={modal.form.staff_id} onChange={(e) => setModal((m) => ({ ...m, form: { ...m.form, staff_id: e.target.value } }))}>{staff.map((p) => <option value={p.id} key={p.id}>{p.name} ({p.role})</option>)}</Select></label><label style={styles.label}>Date<input style={styles.input} type="date" value={modal.form.date} onChange={(e) => setModal((m) => ({ ...m, form: { ...m.form, date: e.target.value } }))} /></label><label style={styles.label}>Shift<Select value={modal.form.shift_type} onChange={(e) => setModal((m) => ({ ...m, form: { ...m.form, shift_type: e.target.value } }))}>{SHIFT_TYPES.map((o) => <option key={o}>{o}</option>)}</Select></label><button style={styles.primaryButton} disabled={saving} onClick={addShift}>{saving ? "Saving…" : "Add Shift"}</button></>}
