@@ -113,9 +113,35 @@ export default function CensusActionsPage(){
   async function move(){
     if(!canWrite) return;
     const to=rows.find(r=>String(r.id)===String(toId)); if(!target||!to) return;
-    const swap=normStatus(to.status)!=="empty"; setBusy(true);
-    try { const moved=await putWithGenderOverride(to,residentPayload(target)); if(!moved) return; const clearedOrSwapped=await putWithGenderOverride(target,swap?residentPayload(to):emptyPayload); if(!clearedOrSwapped){ await load(); return; } refresh(); }
-    catch(e){ fail(e); await load(); } finally { setBusy(false); }
+    const swap=normStatus(to.status)!=="empty";
+    const originalDestination=swap?residentPayload(to):emptyPayload;
+    setBusy(true);
+    let destinationChanged=false;
+    try {
+      const moved=await putWithGenderOverride(to,residentPayload(target));
+      if(!moved) return;
+      destinationChanged=true;
+      try {
+        const clearedOrSwapped=await putWithGenderOverride(target,originalDestination);
+        if(!clearedOrSwapped) throw new Error("The source bed could not be updated.");
+      } catch(secondStepError) {
+        try {
+          await api.put(`/census/${to.id}`,originalDestination);
+          destinationChanged=false;
+        } catch(rollbackError) {
+          console.error("CENSUS MOVE ROLLBACK ERROR",rollbackError);
+          alert("The move could not be completed and the automatic rollback also failed. Do not make further census changes until the bed board is reviewed and corrected.");
+          await load();
+          return;
+        }
+        throw secondStepError;
+      }
+      refresh();
+    } catch(e){
+      fail(e);
+      if(destinationChanged) await load();
+      else await load();
+    } finally { setBusy(false); }
   }
   async function discharge(){ if(!canWrite) return; if(!target||!confirm(`Discharge ${bedKey(target)}? This will mark the bed EMPTY.`)) return; setBusy(true); try { await api.put(`/census/${target.id}`,emptyPayload); refresh(); } catch(e){ fail(e); } finally { setBusy(false); } }
 
