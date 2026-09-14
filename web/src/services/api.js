@@ -155,6 +155,15 @@ async function regularCachedGet(url, config = {}) {
   return refreshGet(key, url, config);
 }
 
+function scheduleViewUrl(from, to) {
+  return `/schedule-view?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+}
+
+async function getScheduleView(from, to, config = {}) {
+  if (!from || !to) throw new Error("Schedule range is required");
+  return regularCachedGet(scheduleViewUrl(from, to), config);
+}
+
 function queryParts(url) {
   try {
     const parsed = new URL(String(url || ""), "https://shiftcensus.local");
@@ -177,8 +186,7 @@ function scheduleBundle(from, to, config = {}) {
     return existing;
   }
 
-  const url = `/schedule-view?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
-  const promise = regularCachedGet(url, config);
+  const promise = getScheduleView(from, to, config);
   const entry = { from, to, started: Date.now(), promise };
   scheduleBundles.set(scope, entry);
   promise.catch(() => {
@@ -187,9 +195,9 @@ function scheduleBundle(from, to, config = {}) {
   return entry;
 }
 
-// Transparently collapse the Schedule page's four parallel reads into one HTTP
-// request. Existing page code does not need to change, and each legacy endpoint
-// remains available as a fallback if the bundle endpoint is unavailable.
+// Transparently collapse legacy Schedule page reads into one HTTP request.
+// New Schedule code calls getScheduleView directly; the legacy interception is
+// retained for compatibility with any remaining callers.
 api.get = async function cachedGet(url, config = {}) {
   const { path, params } = queryParts(url);
 
@@ -239,6 +247,8 @@ api.get = async function cachedGet(url, config = {}) {
   return regularCachedGet(url, config);
 };
 
+api.getScheduleView = getScheduleView;
+api.prefetchScheduleView = (from, to) => getScheduleView(from, to).then(() => undefined);
 api.clearResponseCache = clearResponseCache;
 api.invalidateGetCache = clearResponseCache;
 
