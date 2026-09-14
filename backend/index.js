@@ -49,6 +49,7 @@ app.use("/api/census/move-swap", requireAuth, requireOrg, requireCensusAccess, r
 app.use("/api/census", requireAuth, requireOrg, requireCensusAccess, require("./routes/census"));
 app.use("/api/dashboard", require("./routes/dashboard"));
 app.use("/api/operations-snapshot", require("./routes/operationsSnapshot"));
+app.use("/api/schedule-view", require("./routes/scheduleView"));
 app.use("/api/shifts", require("./routes/shifts"));
 app.use("/api/schedule-workflow", require("./routes/scheduleWorkflow"));
 app.use("/api/notifications", require("./routes/notifications"));
