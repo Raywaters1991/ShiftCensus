@@ -3,6 +3,8 @@ import api from "../services/api";
 import { saveOfflineOperationsSnapshot } from "../services/offlineCache.js";
 import { useUser } from "../contexts/UserContext.jsx";
 
+const SNAPSHOT_REFRESH_MS = 60_000;
+
 export default function OperationsSnapshotSync() {
   const { user, orgId, orgCode, orgName, permissions, isSuperadmin } = useUser();
 
@@ -33,14 +35,27 @@ export default function OperationsSnapshotSync() {
       } catch (e) {
         // Preserve the previous Last Known Good snapshot on any failure.
         console.warn("Operations snapshot not updated", e);
-      } finally { syncing = false; }
+      } finally {
+        syncing = false;
+      }
     }
 
-    const onVisible=()=>{if(document.visibilityState==="visible")sync();};
+    const onVisible = () => {
+      if (document.visibilityState === "visible") sync();
+    };
+    const onOnline = () => sync();
+
     sync();
-    const timer = window.setInterval(sync, 300000);
-    document.addEventListener("visibilitychange",onVisible);
-    return () => { cancelled = true; window.clearInterval(timer); document.removeEventListener("visibilitychange",onVisible); };
+    const timer = window.setInterval(sync, SNAPSHOT_REFRESH_MS);
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("online", onOnline);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("online", onOnline);
+    };
   }, [user, orgId, orgCode, orgName, permissions, isSuperadmin]);
 
   return null;
