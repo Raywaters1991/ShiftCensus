@@ -14,6 +14,20 @@ function shiftHours(shift) { if (!shift?.start_time || !shift?.end_time) return 
 function isNurse(role) { return ["RN", "LPN", "NURSE"].includes(String(role || "").toUpperCase()); }
 function roleGroup(role) { if (isNurse(role)) return "Nurse"; if (String(role || "").toUpperCase() === "CNA") return "CNA"; return String(role || ""); }
 function formatTime(value) { if (!value) return ""; const [h,m] = String(value).slice(0,5).split(":").map(Number); const suffix = h >= 12 ? "p" : "a"; const hour = h % 12 || 12; return `${hour}${m ? `:${pad(m)}` : ""}${suffix}`; }
+function normalizedShiftType(shift) {
+  const explicit = String(shift?.shift_type || "").trim();
+  const lower = explicit.toLowerCase();
+  if (lower === "day") return "Day";
+  if (lower === "evening") return "Evening";
+  if (lower === "night") return "Night";
+  if (lower === "custom") return "Custom";
+  const start = String(shift?.start_local || "").slice(0,5);
+  const end = String(shift?.end_local || "").slice(0,5);
+  if ((start === "06:00" && end === "18:00") || (start === "06:00" && end === "14:00")) return "Day";
+  if (start === "14:00" && end === "22:00") return "Evening";
+  if ((start === "18:00" && end === "06:00") || (start === "22:00" && end === "06:00")) return "Night";
+  return explicit && lower !== "shift" ? explicit : "Custom";
+}
 
 export default function ScheduleMatrixPage() {
   const navigate = useNavigate();
@@ -33,10 +47,12 @@ export default function ScheduleMatrixPage() {
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [hoverCell, setHoverCell] = useState(null);
 
   const days = useMemo(() => Array.from({ length: rangeDays }, (_, i) => addDays(week, i)), [week, rangeDays]);
   const from = ymd(days[0]);
   const to = ymd(days[days.length - 1]);
+  const today = ymd(new Date());
 
   async function load() {
     setLoading(true);
@@ -79,7 +95,7 @@ export default function ScheduleMatrixPage() {
       const date = ymd(day); let dayShortage = 0;
       ["Nurse","CNA"].forEach((group) => SHIFT_TYPES.forEach((shiftType) => {
         const required = requirementMap[`${group}|${shiftType}`] || 0; if (!required) return;
-        const scheduled = shifts.filter((s) => s.shift_date === date && s.staff_id != null && s.shift_type === shiftType && roleGroup(staffById[String(s.staff_id)]?.role || s.role) === group).length;
+        const scheduled = shifts.filter((s) => s.shift_date === date && s.staff_id != null && normalizedShiftType(s) === shiftType && roleGroup(staffById[String(s.staff_id)]?.role || s.role) === group).length;
         if (scheduled >= required) coveredSlots += 1; else { const gap = required - scheduled; shortage += gap; dayShortage += gap; }
       }));
       perDay[date] = dayShortage;
@@ -144,24 +160,26 @@ export default function ScheduleMatrixPage() {
 
     <div style={styles.tableWrap}><table style={{ ...styles.table, minWidth: rangeDays === 14 ? 2050 : 1180 }}><thead><tr>
       <th style={styles.stickyHead}>Employee</th>
-      {days.map((day) => { const date = ymd(day), short = coverage.perDay[date] || 0; return <th key={date} style={styles.dayHead}><div>{day.toLocaleDateString("en-US", { weekday: "short" })}</div><small>{day.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</small>{coverageConfigured && <div style={{ fontSize: 11, marginTop: 4, color: short ? "#f59e0b" : "#22c55e" }}>{short ? `⚠ ${short} short` : "✓ Covered"}</div>}</th>; })}
-      <th style={styles.dayHead}>Total</th>
+      {days.map((day) => { const date = ymd(day), short = coverage.perDay[date] || 0, isToday = date === today; return <th key={date} style={{ ...styles.dayHead, ...(isToday ? styles.todayHead : {}) }}><div>{day.toLocaleDateString("en-US", { weekday: "short" })}</div><small>{day.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</small>{isToday && <div style={styles.todayBadge}>TODAY</div>}{coverageConfigured && <div style={{ fontSize: 11, marginTop: 4, color: short ? "#f59e0b" : "#22c55e" }}>{short ? `⚠ ${short} short` : "✓ Covered"}</div>}</th>; })}
+      <th style={styles.stickyTotalHead}>Total</th>
     </tr></thead><tbody>
       {visibleStaff.map((person) => <tr key={person.id}>
         <td style={styles.stickyCell}><b>{person.name}</b><div style={styles.smallMuted}>{person.role}</div></td>
         {days.map((day) => {
-          const date = ymd(day), leave = ptoMap[`${person.id}|${date}`];
-          const rows = (shiftMap[`${person.id}|${date}`] || []).filter((s) => shiftFilter === "All Shifts" || s.shift_type === shiftFilter);
+          const date = ymd(day), leave = ptoMap[`${person.id}|${date}`], isToday = date === today;
+          const rows = (shiftMap[`${person.id}|${date}`] || []).filter((s) => shiftFilter === "All Shifts" || normalizedShiftType(s) === shiftFilter);
           const empty = !leave && rows.length === 0;
-          return <td key={date} style={{ ...styles.cell, ...(empty && canWrite ? styles.clickableCell : {}) }} onClick={() => empty && canWrite && setModal({ type: "shift", form: { staff_id: String(person.id), date, shift_type: "Day" } })}>
+          const cellKey = `${person.id}|${date}`;
+          const hovering = empty && canWrite && hoverCell === cellKey;
+          return <td key={date} style={{ ...styles.cell, ...(isToday ? styles.todayCell : {}), ...(empty && canWrite ? styles.clickableCell : {}), ...(hovering ? styles.hoverCell : {}) }} onMouseEnter={() => empty && canWrite && setHoverCell(cellKey)} onMouseLeave={() => hoverCell === cellKey && setHoverCell(null)} onClick={() => empty && canWrite && setModal({ type: "shift", form: { staff_id: String(person.id), date, shift_type: "Day" } })}>
             {leave && <div style={styles.ptoBox}>✈ PTO</div>}
-            {rows.map((shift) => <div key={shift.id} style={shift.shift_type === "Night" ? styles.nightBox : styles.shiftBox}><b>{String(shift.shift_type || "Shift").toUpperCase()}</b><small>{shift.start_local && shift.end_local ? `${formatTime(shift.start_local)}–${formatTime(shift.end_local)}` : ""}</small></div>)}
-            {empty && <span style={styles.emptyHint}>{canWrite ? "+" : "—"}</span>}
+            {rows.map((shift) => { const type = normalizedShiftType(shift); return <div key={shift.id} style={type === "Night" ? styles.nightBox : type === "Evening" ? styles.eveningBox : styles.shiftBox}><b>{type.toUpperCase()}</b><small>{shift.start_local && shift.end_local ? `${formatTime(shift.start_local)}–${formatTime(shift.end_local)}` : ""}</small></div>; })}
+            {empty && <span style={{ ...styles.emptyHint, ...(hovering ? styles.emptyHintHover : {}) }}>{canWrite ? "+" : "—"}</span>}
           </td>;
         })}
-        <td style={styles.totalCell}><div style={{ fontSize: 18, fontWeight: 900 }}>{Math.round((rangeHours[person.id] || 0) * 10) / 10}h</div>{(rangeHours[person.id] || 0) > otThreshold && <div style={styles.otBadge}>⚠ OT</div>}</td>
+        <td style={styles.stickyTotalCell}><div style={{ fontSize: 18, fontWeight: 900 }}>{Math.round((rangeHours[person.id] || 0) * 10) / 10}h</div>{(rangeHours[person.id] || 0) > otThreshold && <div style={styles.otBadge}>⚠ OT</div>}</td>
       </tr>)}
-      {canWrite && <tr><td style={styles.stickyCell}><b>Open Coverage</b></td>{days.map((day) => { const date = ymd(day); const rows = shifts.filter((s) => s.staff_id == null && s.shift_date === date && (shiftFilter === "All Shifts" || s.shift_type === shiftFilter)); return <td key={date} style={styles.cell}>{rows.map((s) => <div key={s.id} style={styles.openBox}>+ OPEN<small>{roleGroup(s.role)} · {s.shift_type}</small></div>)}</td>; })}<td style={styles.cell}>—</td></tr>}
+      {canWrite && <tr><td style={styles.stickyCell}><b>Open Coverage</b></td>{days.map((day) => { const date = ymd(day); const rows = shifts.filter((s) => s.staff_id == null && s.shift_date === date && (shiftFilter === "All Shifts" || normalizedShiftType(s) === shiftFilter)); return <td key={date} style={{ ...styles.cell, ...(date === today ? styles.todayCell : {}) }}>{rows.map((s) => <div key={s.id} style={styles.openBox}>+ OPEN<small>{roleGroup(s.role)} · {normalizedShiftType(s)}</small></div>)}</td>; })}<td style={styles.stickyTotalCell}>—</td></tr>}
     </tbody></table></div>
 
     {modal && <Modal onClose={() => !saving && setModal(null)}>
@@ -177,5 +195,5 @@ function SummaryCard({ title, value, tone }) { const tones = { ok:["#062d1d","#2
 function Modal({ children, onClose }) { return <div style={styles.overlay} onMouseDown={onClose}><div style={styles.dialog} onMouseDown={(e) => e.stopPropagation()}>{children}</div></div>; }
 
 const styles = {
-  page:{padding:"24px 28px 40px",maxWidth:1700,margin:"0 auto"}, header:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:20,flexWrap:"wrap"}, toolbar:{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}, filters:{display:"flex",gap:10,margin:"22px 0 14px",flexWrap:"wrap"}, summaryGrid:{display:"grid",gridTemplateColumns:"repeat(4,minmax(170px,1fr))",gap:12,marginBottom:14}, notice:{padding:"12px 14px",border:"1px solid #a16207",background:"#2b2008",borderRadius:10,marginBottom:14,color:"#fde68a"}, tableWrap:{overflow:"auto",border:"1px solid var(--border)",borderRadius:14}, table:{width:"100%",borderCollapse:"separate",borderSpacing:0}, dayHead:{padding:"10px 8px",borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",textAlign:"center",background:"var(--nav-bg)",minWidth:112}, stickyHead:{padding:"11px 14px",borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",textAlign:"left",background:"var(--nav-bg)",minWidth:210,position:"sticky",left:0,zIndex:3}, stickyCell:{padding:"10px 14px",borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",background:"var(--bg)",position:"sticky",left:0,zIndex:2,minWidth:210}, cell:{padding:5,borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",textAlign:"center",height:56,verticalAlign:"middle"}, clickableCell:{cursor:"pointer"}, totalCell:{padding:6,borderBottom:"1px solid var(--border)",textAlign:"center",minWidth:84}, shiftBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #22c55e",background:"#08351f",margin:"1px 0",lineHeight:1.15}, nightBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #3b82f6",background:"#0b2850",margin:"1px 0",lineHeight:1.15}, ptoBox:{padding:"7px 8px",borderRadius:8,border:"1px solid #a855f7",background:"#34134b",fontWeight:900}, openBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #38bdf8",background:"#0a2940",fontWeight:900,margin:"1px 0"}, emptyHint:{opacity:.28,fontSize:18,fontWeight:800}, otBadge:{fontSize:11,fontWeight:900,color:"#f87171",marginTop:2}, button:{background:"transparent",color:"inherit",border:"1px solid var(--border)",borderRadius:10,padding:"10px 14px",fontWeight:800}, activeButton:{background:"#0b4ea2",color:"white",border:"1px solid #3b82f6",borderRadius:10,padding:"10px 16px",fontWeight:900}, primaryButton:{background:"#2563eb",color:"white",border:"1px solid #3b82f6",borderRadius:10,padding:"10px 16px",fontWeight:900}, input:{background:"var(--card-bg)",color:"inherit",border:"1px solid var(--border)",borderRadius:10,padding:"10px 12px",minWidth:150}, selectWrap:{position:"relative",minWidth:170}, select:{appearance:"none",WebkitAppearance:"none",width:"100%",background:"var(--card-bg)",color:"inherit",border:"1px solid var(--border)",borderRadius:10,padding:"10px 34px 10px 12px",fontWeight:800}, chevron:{position:"absolute",right:12,top:"50%",transform:"translateY(-54%)",pointerEvents:"none",opacity:.7,fontSize:18}, muted:{opacity:.65}, smallMuted:{opacity:.65,fontSize:13,marginTop:3}, label:{display:"grid",gap:6,fontWeight:800,margin:"12px 0"}, overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",display:"grid",placeItems:"center",zIndex:9999,padding:20}, dialog:{width:"min(620px,94vw)",maxHeight:"88vh",overflow:"auto",background:"var(--bg)",border:"1px solid var(--border)",borderRadius:16,padding:24,boxShadow:"0 24px 80px rgba(0,0,0,.45)"}
+  page:{padding:"24px 28px 40px",maxWidth:1700,margin:"0 auto"}, header:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:20,flexWrap:"wrap"}, toolbar:{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}, filters:{display:"flex",gap:10,margin:"22px 0 14px",flexWrap:"wrap"}, summaryGrid:{display:"grid",gridTemplateColumns:"repeat(4,minmax(170px,1fr))",gap:12,marginBottom:14}, notice:{padding:"12px 14px",border:"1px solid #a16207",background:"#2b2008",borderRadius:10,marginBottom:14,color:"#fde68a"}, tableWrap:{overflow:"auto",border:"1px solid var(--border)",borderRadius:14}, table:{width:"100%",borderCollapse:"separate",borderSpacing:0}, dayHead:{padding:"10px 8px",borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",textAlign:"center",background:"var(--nav-bg)",minWidth:112}, todayHead:{background:"#14243a",boxShadow:"inset 0 -2px 0 #3b82f6"}, todayBadge:{display:"inline-block",marginTop:4,padding:"2px 5px",borderRadius:999,background:"#1d4ed8",color:"white",fontSize:9,fontWeight:900,letterSpacing:.5}, stickyHead:{padding:"11px 14px",borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",textAlign:"left",background:"var(--nav-bg)",minWidth:210,position:"sticky",left:0,zIndex:4}, stickyTotalHead:{padding:"10px 8px",borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",textAlign:"center",background:"var(--nav-bg)",minWidth:88,position:"sticky",right:0,zIndex:4,boxShadow:"-8px 0 14px rgba(0,0,0,.18)"}, stickyCell:{padding:"10px 14px",borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",background:"var(--bg)",position:"sticky",left:0,zIndex:3,minWidth:210}, cell:{padding:5,borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",textAlign:"center",height:56,verticalAlign:"middle",transition:"background .12s ease, box-shadow .12s ease"}, todayCell:{background:"rgba(37,99,235,.055)"}, clickableCell:{cursor:"pointer"}, hoverCell:{background:"rgba(37,99,235,.12)",boxShadow:"inset 0 0 0 1px rgba(59,130,246,.35)"}, stickyTotalCell:{padding:6,borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",textAlign:"center",minWidth:88,background:"var(--bg)",position:"sticky",right:0,zIndex:3,boxShadow:"-8px 0 14px rgba(0,0,0,.12)"}, shiftBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #22c55e",background:"#08351f",margin:"1px 0",lineHeight:1.15}, eveningBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #f59e0b",background:"#3a2505",margin:"1px 0",lineHeight:1.15}, nightBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #3b82f6",background:"#0b2850",margin:"1px 0",lineHeight:1.15}, ptoBox:{padding:"7px 8px",borderRadius:8,border:"1px solid #a855f7",background:"#34134b",fontWeight:900}, openBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #38bdf8",background:"#0a2940",fontWeight:900,margin:"1px 0"}, emptyHint:{opacity:.28,fontSize:18,fontWeight:800,transition:"opacity .12s ease, transform .12s ease",display:"inline-block"}, emptyHintHover:{opacity:.8,transform:"scale(1.15)",color:"#60a5fa"}, otBadge:{fontSize:11,fontWeight:900,color:"#f87171",marginTop:2}, button:{background:"transparent",color:"inherit",border:"1px solid var(--border)",borderRadius:10,padding:"10px 14px",fontWeight:800}, activeButton:{background:"#0b4ea2",color:"white",border:"1px solid #3b82f6",borderRadius:10,padding:"10px 16px",fontWeight:900}, primaryButton:{background:"#2563eb",color:"white",border:"1px solid #3b82f6",borderRadius:10,padding:"10px 16px",fontWeight:900}, input:{background:"var(--card-bg)",color:"inherit",border:"1px solid var(--border)",borderRadius:10,padding:"10px 12px",minWidth:150}, selectWrap:{position:"relative",minWidth:170}, select:{appearance:"none",WebkitAppearance:"none",width:"100%",background:"var(--card-bg)",color:"inherit",border:"1px solid var(--border)",borderRadius:10,padding:"10px 34px 10px 12px",fontWeight:800}, chevron:{position:"absolute",right:12,top:"50%",transform:"translateY(-54%)",pointerEvents:"none",opacity:.7,fontSize:18}, muted:{opacity:.65}, smallMuted:{opacity:.65,fontSize:13,marginTop:3}, label:{display:"grid",gap:6,fontWeight:800,margin:"12px 0"}, overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",display:"grid",placeItems:"center",zIndex:9999,padding:20}, dialog:{width:"min(620px,94vw)",maxHeight:"88vh",overflow:"auto",background:"var(--bg)",border:"1px solid var(--border)",borderRadius:16,padding:24,boxShadow:"0 24px 80px rgba(0,0,0,.45)"}
 };
