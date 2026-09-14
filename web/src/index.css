@@ -64,6 +64,14 @@ body {
 img, svg, video, canvas { max-width: 100%; height: auto; }
 input, select, textarea, button { max-width: 100%; font: inherit; }
 
+/* Keep native dropdown menus readable in Chrome/Windows when the app is dark. */
+:root select,
+[data-theme="dark"] select { color-scheme: dark; }
+:root select option,
+[data-theme="dark"] select option { background: #111111; color: #ffffff; }
+[data-theme="light"] select { color-scheme: light; }
+[data-theme="light"] select option { background: #ffffff; color: #111111; }
+
 .navbar {
   background: var(--nav-bg);
   color: var(--nav-text);
