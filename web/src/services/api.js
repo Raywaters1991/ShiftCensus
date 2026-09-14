@@ -100,6 +100,67 @@ function getOrgContext() {
 }
 
 // -------------------------
+// Lightweight GET cache
+// -------------------------
+// Goal: make repeat navigation feel instant without weakening auth or org scoping.
+// Fresh entries are returned immediately. Slightly stale entries are also returned
+// immediately while a background request refreshes them for the next view.
+const responseCache = new Map();
+const inFlightGets = new Map();
+const FRESH_MS = 30_000;
+const STALE_MS = 5 * 60_000;
+
+function cacheScope() {
+  const { orgId, orgCode } = getOrgContext();
+  return `${orgId || "no-org"}|${orgCode || "no-code"}`;
+}
+
+function cacheKey(url, config = {}) {
+  const params = config?.params ? JSON.stringify(config.params) : "";
+  return `${cacheScope()}|${url}|${params}`;
+}
+
+function clearResponseCache() {
+  responseCache.clear();
+  inFlightGets.clear();
+}
+
+const rawGet = api.get.bind(api);
+
+async function refreshGet(key, url, config) {
+  if (inFlightGets.has(key)) return inFlightGets.get(key);
+  const promise = rawGet(url, config)
+    .then((data) => {
+      responseCache.set(key, { data, ts: Date.now() });
+      return data;
+    })
+    .finally(() => inFlightGets.delete(key));
+  inFlightGets.set(key, promise);
+  return promise;
+}
+
+api.get = async function cachedGet(url, config = {}) {
+  if (config?.cache === false) return rawGet(url, config);
+
+  const key = cacheKey(url, config);
+  const cached = responseCache.get(key);
+  const age = cached ? Date.now() - cached.ts : Infinity;
+
+  if (cached && age <= FRESH_MS) return cached.data;
+
+  if (cached && age <= STALE_MS) {
+    // Return immediately and refresh behind the scenes.
+    refreshGet(key, url, config).catch(() => {});
+    return cached.data;
+  }
+
+  return refreshGet(key, url, config);
+};
+
+api.clearResponseCache = clearResponseCache;
+api.invalidateGetCache = clearResponseCache;
+
+// -------------------------
 // Axios interceptors
 // -------------------------
 api.interceptors.request.use((config) => {
@@ -131,7 +192,13 @@ api.interceptors.request.use((config) => {
 });
 
 api.interceptors.response.use(
-  (response) => response.data,
+  (response) => {
+    // Any successful mutation can change data shown by multiple screens.
+    // Clear the read cache so the next navigation reflects the mutation.
+    const method = String(response?.config?.method || "get").toLowerCase();
+    if (method !== "get" && method !== "head") clearResponseCache();
+    return response.data;
+  },
   (error) => {
     // Normalize Axios errors so the rest of the app can consistently read
     // err.status / err.body instead of depending on Axios' response shape.
