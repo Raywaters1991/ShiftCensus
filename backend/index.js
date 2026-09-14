@@ -58,6 +58,7 @@ app.use("/api/organizations", require("./routes/organizations"));
 app.use("/api/assignments", require("./routes/assignments"));
 app.use("/api/templates", require("./routes/templates"));
 app.use("/api/shift-settings", require("./routes/shiftSettings"));
+app.use("/api/coverage-requirements", requireAuth, requireOrg, requireOrgAdminForWrites, require("./routes/coverageRequirements"));
 app.use("/api/invites", publicSensitiveLimiter, require("./routes/invites"));
 app.use("/api/departments", require("./routes/departments"));
 app.use("/api/org-settings", requireAuth, requireOrg, requireOrgAdminForWrites, require("./routes/orgSettings"));
