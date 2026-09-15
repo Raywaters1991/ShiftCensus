@@ -124,6 +124,51 @@ function clearResponseCache() {
   scheduleBundles.clear();
 }
 
+// Census edits are already reflected optimistically in the UI. Preserve and
+// patch the active facility's bed-board cache with the authoritative row from
+// the PUT response so the page's reconciliation read is instant instead of
+// making the whole board wait on another network round trip.
+function censusMutationSnapshots(response) {
+  const method = String(response?.config?.method || "").toLowerCase();
+  if (method !== "put" && method !== "patch") return [];
+
+  const { path } = queryParts(response?.config?.url || "");
+  if (!/^\/census\/[^/]+$/.test(path)) return [];
+
+  const updated = response?.data;
+  if (!updated?.id) return [];
+
+  const scope = cacheScope();
+  const snapshots = [];
+
+  for (const [key, entry] of responseCache.entries()) {
+    if (!key.startsWith(`${scope}|`)) continue;
+
+    // Privacy does not change during a bed edit, so keep it warm too. CensusPage
+    // currently reconciles privacy alongside the bed board after a save.
+    if (key.includes("|/org-settings|" ) || key.includes("|/org-settings/identifiers|")) {
+      snapshots.push([key, entry]);
+      continue;
+    }
+
+    if (!key.includes("|/census/bed-board|")) continue;
+    if (!Array.isArray(entry?.data)) continue;
+
+    let found = false;
+    const data = entry.data.map((row) => {
+      if (String(row?.id) !== String(updated.id)) return row;
+      found = true;
+      // Keep display-only room/bed values from the bed-board response when the
+      // mutation response omits or normalizes them differently.
+      return { ...row, ...updated, room: row.room, room_number: row.room_number, bed: row.bed };
+    });
+
+    if (found) snapshots.push([key, { data, ts: Date.now() }]);
+  }
+
+  return snapshots;
+}
+
 const rawGet = api.get.bind(api);
 
 async function refreshGet(key, url, config) {
@@ -281,7 +326,11 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (response) => {
     const method = String(response?.config?.method || "get").toLowerCase();
-    if (method !== "get" && method !== "head") clearResponseCache();
+    if (method !== "get" && method !== "head") {
+      const preserved = censusMutationSnapshots(response);
+      clearResponseCache();
+      for (const [key, entry] of preserved) responseCache.set(key, entry);
+    }
     return response.data;
   },
   (error) => {
