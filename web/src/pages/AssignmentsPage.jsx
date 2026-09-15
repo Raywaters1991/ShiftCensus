@@ -1,53 +1,22 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {useEffect,useMemo,useRef,useState} from "react";
 import api from "../services/api";
-import { useUser } from "../contexts/UserContext.jsx";
+import {useUser} from "../contexts/UserContext.jsx";
 
-function todayYmd(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
-function minuteOfDay(v){const m=String(v||"").match(/^(\d{1,2}):(\d{2})/);if(!m)return null;return Number(m[1])*60+Number(m[2]);}
-function overlap(start,end,blockStart,blockEnd){let total=0;const ranges=end>1440?[[start,1440],[0,end-1440]]:[[start,end]];for(const[a,b]of ranges){const left=Math.max(a,blockStart),right=Math.min(b,blockEnd);if(right>left)total+=right-left;}return total;}
-function shiftBucket(s){const type=String(s?.shift_type||"");if(["Day","Evening","Night"].includes(type))return type;let start=minuteOfDay(s?.start_local),end=minuteOfDay(s?.end_local);if(start==null||end==null)return "Day";if(end<=start)end+=1440;const scores={Day:overlap(start,end,360,840),Evening:overlap(start,end,840,1320),Night:overlap(start,end,1320,1440)+overlap(start,end,0,360)};return Object.entries(scores).sort((a,b)=>b[1]-a[1])[0][0];}
+function todayYmd(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`}
+function addDays(value,n){const [y,m,d]=String(value).split("-").map(Number),x=new Date(y,m-1,d+n);return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,"0")}-${String(x.getDate()).padStart(2,"0")}`}
+function minuteOfDay(v){const m=String(v||"").match(/^(\d{1,2}):(\d{2})/);if(!m)return null;return Number(m[1])*60+Number(m[2])}
+function overlap(start,end,blockStart,blockEnd){let total=0;const ranges=end>1440?[[start,1440],[0,end-1440]]:[[start,end]];for(const[a,b]of ranges){const left=Math.max(a,blockStart),right=Math.min(b,blockEnd);if(right>left)total+=right-left}return total}
+function shiftBucket(s){const type=String(s?.shift_type||"");if(["Day","Evening","Night"].includes(type))return type;let start=minuteOfDay(s?.start_local),end=minuteOfDay(s?.end_local);if(start==null||end==null)return"Day";if(end<=start)end+=1440;const scores={Day:overlap(start,end,360,840),Evening:overlap(start,end,840,1320),Night:overlap(start,end,1320,1440)+overlap(start,end,0,360)};return Object.entries(scores).sort((a,b)=>b[1]-a[1])[0][0]}
 
 export default function AssignmentsPage(){
-  const { permissions, isSuperadmin, role } = useUser();
-  const canWrite = !!isSuperadmin || String(role||"").toLowerCase()==="superadmin" || !!permissions?.can_schedule_write;
-  const [date,setDate]=useState(todayYmd());
-  const [shifts,setShifts]=useState([]);const [staff,setStaff]=useState([]);const [units,setUnits]=useState([]);const [assigned,setAssigned]=useState([]);
-  const [loading,setLoading]=useState(true);const [saving,setSaving]=useState(null);const dayRequest=useRef(0);
-
-  async function loadDay(targetDate=date){
-    const requestId=++dayRequest.current;
-    const data=await api.get(`/operations-snapshot?date=${encodeURIComponent(targetDate)}`);
-    if(requestId!==dayRequest.current)return;
-    setShifts(Array.isArray(data?.shifts)?data.shifts:[]);
-    setStaff(Array.isArray(data?.staff)?data.staff:[]);
-    setUnits(Array.isArray(data?.units)?data.units:[]);
-    setAssigned(Array.isArray(data?.assignments)?data.assignments:[]);
-  }
-  useEffect(()=>{let alive=true;(async()=>{setLoading(true);try{await loadDay(date);}finally{if(alive)setLoading(false);}})();return()=>{alive=false;dayRequest.current++;};},[]);
-  useEffect(()=>{if(loading)return;loadDay(date);},[date]);
-
-  const staffById=useMemo(()=>Object.fromEntries(staff.map(s=>[String(s.id),s])),[staff]);
-  const assignedByShift=useMemo(()=>Object.fromEntries(assigned.map(a=>[String(a.shift_id),a])),[assigned]);
-  const grouped=useMemo(()=>{const out={Day:[],Evening:[],Night:[]};shifts.forEach(s=>out[shiftBucket(s)].push(s));return out;},[shifts]);
-
-  async function setUnit(shift,unitName){
-    if(!canWrite)return;
-    const unit=units.find(u=>u.name===unitName);const shiftKey=String(shift.id);const previous=assignedByShift[shiftKey]||null;
-    setSaving(shift.id);
-    setAssigned(cur=>{const rest=cur.filter(a=>String(a.shift_id)!==shiftKey);return unitName?[...rest,{...(previous||{}),shift_id:shift.id,unit_id:unit?.id||null,unit:unitName,assignment_number:null}]:rest;});
-    try{
-      if(!unitName)await api.delete(`/shift-assignments/${shift.id}`);
-      else{const saved=await api.put(`/shift-assignments/${shift.id}`,{unit_id:unit?.id||null,unit:unitName,assignment_number:null});if(saved)setAssigned(cur=>[...cur.filter(a=>String(a.shift_id)!==shiftKey),saved]);}
-    }catch(e){setAssigned(cur=>{const rest=cur.filter(a=>String(a.shift_id)!==shiftKey);return previous?[...rest,previous]:rest;});alert(e?.message||"Unable to save assignment.");}
-    finally{setSaving(null);}
-  }
-
-  if(loading)return <div style={{padding:32}}>Loading assignments…</div>;
-  return <div style={{padding:24,color:"var(--text)",maxWidth:1100,margin:"0 auto"}}>
-    <div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",flexWrap:"wrap",marginBottom:20}}><div><h1 style={{margin:0}}>Assignments</h1><div style={{opacity:.65,marginTop:4}}>{canWrite?"Everyone scheduled for the day appears here. Assign each working staff member to a unit.":"View unit assignments for everyone scheduled this day."}</div></div><input type="date" value={date} onChange={e=>setDate(e.target.value)} style={input}/></div>
-    {shifts.length===0?<div style={empty}>No staff are scheduled for this date.</div>:["Day","Evening","Night"].map(block=>grouped[block]?.length?<section key={block} style={{marginBottom:24}}><h2>{block} Shift</h2><div style={{display:"grid",gap:10}}>{grouped[block].map(shift=>{const person=staffById[String(shift.staff_id)]||{};const current=assignedByShift[String(shift.id)]||{};const personLabel=shift.staff_id==null?"Open Shift":person.name||`Staff #${shift.staff_id}`;return <div key={shift.id} style={row}><div style={{minWidth:220}}><div style={{fontWeight:900,fontSize:16}}>{personLabel}</div><div style={{opacity:.65,fontSize:12}}>{person.role||shift.role} · {shift.shift_type==="Custom"?"Custom · ":""}{shift.start_local||""}–{shift.end_local||""}</div></div><label style={field}><span>Unit</span><select value={current.unit||""} disabled={!canWrite||saving===shift.id} onChange={e=>setUnit(shift,e.target.value)} style={{...input,opacity:canWrite?1:.75}}><option value="">Unassigned</option>{units.map(u=><option key={u.id} value={u.name}>{u.name}</option>)}</select></label><div style={{fontWeight:900,minWidth:100,color:current.unit?"#22c55e":"#f59e0b"}}>{saving===shift.id?"Saving…":current.unit?"Assigned":"Unassigned"}</div></div>})}</div></section>:null)}
-  </div>;
-}
-const input={padding:"10px 12px",borderRadius:10,border:"1px solid var(--border)",background:"var(--surface)",color:"inherit"};
-const row={display:"grid",gridTemplateColumns:"minmax(220px,1.4fr) minmax(180px,1fr) auto",gap:14,alignItems:"end",padding:14,border:"1px solid var(--border)",borderRadius:14,background:"var(--surface)"};
-const field={display:"grid",gap:6,fontSize:12,fontWeight:800};const empty={padding:20,border:"1px dashed var(--border)",borderRadius:14,opacity:.7};
+ const{permissions,isSuperadmin,role}=useUser();const canWrite=!!isSuperadmin||String(role||"").toLowerCase()==="superadmin"||!!permissions?.can_schedule_write;
+ const[date,setDate]=useState(todayYmd()),[shifts,setShifts]=useState([]),[staff,setStaff]=useState([]),[units,setUnits]=useState([]),[assigned,setAssigned]=useState([]),[loading,setLoading]=useState(true),[refreshing,setRefreshing]=useState(false),[saving,setSaving]=useState(null);const dayRequest=useRef(0);
+ async function loadDay(targetDate=date){const requestId=++dayRequest.current,hasData=shifts.length>0||staff.length>0||units.length>0;if(hasData)setRefreshing(true);else setLoading(true);try{const data=await api.get(`/operations-snapshot?date=${encodeURIComponent(targetDate)}`);if(requestId!==dayRequest.current)return;setShifts((Array.isArray(data?.shifts)?data.shifts:[]).filter(s=>s.staff_id!=null));setStaff(Array.isArray(data?.staff)?data.staff:[]);setUnits(Array.isArray(data?.units)?data.units:[]);setAssigned(Array.isArray(data?.assignments)?data.assignments:[])}catch(e){if(requestId===dayRequest.current)console.error(e)}finally{if(requestId===dayRequest.current){setLoading(false);setRefreshing(false)}}}
+ useEffect(()=>{loadDay(date);return()=>{dayRequest.current++}},[]);
+ useEffect(()=>{if(loading)return;loadDay(date)},[date]);
+ useEffect(()=>{if(loading||navigator.connection?.saveData)return;let cancelled=false;const warm=()=>{if(cancelled)return;for(const d of[addDays(date,-1),addDays(date,1)])api.get(`/operations-snapshot?date=${encodeURIComponent(d)}`).catch(()=>null)};let id;if("requestIdleCallback"in window)id=window.requestIdleCallback(warm,{timeout:1200});else id=window.setTimeout(warm,350);return()=>{cancelled=true;if("cancelIdleCallback"in window)window.cancelIdleCallback(id);else window.clearTimeout(id)}},[date,loading]);
+ const staffById=useMemo(()=>Object.fromEntries(staff.map(s=>[String(s.id),s])),[staff]),assignedByShift=useMemo(()=>Object.fromEntries(assigned.map(a=>[String(a.shift_id),a])),[assigned]),grouped=useMemo(()=>{const out={Day:[],Evening:[],Night:[]};shifts.forEach(s=>out[shiftBucket(s)].push(s));return out},[shifts]);
+ async function setUnit(shift,unitName){if(!canWrite)return;const unit=units.find(u=>u.name===unitName),shiftKey=String(shift.id),previous=assignedByShift[shiftKey]||null;setSaving(shift.id);setAssigned(cur=>{const rest=cur.filter(a=>String(a.shift_id)!==shiftKey);return unitName?[...rest,{...(previous||{}),shift_id:shift.id,unit_id:unit?.id||null,unit:unitName,assignment_number:null}]:rest});try{if(!unitName)await api.delete(`/shift-assignments/${shift.id}`);else{const saved=await api.put(`/shift-assignments/${shift.id}`,{unit_id:unit?.id||null,unit:unitName,assignment_number:null});if(saved)setAssigned(cur=>[...cur.filter(a=>String(a.shift_id)!==shiftKey),saved])}}catch(e){setAssigned(cur=>{const rest=cur.filter(a=>String(a.shift_id)!==shiftKey);return previous?[...rest,previous]:rest});alert(e?.message||"Unable to save assignment.")}finally{setSaving(null)}}
+ if(loading)return <div style={{padding:32}}>Loading assignments…</div>;
+ return <div style={{padding:24,color:"var(--text)",maxWidth:1100,margin:"0 auto"}}><div style={{display:"flex",justifyContent:"space-between",gap:12,alignItems:"center",flexWrap:"wrap",marginBottom:20}}><div><h1 style={{margin:0}}>Assignments</h1><div style={{opacity:.65,marginTop:4}}>{canWrite?"Everyone scheduled for the day appears here. Assign each working staff member to a unit.":"View unit assignments for everyone scheduled this day."}{refreshing&&<span style={{fontSize:12,fontWeight:800}}> · Updating…</span>}</div></div><input type="date" value={date} onChange={e=>setDate(e.target.value)} style={input}/></div>{shifts.length===0?<div style={empty}>No staff are scheduled for this date.</div>:["Day","Evening","Night"].map(block=>grouped[block]?.length?<section key={block} style={{marginBottom:24}}><h2>{block} Shift</h2><div style={{display:"grid",gap:10}}>{grouped[block].map(shift=>{const person=staffById[String(shift.staff_id)]||{},current=assignedByShift[String(shift.id)]||{},personLabel=person.name||`Staff #${shift.staff_id}`;return <div key={shift.id} style={row}><div style={{minWidth:220}}><div style={{fontWeight:900,fontSize:16}}>{personLabel}</div><div style={{opacity:.65,fontSize:12}}>{person.role||shift.role} · {shift.shift_type==="Custom"?"Custom · ":""}{shift.start_local||""}–{shift.end_local||""}</div></div><label style={field}><span>Unit</span><select value={current.unit||""} disabled={!canWrite||saving===shift.id} onChange={e=>setUnit(shift,e.target.value)} style={{...input,opacity:canWrite?1:.75}}><option value="">Unassigned</option>{units.map(u=><option key={u.id} value={u.name}>{u.name}</option>)}</select></label><div style={{fontWeight:900,minWidth:100,color:current.unit?"#22c55e":"#f59e0b"}}>{saving===shift.id?"Saving…":current.unit?"Assigned":"Unassigned"}</div></div>})}</div></section>:null)}</div>}
+const input={padding:"10px 12px",borderRadius:10,border:"1px solid var(--border)",background:"var(--surface)",color:"inherit"},row={display:"grid",gridTemplateColumns:"minmax(220px,1.4fr) minmax(180px,1fr) auto",gap:14,alignItems:"end",padding:14,border:"1px solid var(--border)",borderRadius:14,background:"var(--surface)"},field={display:"grid",gap:6,fontSize:12,fontWeight:800},empty={padding:20,border:"1px dashed var(--border)",borderRadius:14,opacity:.7};
