@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../services/api";
 import { useUser } from "../contexts/UserContext.jsx";
@@ -6,6 +6,7 @@ import { useUser } from "../contexts/UserContext.jsx";
 const SHIFT_TYPES = ["Day", "Evening", "Night"];
 const EDIT_SHIFT_TYPES = ["Day", "Evening", "Night", "Custom"];
 const ROLE_OPTIONS = ["All Staff", "Nurses (RN/LPN)", "RN", "LPN", "CNA"];
+const ROW_BATCH = 60;
 
 const pad = (n) => String(n).padStart(2, "0");
 const ymd = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -50,6 +51,8 @@ export default function ScheduleMatrixPage() {
   const deferredSearch = useDeferredValue(search);
   const [modal, setModal] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [rowLimit, setRowLimit] = useState(ROW_BATCH);
+  const loadMoreRef = useRef(null);
 
   const days = useMemo(() => Array.from({ length: rangeDays }, (_, i) => addDays(week, i)), [week, rangeDays]);
   const dayDates = useMemo(() => days.map(ymd), [days]);
@@ -137,6 +140,28 @@ export default function ScheduleMatrixPage() {
     return roleMatches && (!needle || String(person.name || "").toLowerCase().includes(needle));
   }).sort((a,b) => String(a.name || "").localeCompare(String(b.name || ""))), [staff, roleFilter, deferredSearch]);
 
+  useEffect(() => {
+    setRowLimit(ROW_BATCH);
+  }, [roleFilter, deferredSearch, shiftFilter, from, to]);
+
+  useEffect(() => {
+    if (rowLimit >= visibleStaff.length) return;
+    if (typeof IntersectionObserver === "undefined") {
+      setRowLimit(visibleStaff.length);
+      return;
+    }
+    const node = loadMoreRef.current;
+    if (!node) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setRowLimit((current) => Math.min(current + ROW_BATCH, visibleStaff.length));
+      }
+    }, { rootMargin: "600px 0px" });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [rowLimit, visibleStaff.length]);
+
+  const renderedStaff = useMemo(() => visibleStaff.slice(0, rowLimit), [visibleStaff, rowLimit]);
   const ptoMap = useMemo(() => { const out = {}; pto.forEach((r) => { const d = new Date(`${r.start_date}T00:00:00`), end = new Date(`${r.end_date}T00:00:00`); while (d <= end) { out[`${r.staff_id}|${ymd(d)}`] = r; d.setDate(d.getDate()+1); } }); return out; }, [pto]);
   const requirementMap = useMemo(() => Object.fromEntries(requirements.map((r) => [`${r.role_group}|${r.shift_type}`, Number(r.required_count) || 0])), [requirements]);
   const coverageConfigured = requirements.some((r) => Number(r.required_count) > 0);
@@ -196,7 +221,7 @@ export default function ScheduleMatrixPage() {
     setModal((current) => { const rows = [...current.rows]; const i = rows.findIndex((r) => r.role_group === group && r.shift_type === shiftType); const next = { role_group: group, shift_type: shiftType, required_count: Number(value) || 0 }; if (i >= 0) rows[i] = { ...rows[i], ...next }; else rows.push(next); return { ...current, rows }; });
   }
 
-  const employeeRows = useMemo(() => visibleStaff.map((person) => <tr key={person.id}>
+  const employeeRows = useMemo(() => renderedStaff.map((person) => <tr key={person.id}>
     <td style={styles.stickyCell}><b>{person.name}</b><div style={styles.smallMuted}>{person.role}</div></td>
     {dayDates.map((date) => {
       const leave = ptoMap[`${person.id}|${date}`], isToday = date === today;
@@ -209,7 +234,7 @@ export default function ScheduleMatrixPage() {
       </td>;
     })}
     <td style={styles.stickyTotalCell}><div style={{ fontSize: 18, fontWeight: 900 }}>{Math.round((indexed.hours[String(person.id)] || 0) * 10) / 10}h</div>{(indexed.hours[String(person.id)] || 0) > otThreshold && <div style={styles.otBadge}>⚠ OT</div>}</td>
-  </tr>), [visibleStaff, dayDates, ptoMap, indexed.employeeDate, indexed.hours, shiftFilter, canWrite, today, otThreshold]);
+  </tr>), [renderedStaff, dayDates, ptoMap, indexed.employeeDate, indexed.hours, shiftFilter, canWrite, today, otThreshold]);
 
   const openCoverageRow = useMemo(() => !canWrite ? null : <tr><td style={styles.stickyCell}><b>Open Coverage</b></td>{dayDates.map((date) => { const rows = (indexed.openDate[date] || []).filter((s) => shiftFilter === "All Shifts" || s._type === shiftFilter); return <td key={date} style={{ ...styles.cell, ...(date === today ? styles.todayCell : {}) }}>{rows.map((s) => <div key={s.id} style={styles.openBox}>+ OPEN<small>{roleGroup(s.role)} · {s._type}</small></div>)}</td>; })}<td style={styles.stickyTotalCell}>—</td></tr>, [canWrite, dayDates, indexed.openDate, shiftFilter, today]);
 
@@ -250,7 +275,7 @@ export default function ScheduleMatrixPage() {
       <th style={styles.stickyHead}>Employee</th>
       {days.map((day) => { const date = ymd(day), short = coverage.perDay[date] || 0, isToday = date === today; return <th key={date} style={{ ...styles.dayHead, ...(isToday ? styles.todayHead : {}) }}><div>{day.toLocaleDateString("en-US", { weekday: "short" })}</div><small>{day.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</small>{isToday && <div style={styles.todayBadge}>TODAY</div>}{coverageConfigured && <div style={{ fontSize: 11, marginTop: 4, color: short ? "#f59e0b" : "#22c55e" }}>{short ? `⚠ ${short} short` : "✓ Covered"}</div>}</th>; })}
       <th style={styles.stickyTotalHead}>Total</th>
-    </tr></thead><tbody>{employeeRows}{openCoverageRow}</tbody></table></div>
+    </tr></thead><tbody>{employeeRows}{rowLimit < visibleStaff.length && <tr ref={loadMoreRef}><td colSpan={dayDates.length + 2} style={styles.loadMoreCell}>Loading more staff… {Math.min(rowLimit, visibleStaff.length)} of {visibleStaff.length}</td></tr>}{openCoverageRow}</tbody></table></div>
 
     {modal && <Modal onClose={() => !saving && setModal(null)}>
       {modal.type === "shift" && <><h2>Add Shift</h2><label style={styles.label}>Employee<Select value={modal.form.staff_id} onChange={(e) => setModal((m) => ({ ...m, form: { ...m.form, staff_id: e.target.value } }))}>{staff.map((p) => <option value={p.id} key={p.id}>{p.name} ({p.role})</option>)}</Select></label><label style={styles.label}>Date<input style={styles.input} type="date" value={modal.form.date} onChange={(e) => setModal((m) => ({ ...m, form: { ...m.form, date: e.target.value } }))} /></label><label style={styles.label}>Shift<Select value={modal.form.shift_type} onChange={(e) => setModal((m) => ({ ...m, form: { ...m.form, shift_type: e.target.value } }))}>{SHIFT_TYPES.map((o) => <option key={o}>{o}</option>)}</Select></label><button style={styles.primaryButton} disabled={saving} onClick={addShift}>{saving ? "Saving…" : "Add Shift"}</button></>}
@@ -266,5 +291,5 @@ function SummaryCard({ title, value, tone }) { const tones = { ok:["#062d1d","#2
 function Modal({ children, onClose }) { return <div style={styles.overlay} onMouseDown={onClose}><div style={styles.dialog} onMouseDown={(e) => e.stopPropagation()}>{children}</div></div>; }
 
 const styles = {
-  page:{padding:"24px 28px 40px",maxWidth:1700,margin:"0 auto"}, header:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:20,flexWrap:"wrap"}, toolbar:{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}, filters:{display:"flex",gap:10,margin:"22px 0 14px",flexWrap:"wrap"}, summaryGrid:{display:"grid",gridTemplateColumns:"repeat(4,minmax(170px,1fr))",gap:12,marginBottom:14}, notice:{padding:"12px 14px",border:"1px solid #a16207",background:"#2b2008",borderRadius:10,marginBottom:14,color:"#fde68a"}, tableWrap:{overflow:"auto",border:"1px solid var(--border)",borderRadius:14}, table:{width:"100%",borderCollapse:"separate",borderSpacing:0}, dayHead:{padding:"10px 8px",borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",textAlign:"center",background:"var(--nav-bg)",minWidth:112}, todayHead:{background:"#14243a",boxShadow:"inset 0 -2px 0 #3b82f6"}, todayBadge:{display:"inline-block",marginTop:4,padding:"2px 5px",borderRadius:999,background:"#1d4ed8",color:"white",fontSize:9,fontWeight:900,letterSpacing:.5}, refreshing:{fontSize:12,color:"#60a5fa",fontWeight:800}, stickyHead:{padding:"11px 14px",borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",textAlign:"left",background:"var(--nav-bg)",minWidth:210,position:"sticky",left:0,zIndex:4}, stickyTotalHead:{padding:"10px 8px",borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",textAlign:"center",background:"var(--nav-bg)",minWidth:88,position:"sticky",right:0,zIndex:4,boxShadow:"-8px 0 14px rgba(0,0,0,.18)"}, stickyCell:{padding:"10px 14px",borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",background:"var(--bg)",position:"sticky",left:0,zIndex:3,minWidth:210}, cell:{padding:5,borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",textAlign:"center",height:56,verticalAlign:"middle",transition:"background .12s ease"}, todayCell:{background:"rgba(37,99,235,.055)"}, clickableCell:{cursor:"pointer"}, stickyTotalCell:{padding:6,borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",textAlign:"center",minWidth:88,background:"var(--bg)",position:"sticky",right:0,zIndex:3,boxShadow:"-8px 0 14px rgba(0,0,0,.12)"}, shiftBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #22c55e",background:"#08351f",margin:"1px 0",lineHeight:1.15}, eveningBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #f59e0b",background:"#3a2505",margin:"1px 0",lineHeight:1.15}, nightBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #3b82f6",background:"#0b2850",margin:"1px 0",lineHeight:1.15}, editableShift:{cursor:"pointer",boxShadow:"0 0 0 0 rgba(96,165,250,0)",transition:"transform .12s ease, box-shadow .12s ease"}, ptoBox:{padding:"7px 8px",borderRadius:8,border:"1px solid #a855f7",background:"#34134b",fontWeight:900}, openBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #38bdf8",background:"#0a2940",fontWeight:900,margin:"1px 0"}, emptyHint:{opacity:.28,fontSize:18,fontWeight:800,display:"inline-block"}, otBadge:{fontSize:11,fontWeight:900,color:"#f87171",marginTop:2}, button:{background:"transparent",color:"inherit",border:"1px solid var(--border)",borderRadius:10,padding:"10px 14px",fontWeight:800}, activeButton:{background:"#0b4ea2",color:"white",border:"1px solid #3b82f6",borderRadius:10,padding:"10px 16px",fontWeight:900}, primaryButton:{background:"#2563eb",color:"white",border:"1px solid #3b82f6",borderRadius:10,padding:"10px 16px",fontWeight:900}, deleteButton:{background:"#7f1d1d",color:"#fee2e2",border:"1px solid #ef4444",borderRadius:10,padding:"10px 16px",fontWeight:900}, modalActions:{display:"flex",justifyContent:"space-between",gap:12,marginTop:20,flexWrap:"wrap"}, timeGrid:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}, input:{background:"var(--card-bg)",color:"inherit",border:"1px solid var(--border)",borderRadius:10,padding:"10px 12px",minWidth:150}, selectWrap:{position:"relative",minWidth:170}, select:{appearance:"none",WebkitAppearance:"none",width:"100%",background:"var(--card-bg)",color:"inherit",border:"1px solid var(--border)",borderRadius:10,padding:"10px 34px 10px 12px",fontWeight:800}, chevron:{position:"absolute",right:12,top:"50%",transform:"translateY(-54%)",pointerEvents:"none",opacity:.7,fontSize:18}, muted:{opacity:.65}, smallMuted:{opacity:.65,fontSize:13,marginTop:3}, label:{display:"grid",gap:6,fontWeight:800,margin:"12px 0"}, overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",display:"grid",placeItems:"center",zIndex:9999,padding:20}, dialog:{width:"min(620px,94vw)",maxHeight:"88vh",overflow:"auto",background:"var(--bg)",border:"1px solid var(--border)",borderRadius:16,padding:24,boxShadow:"0 24px 80px rgba(0,0,0,.45)"}
+  page:{padding:"24px 28px 40px",maxWidth:1700,margin:"0 auto"}, header:{display:"flex",justifyContent:"space-between",alignItems:"center",gap:20,flexWrap:"wrap"}, toolbar:{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}, filters:{display:"flex",gap:10,margin:"22px 0 14px",flexWrap:"wrap"}, summaryGrid:{display:"grid",gridTemplateColumns:"repeat(4,minmax(170px,1fr))",gap:12,marginBottom:14}, notice:{padding:"12px 14px",border:"1px solid #a16207",background:"#2b2008",borderRadius:10,marginBottom:14,color:"#fde68a"}, tableWrap:{overflow:"auto",border:"1px solid var(--border)",borderRadius:14}, table:{width:"100%",borderCollapse:"separate",borderSpacing:0}, dayHead:{padding:"10px 8px",borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",textAlign:"center",background:"var(--nav-bg)",minWidth:112}, todayHead:{background:"#14243a",boxShadow:"inset 0 -2px 0 #3b82f6"}, todayBadge:{display:"inline-block",marginTop:4,padding:"2px 5px",borderRadius:999,background:"#1d4ed8",color:"white",fontSize:9,fontWeight:900,letterSpacing:.5}, refreshing:{fontSize:12,color:"#60a5fa",fontWeight:800}, stickyHead:{padding:"11px 14px",borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",textAlign:"left",background:"var(--nav-bg)",minWidth:210,position:"sticky",left:0,zIndex:4}, stickyTotalHead:{padding:"10px 8px",borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",textAlign:"center",background:"var(--nav-bg)",minWidth:88,position:"sticky",right:0,zIndex:4,boxShadow:"-8px 0 14px rgba(0,0,0,.18)"}, stickyCell:{padding:"10px 14px",borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",background:"var(--bg)",position:"sticky",left:0,zIndex:3,minWidth:210}, cell:{padding:5,borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)",textAlign:"center",height:56,verticalAlign:"middle",transition:"background .12s ease"}, todayCell:{background:"rgba(37,99,235,.055)"}, clickableCell:{cursor:"pointer"}, stickyTotalCell:{padding:6,borderBottom:"1px solid var(--border)",borderLeft:"1px solid var(--border)",textAlign:"center",minWidth:88,background:"var(--bg)",position:"sticky",right:0,zIndex:3,boxShadow:"-8px 0 14px rgba(0,0,0,.12)"}, shiftBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #22c55e",background:"#08351f",margin:"1px 0",lineHeight:1.15}, eveningBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #f59e0b",background:"#3a2505",margin:"1px 0",lineHeight:1.15}, nightBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #3b82f6",background:"#0b2850",margin:"1px 0",lineHeight:1.15}, editableShift:{cursor:"pointer",boxShadow:"0 0 0 0 rgba(96,165,250,0)",transition:"transform .12s ease, box-shadow .12s ease"}, ptoBox:{padding:"7px 8px",borderRadius:8,border:"1px solid #a855f7",background:"#34134b",fontWeight:900}, openBox:{display:"grid",gap:1,textAlign:"left",padding:"6px 8px",borderRadius:8,border:"1px solid #38bdf8",background:"#0a2940",fontWeight:900,margin:"1px 0"}, emptyHint:{opacity:.28,fontSize:18,fontWeight:800,display:"inline-block"}, otBadge:{fontSize:11,fontWeight:900,color:"#f87171",marginTop:2}, loadMoreCell:{padding:"12px",textAlign:"center",fontSize:12,opacity:.65,borderBottom:"1px solid var(--border)"}, button:{background:"transparent",color:"inherit",border:"1px solid var(--border)",borderRadius:10,padding:"10px 14px",fontWeight:800}, activeButton:{background:"#0b4ea2",color:"white",border:"1px solid #3b82f6",borderRadius:10,padding:"10px 16px",fontWeight:900}, primaryButton:{background:"#2563eb",color:"white",border:"1px solid #3b82f6",borderRadius:10,padding:"10px 16px",fontWeight:900}, deleteButton:{background:"#7f1d1d",color:"#fee2e2",border:"1px solid #ef4444",borderRadius:10,padding:"10px 16px",fontWeight:900}, modalActions:{display:"flex",justifyContent:"space-between",gap:12,marginTop:20,flexWrap:"wrap"}, timeGrid:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}, input:{background:"var(--card-bg)",color:"inherit",border:"1px solid var(--border)",borderRadius:10,padding:"10px 12px",minWidth:150}, selectWrap:{position:"relative",minWidth:170}, select:{appearance:"none",WebkitAppearance:"none",width:"100%",background:"var(--card-bg)",color:"inherit",border:"1px solid var(--border)",borderRadius:10,padding:"10px 34px 10px 12px",fontWeight:800}, chevron:{position:"absolute",right:12,top:"50%",transform:"translateY(-54%)",pointerEvents:"none",opacity:.7,fontSize:18}, muted:{opacity:.65}, smallMuted:{opacity:.65,fontSize:13,marginTop:3}, label:{display:"grid",gap:6,fontWeight:800,margin:"12px 0"}, overlay:{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",display:"grid",placeItems:"center",zIndex:9999,padding:20}, dialog:{width:"min(620px,94vw)",maxHeight:"88vh",overflow:"auto",background:"var(--bg)",border:"1px solid var(--border)",borderRadius:16,padding:24,boxShadow:"0 24px 80px rgba(0,0,0,.45)"}
 };
