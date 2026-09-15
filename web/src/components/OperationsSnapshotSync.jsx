@@ -3,7 +3,10 @@ import api from "../services/api";
 import { saveOfflineOperationsSnapshot } from "../services/offlineCache.js";
 import { useUser } from "../contexts/UserContext.jsx";
 
-const SNAPSHOT_REFRESH_MS = 60_000;
+// The offline copy is insurance, not live UI data. Refreshing it every minute made
+// the browser and API do unnecessary work while users were actively using the app.
+const SNAPSHOT_REFRESH_MS = 5 * 60_000;
+const MIN_SYNC_GAP_MS = 60_000;
 
 export default function OperationsSnapshotSync() {
   const { user, orgId, orgCode, orgName, permissions, isSuperadmin } = useUser();
@@ -15,12 +18,15 @@ export default function OperationsSnapshotSync() {
 
     let cancelled = false;
     let syncing = false;
-    async function sync() {
+    let lastSyncAt = 0;
+    async function sync({ force = false } = {}) {
       if (cancelled || syncing || document.visibilityState === "hidden") return;
+      if (!force && Date.now() - lastSyncAt < MIN_SYNC_GAP_MS) return;
       syncing = true;
       try {
-        const data = await api.get("/operations-snapshot");
+        const data = await api.get("/operations-snapshot", { cache: false });
         if (cancelled) return;
+        lastSyncAt = Date.now();
         saveOfflineOperationsSnapshot({
           orgId,
           orgCode,
@@ -43,9 +49,10 @@ export default function OperationsSnapshotSync() {
     const onVisible = () => {
       if (document.visibilityState === "visible") sync();
     };
-    const onOnline = () => sync();
+    // A restored connection is worth an immediate fresh snapshot.
+    const onOnline = () => sync({ force: true });
 
-    sync();
+    sync({ force: true });
     const timer = window.setInterval(sync, SNAPSHOT_REFRESH_MS);
     document.addEventListener("visibilitychange", onVisible);
     window.addEventListener("online", onOnline);
