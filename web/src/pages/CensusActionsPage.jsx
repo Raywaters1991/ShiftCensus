@@ -33,19 +33,8 @@ export default function CensusActionsPage(){
   const [busy,setBusy]=useState(false);
   const [refreshKey,setRefreshKey]=useState(0);
 
-  const load=async()=>{ const seq=++loadSeq.current; try { const d=await api.get("/census/bed-board"); if(seq!==loadSeq.current) return; const list=Array.isArray(d)?d:[]; setRows(list); if(list.length) saveOfflineSnapshot({orgId,orgCode,orgName,censusRows:list}); } catch(e){ if(seq===loadSeq.current) console.error(e); } };
-  useEffect(()=>{
-    // CensusPage owns the foreground bed-board load. Hydrate the action layer just
-    // after first paint so its request reuses the org-scoped GET cache instead of
-    // competing with the board for the same data on navigation.
-    setRows([]);
-    const run=()=>load();
-    let idleId=null;
-    let timerId=null;
-    if(typeof window!=="undefined" && "requestIdleCallback" in window) idleId=window.requestIdleCallback(run,{timeout:350});
-    else timerId=setTimeout(run,0);
-    return()=>{ loadSeq.current+=1; if(idleId!==null) window.cancelIdleCallback?.(idleId); if(timerId!==null) clearTimeout(timerId); };
-  },[refreshKey,orgId,orgCode,orgName]);
+  const load=async()=>{ const seq=++loadSeq.current; try { const d=await api.get("/census/bed-board"); if(seq!==loadSeq.current) return []; const list=Array.isArray(d)?d:[]; setRows(list); if(list.length) saveOfflineSnapshot({orgId,orgCode,orgName,censusRows:list}); return list; } catch(e){ if(seq===loadSeq.current) console.error(e); return []; } };
+  useEffect(()=>{ setRows([]); loadSeq.current+=1; },[orgId,orgCode]);
 
   useEffect(()=>{
     const root=rootRef.current;
@@ -65,9 +54,7 @@ export default function CensusActionsPage(){
       const desired=canWrite?writable:readonly;
       root.querySelectorAll("div").forEach(el=>{
         const text=String(el.textContent||"").trim();
-        if((text===legacy||text===writable||text===readonly) && text!==desired){
-          el.textContent=desired;
-        }
+        if((text===legacy||text===writable||text===readonly) && text!==desired) el.textContent=desired;
       });
     };
     cleanLegacyControls();
@@ -76,19 +63,21 @@ export default function CensusActionsPage(){
     return()=>observer.disconnect();
   },[refreshKey,canWrite]);
 
-  const refresh=()=>{ setTarget(null); setMode("actions"); setDraft(null); setToId(""); setRefreshKey(k=>k+1); };
+  const refresh=()=>{ setTarget(null); setMode("actions"); setDraft(null); setToId(""); setRows([]); setRefreshKey(k=>k+1); };
   const fail=(e)=>{ console.error(e); alert(e?.body?.details?.message || e?.body?.message || e?.message || "Could not update census."); };
   const isGenderMismatch=(e)=>e?.status===409&&(e?.body?.error==="GENDER_MISMATCH"||e?.message==="GENDER_MISMATCH");
 
-  function intercept(e){
+  async function intercept(e){
     if(e.target.closest("button,select,input,textarea")) return;
     const card=e.target.closest('[role="button"]');
     if(!card) return;
     if(!canWrite){ e.preventDefault(); e.stopPropagation(); return; }
     const text=String(card.textContent||"").replace(/\s+/g," ").trim();
-    const row=rows.find(r=>text.includes(bedKey(r)) && normStatus(r.status)!=="empty");
-    if(!row) return;
+    if(/\bEmpty\b/i.test(text)) return;
     e.preventDefault(); e.stopPropagation();
+    const currentRows=rows.length?rows:await load();
+    const row=currentRows.find(r=>text.includes(bedKey(r)) && normStatus(r.status)!=="empty");
+    if(!row) return;
     setTarget(row); setMode("actions"); setDraft(null); setToId("");
   }
 
@@ -125,7 +114,6 @@ export default function CensusActionsPage(){
     if(!canWrite) return;
     const to=rows.find(r=>String(r.id)===String(toId));
     if(!target||!to) return;
-
     const body={source_id:target.id,destination_id:to.id,source_override:false,source_override_note:null,destination_override:false,destination_override_note:null};
     setBusy(true);
     try {
