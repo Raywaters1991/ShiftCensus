@@ -1,0 +1,88 @@
+const express = require("express");
+const router = express.Router();
+const supabaseAdmin = require("../supabaseAdmin");
+const { requireAuth } = require("../middleware/auth");
+const { requireOrg } = require("../middleware/orgGuard");
+
+const isNurseRole = (v) => ["RN", "LPN", "NURSE"].includes(String(v || "").trim().toUpperCase());
+const platformReviewer = (req) => String(req.role || "").toLowerCase() === "superadmin";
+function reviewDepartment(req) {
+  const m = req.orgMembership || {};
+  if (!m.can_schedule_write || !m.department_id) return null;
+  return String(m.department_id);
+}
+
+router.use(requireAuth);
+router.use(requireOrg);
+
+// Fast-path for Request Review. The legacy queue performed up to two database
+// reads per pending request. This version batches shift details and PTO conflict
+// counts so queue load stays nearly constant as pending requests grow.
+router.get("/queue", async (req, res) => {
+  const started = Date.now();
+  try {
+    const orgCode = req.orgCode || req.org_code;
+    const dept = reviewDepartment(req);
+    if (!platformReviewer(req) && !dept) {
+      return res.status(403).json({ error: "Edit Schedule permission is required to review department requests" });
+    }
+
+    let q = supabaseAdmin
+      .from("shift_requests")
+      .select("id,user_id,staff_id,department_id,request_type,shift_id,start_date,end_date,reason,status,created_at")
+      .eq("org_code", orgCode)
+      .eq("status", "pending")
+      .order("created_at", { ascending: true });
+    if (!platformReviewer(req)) q = q.eq("department_id", dept);
+
+    const { data, error } = await q;
+    if (error) throw error;
+    const requests = data || [];
+    if (!requests.length) return res.json([]);
+
+    const shiftIds = [...new Set(requests.map((r) => r.shift_id).filter(Boolean))];
+    const timeOff = requests.filter((r) => r.request_type === "time_off" && r.staff_id && r.start_date && r.end_date);
+    const staffIds = [...new Set(timeOff.map((r) => r.staff_id))];
+    const minDate = timeOff.length ? timeOff.reduce((v, r) => (r.start_date < v ? r.start_date : v), timeOff[0].start_date) : null;
+    const maxDate = timeOff.length ? timeOff.reduce((v, r) => (r.end_date > v ? r.end_date : v), timeOff[0].end_date) : null;
+
+    const [detailResult, conflictResult] = await Promise.all([
+      shiftIds.length
+        ? supabaseAdmin.from("shifts").select("id,role,shift_date,shift_type,start_local,end_local,staff_id").eq("org_code", orgCode).in("id", shiftIds)
+        : Promise.resolve({ data: [], error: null }),
+      staffIds.length
+        ? supabaseAdmin.from("shifts").select("id,staff_id,shift_date").eq("org_code", orgCode).in("staff_id", staffIds).gte("shift_date", minDate).lte("shift_date", maxDate)
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    if (detailResult.error) throw detailResult.error;
+    if (conflictResult.error) throw conflictResult.error;
+
+    const shiftById = new Map((detailResult.data || []).map((s) => [String(s.id), s]));
+    const conflictsByStaff = new Map();
+    for (const s of conflictResult.data || []) {
+      const key = String(s.staff_id);
+      const list = conflictsByStaff.get(key) || [];
+      list.push(s.shift_date);
+      conflictsByStaff.set(key, list);
+    }
+
+    const rows = requests.map((r) => {
+      const rawShift = r.shift_id ? shiftById.get(String(r.shift_id)) : null;
+      const shift = rawShift ? { ...rawShift, role: isNurseRole(rawShift.role) ? "Nurse" : rawShift.role } : null;
+      let conflict_count = 0;
+      if (r.request_type === "time_off" && r.staff_id && r.start_date && r.end_date) {
+        const dates = conflictsByStaff.get(String(r.staff_id)) || [];
+        conflict_count = dates.reduce((n, d) => n + (d >= r.start_date && d <= r.end_date ? 1 : 0), 0);
+      }
+      return { ...r, conflict_count, shift };
+    });
+
+    res.set("Server-Timing", `queue;dur=${Date.now() - started}`);
+    return res.json(rows);
+  } catch (e) {
+    console.error("FAST REQUEST QUEUE ERROR", e);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+module.exports = router;
