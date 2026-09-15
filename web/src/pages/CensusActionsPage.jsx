@@ -24,6 +24,7 @@ export default function CensusActionsPage(){
   const superUser=!!isSuperadmin||String(role||"").toLowerCase()==="superadmin";
   const canWrite=superUser||!!permissions?.can_census_write;
   const rootRef=useRef(null);
+  const loadSeq=useRef(0);
   const [rows,setRows]=useState([]);
   const [target,setTarget]=useState(null);
   const [mode,setMode]=useState("actions");
@@ -32,8 +33,19 @@ export default function CensusActionsPage(){
   const [busy,setBusy]=useState(false);
   const [refreshKey,setRefreshKey]=useState(0);
 
-  const load=async()=>{ try { const d=await api.get("/census/bed-board"); const list=Array.isArray(d)?d:[]; setRows(list); if(list.length) saveOfflineSnapshot({orgId,orgCode,orgName,censusRows:list}); } catch(e){ console.error(e); } };
-  useEffect(()=>{ load(); },[refreshKey,orgId,orgCode,orgName]);
+  const load=async()=>{ const seq=++loadSeq.current; try { const d=await api.get("/census/bed-board"); if(seq!==loadSeq.current) return; const list=Array.isArray(d)?d:[]; setRows(list); if(list.length) saveOfflineSnapshot({orgId,orgCode,orgName,censusRows:list}); } catch(e){ if(seq===loadSeq.current) console.error(e); } };
+  useEffect(()=>{
+    // CensusPage owns the foreground bed-board load. Hydrate the action layer just
+    // after first paint so its request reuses the org-scoped GET cache instead of
+    // competing with the board for the same data on navigation.
+    setRows([]);
+    const run=()=>load();
+    let idleId=null;
+    let timerId=null;
+    if(typeof window!=="undefined" && "requestIdleCallback" in window) idleId=window.requestIdleCallback(run,{timeout:350});
+    else timerId=setTimeout(run,0);
+    return()=>{ loadSeq.current+=1; if(idleId!==null) window.cancelIdleCallback?.(idleId); if(timerId!==null) clearTimeout(timerId); };
+  },[refreshKey,orgId,orgCode,orgName]);
 
   useEffect(()=>{
     const root=rootRef.current;
@@ -114,40 +126,25 @@ export default function CensusActionsPage(){
     const to=rows.find(r=>String(r.id)===String(toId));
     if(!target||!to) return;
 
-    const body={
-      source_id:target.id,
-      destination_id:to.id,
-      source_override:false,
-      source_override_note:null,
-      destination_override:false,
-      destination_override_note:null,
-    };
-
+    const body={source_id:target.id,destination_id:to.id,source_override:false,source_override_note:null,destination_override:false,destination_override_note:null};
     setBusy(true);
     try {
       for(let attempt=0;attempt<3;attempt++){
-        try {
-          await api.post("/census/move-swap",body);
-          refresh();
-          return;
-        } catch(e){
+        try { await api.post("/census/move-swap",body); refresh(); return; }
+        catch(e){
           if(!isGenderMismatch(e)) throw e;
-
           const details=e?.body?.details||{};
           const sourceToDestination=details.placement!=="destination_to_source";
           const incomingRow=sourceToDestination?target:to;
           const destinationRow=sourceToDestination?to:target;
           const overrideKey=sourceToDestination?"source_override":"destination_override";
           const noteKey=sourceToDestination?"source_override_note":"destination_override_note";
-
           if(body[overrideKey]) throw e;
-
           const incoming=details.incoming_gender||incomingRow.patient_gender||"resident";
           const existing=details.room_gender||"the current room gender";
           const room=roomNo(destinationRow)||destinationRow.room||"this room";
           const ok=confirm(`Gender mismatch for Room ${room}.\n\nYou are placing a ${incoming} resident into a room currently designated ${existing}.\n\nOverride this restriction? Use only for an approved exception such as a married couple or other documented accommodation.`);
           if(!ok) return;
-
           const note=prompt("Enter the reason for the gender override:","Married couple / approved accommodation");
           if(note===null) return;
           body[overrideKey]=true;
@@ -155,10 +152,7 @@ export default function CensusActionsPage(){
         }
       }
       throw new Error("The move could not be completed after validation.");
-    } catch(e){
-      fail(e);
-      await load();
-    } finally { setBusy(false); }
+    } catch(e){ fail(e); await load(); } finally { setBusy(false); }
   }
   async function discharge(){ if(!canWrite) return; if(!target||!confirm(`Discharge ${bedKey(target)}? This will mark the bed EMPTY.`)) return; setBusy(true); try { await api.put(`/census/${target.id}`,emptyPayload); refresh(); } catch(e){ fail(e); } finally { setBusy(false); } }
 
