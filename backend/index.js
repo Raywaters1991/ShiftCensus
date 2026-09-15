@@ -57,6 +57,7 @@ app.use("/api/shift-assignments", require("./routes/shiftAssignments"));
 app.use("/api/shift-requests", require("./routes/requestWorkflow"));
 app.use("/api/shift-requests", require("./routes/shiftWorkflowOverrides"));
 app.use("/api/shift-requests", require("./routes/requestRevocations"));
+app.use("/api/shift-requests", require("./routes/requestQueueFast"));
 app.use("/api/shift-requests", require("./routes/shiftRequests"));
 app.use("/api/staff", require("./routes/staff"));
 app.use("/api/organizations", require("./routes/organizations"));
