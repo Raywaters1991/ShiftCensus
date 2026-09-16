@@ -1,0 +1,28 @@
+const express=require("express");
+const router=express.Router();
+const supabaseAdmin=require("../supabaseAdmin");
+const{requireAuth}=require("../middleware/auth");
+const{requireOrg}=require("../middleware/orgGuard");
+const{createNotifications}=require("../services/notificationService");
+router.use(requireAuth);router.use(requireOrg);
+
+function platformReviewer(req){return String(req.role||"").toLowerCase()==="superadmin"}
+function reviewDepartment(req){const m=req.orgMembership||{};if(!m.can_schedule_write||!m.department_id)return null;return String(m.department_id)}
+async function mayReviewRequest(req,r){if(platformReviewer(req))return true;const dept=reviewDepartment(req);return!!dept&&String(r?.department_id||"")===dept}
+async function hasApprovedTimeOff(orgCode,staffId,date){if(!staffId||!date)return false;const{data,error}=await supabaseAdmin.from("shift_requests").select("id").eq("org_code",orgCode).eq("staff_id",staffId).eq("request_type","time_off").eq("status","approved").lte("start_date",date).gte("end_date",date).limit(1);if(error)throw error;return!!data?.length}
+function requestLabel(r){if(r.request_type==="pickup")return"open shift request";if(r.request_type==="time_off")return"time-off request";if(r.request_type==="offer")return"shift offer";return"request"}
+function decisionMessage(r,decision){const label=requestLabel(r);const date=r.start_date&&r.end_date&&r.start_date!==r.end_date?`${r.start_date} through ${r.end_date}`:(r.start_date||"");return`Your ${label}${date?` for ${date}`:""} was ${decision}.`}
+
+router.patch("/:id/decision",async(req,res)=>{try{
+  const decision=String(req.body?.decision||"").toLowerCase();if(!["approved","denied"].includes(decision))return res.status(400).json({error:"Decision must be approved or denied"});
+  const orgCode=req.orgCode||req.org_code;
+  const{data:r,error:re}=await supabaseAdmin.from("shift_requests").select("*").eq("id",req.params.id).eq("org_code",orgCode).eq("status","pending").maybeSingle();if(re)throw re;if(!r)return res.status(404).json({error:"Pending request not found"});if(!(await mayReviewRequest(req,r)))return res.status(403).json({error:"Edit Schedule permission is required for this employee's department"});
+  let opened_shifts=0;
+  if(decision==="approved"&&r.request_type==="pickup"&&r.shift_id&&r.staff_id){const[{data:s,error:se},{data:pickupStaff,error:pe}]=await Promise.all([supabaseAdmin.from("shifts").select("staff_id,shift_date").eq("id",r.shift_id).eq("org_code",orgCode).maybeSingle(),supabaseAdmin.from("staff").select("role").eq("id",r.staff_id).eq("org_code",orgCode).maybeSingle()]);if(se)throw se;if(pe)throw pe;if(!s||s.staff_id!==null)return res.status(409).json({error:"Shift is no longer open"});if(!pickupStaff)return res.status(409).json({error:"Employee is no longer active in this facility"});if(await hasApprovedTimeOff(orgCode,r.staff_id,s.shift_date))return res.status(409).json({error:"Employee has approved time off on this date"});const{error:pickupErr}=await supabaseAdmin.from("shifts").update({staff_id:r.staff_id,role:pickupStaff.role}).eq("id",r.shift_id).eq("org_code",orgCode);if(pickupErr)throw pickupErr}
+  if(decision==="approved"&&r.request_type==="offer"&&r.shift_id&&r.staff_id){const{data:s,error:se}=await supabaseAdmin.from("shifts").select("id,staff_id").eq("id",r.shift_id).eq("org_code",orgCode).maybeSingle();if(se)throw se;if(!s)return res.status(409).json({error:"Shift no longer exists"});if(String(s.staff_id)!==String(r.staff_id))return res.status(409).json({error:"Shift is no longer assigned to this employee"});const{data:opened,error:oe}=await supabaseAdmin.from("shifts").update({staff_id:null}).eq("id",r.shift_id).eq("org_code",orgCode).eq("staff_id",r.staff_id).select("id").maybeSingle();if(oe)throw oe;if(!opened)return res.status(409).json({error:"Shift assignment changed before approval"});opened_shifts=1}
+  if(decision==="approved"&&r.request_type==="time_off"&&r.staff_id){const{data:conflicts,error:ce}=await supabaseAdmin.from("shifts").select("id").eq("org_code",orgCode).eq("staff_id",r.staff_id).gte("shift_date",r.start_date).lte("shift_date",r.end_date);if(ce)throw ce;if(conflicts?.length){const ids=conflicts.map(x=>x.id);const{error:ue}=await supabaseAdmin.from("shifts").update({staff_id:null}).in("id",ids).eq("org_code",orgCode);if(ue)throw ue;opened_shifts=ids.length}}
+  const{data,error}=await supabaseAdmin.from("shift_requests").update({status:decision,decided_by:req.userId,decided_at:new Date().toISOString(),decision_note:req.body?.note||null,employee_seen_at:null}).eq("id",r.id).eq("org_code",orgCode).eq("status","pending").select().single();if(error)throw error;
+  let notified=0;if(r.user_id){const rows=await createNotifications([{org_code:orgCode,user_id:r.user_id,department_id:r.department_id||null,type:"request_decision",title:`Request ${decision}`,message:decisionMessage(r,decision),action_path:"/requests",metadata:{request_id:r.id,request_type:r.request_type,decision,shift_id:r.shift_id||null}}]);notified=rows.length}
+  return res.json({...data,opened_shifts,employee_notified:notified});
+}catch(e){console.error("REQUEST DECISION WORKFLOW ERROR",e);return res.status(500).json({error:e?.message||"Unable to update request"})}});
+module.exports=router;
