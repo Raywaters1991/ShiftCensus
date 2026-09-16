@@ -91,22 +91,36 @@ export function UserProvider({ children }) {
         return;
       }
 
-      const p = await withTimeout(api.get("/admin/profile"), AUTH_TIMEOUT_MS, "ShiftCensus could not reach the server.");
-      setProfile(p);
-
+      // Once Supabase has authenticated the user, these three reads are independent.
+      // Run them together so initial app startup pays for the slowest request instead
+      // of profile + bootstrap + memberships sequentially.
       const stored = readStoredOrg();
       const safeStoredOrgCode =
         stored.orgCode && String(stored.orgCode).toUpperCase() !== "ADMIN"
           ? stored.orgCode
           : "";
 
-      const bootstrap = await withTimeout(
-        api.get("/me/bootstrap", {
-          headers: safeStoredOrgCode ? { "X-Org-Code": safeStoredOrgCode } : undefined,
-        }),
-        AUTH_TIMEOUT_MS,
-        "ShiftCensus could not load your facility information."
-      );
+      const [p, bootstrap, memRes] = await Promise.all([
+        withTimeout(
+          api.get("/admin/profile"),
+          AUTH_TIMEOUT_MS,
+          "ShiftCensus could not reach the server."
+        ),
+        withTimeout(
+          api.get("/me/bootstrap", {
+            headers: safeStoredOrgCode ? { "X-Org-Code": safeStoredOrgCode } : undefined,
+          }),
+          AUTH_TIMEOUT_MS,
+          "ShiftCensus could not load your facility information."
+        ),
+        withTimeout(
+          api.get("/me/memberships"),
+          AUTH_TIMEOUT_MS,
+          "ShiftCensus could not load your organizations."
+        ),
+      ]);
+
+      setProfile(p);
 
       const org = bootstrap?.activeOrg || null;
       setActiveOrg(org);
@@ -135,7 +149,6 @@ export function UserProvider({ children }) {
         orgName: org?.name || null,
       });
 
-      const memRes = await withTimeout(api.get("/me/memberships"), AUTH_TIMEOUT_MS, "ShiftCensus could not load your organizations.");
       const memberships = Array.isArray(memRes?.memberships) ? memRes.memberships : [];
       setOrgMemberships(memberships);
 
