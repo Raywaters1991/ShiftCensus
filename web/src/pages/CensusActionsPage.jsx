@@ -11,6 +11,7 @@ const normStatus = (s) => ["occupied", "leave", "empty"].includes(String(s || ""
 const roomNo = (r) => String(r.room_number ?? String(r.room || "").match(/\d+/)?.[0] ?? r.room ?? "").trim();
 const bedKey = (r) => `${roomNo(r)}${String(r.bed || "").trim().toUpperCase()}`;
 const allowsDc = (c) => ["skilled", "respite"].includes(String(c || "").toLowerCase());
+const todayISO = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
 
 const overlay = { position:"fixed", inset:0, zIndex:12000, background:"rgba(0,0,0,.68)", display:"grid", placeItems:"center", padding:16 };
 const modal = { width:"min(560px,96vw)", background:"var(--surface, #111827)", color:"var(--text, #fff)", border:"1px solid var(--border, #374151)", borderRadius:18, padding:20, boxShadow:"0 24px 80px rgba(0,0,0,.45)" };
@@ -34,7 +35,7 @@ export default function CensusActionsPage(){
 
   const saveSnapshot=(list)=>{ if(Array.isArray(list)&&list.length) saveOfflineSnapshot({orgId,orgCode,orgName,censusRows:list}); };
   const load=async()=>{ const seq=++loadSeq.current; try { const d=await api.get("/census/bed-board",{cache:false}); if(seq!==loadSeq.current) return []; const list=Array.isArray(d)?d:[]; setRows(list); saveSnapshot(list); return list; } catch(e){ if(seq===loadSeq.current) console.error(e); return []; } };
-  useEffect(()=>{ setRows([]); loadSeq.current+=1; },[orgId,orgCode]);
+  useEffect(()=>{ setRows([]); loadSeq.current+=1; load().catch(()=>{}); },[orgId,orgCode]);
 
   useEffect(()=>{
     const root=rootRef.current;
@@ -75,11 +76,17 @@ export default function CensusActionsPage(){
     if(!card) return;
     if(!canWrite){ e.preventDefault(); e.stopPropagation(); return; }
     const text=String(card.textContent||"").replace(/\s+/g," ").trim();
-    if(/\bEmpty\b/i.test(text)) return;
     e.preventDefault(); e.stopPropagation();
     const currentRows=rows.length?rows:await load();
-    const row=currentRows.find(r=>text.includes(bedKey(r)) && normStatus(r.status)!=="empty");
+    const row=currentRows.find(r=>text.includes(bedKey(r)));
     if(!row) return;
+    if(normStatus(row.status)==="empty"){
+      setTarget(row);
+      setMode("admit");
+      setDraft({...row,status:"occupied",payer_source:"",care_type:"",patient_gender:"Unknown",patient_label:"",admit_date:todayISO(),expected_discharge:"",private_pay_note:"",couple_override:false,couple_note:null});
+      setToId("");
+      return;
+    }
     setTarget(row); setMode("actions"); setDraft(null); setToId("");
   }
 
@@ -106,7 +113,7 @@ export default function CensusActionsPage(){
     if(!canWrite) return;
     if(!draft?.payer_source || !draft?.care_type || !draft?.admit_date || !draft?.patient_gender || draft.patient_gender==="Unknown") return alert("Payer, care type, gender, and admit date are required.");
     setBusy(true);
-    try { const payload={payer_source:draft.payer_source,care_type:draft.care_type,patient_gender:draft.patient_gender,patient_label:String(draft.patient_label||"").trim()||null,admit_date:draft.admit_date,expected_discharge:allowsDc(draft.care_type)?draft.expected_discharge||null:null,private_pay_note:String(draft.private_pay_note||"")}; const saved=await putWithGenderOverride(draft,payload); if(saved){ patchLocal(draft.id,saved); closeActions(); reconcile(); } }
+    try { const payload={...(mode==="admit"?{status:"occupied"}:{}),payer_source:draft.payer_source,care_type:draft.care_type,patient_gender:draft.patient_gender,patient_label:String(draft.patient_label||"").trim()||null,admit_date:draft.admit_date,expected_discharge:allowsDc(draft.care_type)?draft.expected_discharge||null:null,private_pay_note:String(draft.private_pay_note||"")}; const saved=await putWithGenderOverride(draft,payload); if(saved){ patchLocal(draft.id,saved); closeActions(); reconcile(); } }
     catch(e){ fail(e); } finally { setBusy(false); }
   }
 
@@ -151,7 +158,7 @@ export default function CensusActionsPage(){
     {target&&canWrite&&<div style={overlay} onMouseDown={()=>!busy&&setTarget(null)}><div style={modal} onMouseDown={e=>e.stopPropagation()}>
       {mode==="actions"&&<><div style={{fontSize:22,fontWeight:900}}>Resident Actions</div><div style={{opacity:.72,marginTop:4}}>Bed {bedKey(target)} • {normStatus(target.status)==="leave"?"On Leave":"Occupied"}</div><div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:10,marginTop:18}}><button style={btn} onClick={startEdit} disabled={busy}>Edit Resident</button>{normStatus(target.status)==="leave"?<button style={primary} onClick={()=>setLeave("occupied")} disabled={busy}>Return from Leave</button>:<button style={btn} onClick={()=>setLeave("leave")} disabled={busy}>Send on Leave</button>}<button style={btn} onClick={()=>setMode("move")} disabled={busy}>Move / Swap</button><button style={danger} onClick={discharge} disabled={busy}>Discharge</button></div><div style={{display:"flex",justifyContent:"flex-end",marginTop:18}}><button style={btn} onClick={()=>setTarget(null)} disabled={busy}>Close</button></div></>}
       {mode==="move"&&<><div style={{fontSize:22,fontWeight:900}}>Move / Swap Resident</div><div style={{opacity:.72,marginTop:4}}>From bed {bedKey(target)}</div><div style={{marginTop:18}}><div style={{fontWeight:800,marginBottom:7}}>Destination Bed</div><select style={input} value={toId} onChange={e=>setToId(e.target.value)}><option value="">Select…</option>{destinations.map(r=><option key={r.id} value={r.id} disabled={String(r.id)===String(target.id)}>{bedKey(r)} • {normStatus(r.status)==="empty"?"Empty":normStatus(r.status)==="leave"?"On Leave":"Occupied"}</option>)}</select></div><div style={{display:"flex",justifyContent:"flex-end",gap:10,marginTop:18}}><button style={btn} onClick={()=>setMode("actions")} disabled={busy}>Back</button><button style={primary} onClick={move} disabled={busy||!toId}>{busy?"Working…":"Confirm Move / Swap"}</button></div></>}
-      {mode==="edit"&&draft&&<><div style={{fontSize:22,fontWeight:900}}>Edit Resident</div><div style={{opacity:.72,marginTop:4}}>Bed {bedKey(target)}</div><div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:12,marginTop:18}}><label>Payer<select style={input} value={draft.payer_source||""} onChange={e=>setDraft({...draft,payer_source:e.target.value})}><option value="">Select…</option>{PAYER_OPTIONS.map(x=><option key={x}>{x}</option>)}</select></label><label>Care Type<select style={input} value={draft.care_type||""} onChange={e=>setDraft({...draft,care_type:e.target.value,expected_discharge:allowsDc(e.target.value)?draft.expected_discharge:""})}><option value="">Select…</option>{CARE_OPTIONS.map(x=><option key={x}>{x}</option>)}</select></label><label>Gender<select style={input} value={draft.patient_gender||"Unknown"} onChange={e=>setDraft({...draft,patient_gender:e.target.value})}>{GENDER_OPTIONS.map(x=><option key={x}>{x}</option>)}</select></label><label>Name / Label<input style={input} value={draft.patient_label||""} onChange={e=>setDraft({...draft,patient_label:e.target.value})}/></label><label>Admit Date<input type="date" style={input} value={draft.admit_date||""} onChange={e=>setDraft({...draft,admit_date:e.target.value})}/></label>{allowsDc(draft.care_type)&&<label>Expected Discharge<input type="date" style={input} value={draft.expected_discharge||""} onChange={e=>setDraft({...draft,expected_discharge:e.target.value})}/></label>}<label style={{gridColumn:"1/-1"}}>Note<input style={input} value={draft.private_pay_note||""} onChange={e=>setDraft({...draft,private_pay_note:e.target.value})}/></label></div><div style={{display:"flex",justifyContent:"flex-end",gap:10,marginTop:18}}><button style={btn} onClick={()=>setMode("actions")} disabled={busy}>Back</button><button style={primary} onClick={saveEdit} disabled={busy}>{busy?"Saving…":"Save Changes"}</button></div></>}
+      {(mode==="edit"||mode==="admit")&&draft&&<><div style={{fontSize:22,fontWeight:900}}>{mode==="admit"?"Admit Resident":"Edit Resident"}</div><div style={{opacity:.72,marginTop:4}}>Bed {bedKey(target)}</div><div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:12,marginTop:18}}><label>Payer<select style={input} value={draft.payer_source||""} onChange={e=>setDraft({...draft,payer_source:e.target.value})}><option value="">Select…</option>{PAYER_OPTIONS.map(x=><option key={x}>{x}</option>)}</select></label><label>Care Type<select style={input} value={draft.care_type||""} onChange={e=>setDraft({...draft,care_type:e.target.value,expected_discharge:allowsDc(e.target.value)?draft.expected_discharge:""})}><option value="">Select…</option>{CARE_OPTIONS.map(x=><option key={x}>{x}</option>)}</select></label><label>Gender<select style={input} value={draft.patient_gender||"Unknown"} onChange={e=>setDraft({...draft,patient_gender:e.target.value})}>{GENDER_OPTIONS.map(x=><option key={x}>{x}</option>)}</select></label><label>Name / Label<input style={input} value={draft.patient_label||""} onChange={e=>setDraft({...draft,patient_label:e.target.value})}/></label><label>Admit Date<input type="date" style={input} value={draft.admit_date||""} onChange={e=>setDraft({...draft,admit_date:e.target.value})}/></label>{allowsDc(draft.care_type)&&<label>Expected Discharge<input type="date" style={input} value={draft.expected_discharge||""} onChange={e=>setDraft({...draft,expected_discharge:e.target.value})}/></label>}<label style={{gridColumn:"1/-1"}}>Note<input style={input} value={draft.private_pay_note||""} onChange={e=>setDraft({...draft,private_pay_note:e.target.value})}/></label></div><div style={{display:"flex",justifyContent:"flex-end",gap:10,marginTop:18}}><button style={btn} onClick={closeActions} disabled={busy}>{mode==="admit"?"Cancel":"Back"}</button><button style={primary} onClick={saveEdit} disabled={busy}>{busy?"Saving…":mode==="admit"?"Admit Resident":"Save Changes"}</button></div></>}
     </div></div>}
   </div>;
 }
