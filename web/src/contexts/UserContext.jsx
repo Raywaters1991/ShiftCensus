@@ -91,16 +91,16 @@ export function UserProvider({ children }) {
         return;
       }
 
-      // Once Supabase has authenticated the user, these three reads are independent.
-      // Run them together so initial app startup pays for the slowest request instead
-      // of profile + bootstrap + memberships sequentially.
       const stored = readStoredOrg();
       const safeStoredOrgCode =
         stored.orgCode && String(stored.orgCode).toUpperCase() !== "ADMIN"
           ? stored.orgCode
           : "";
 
-      const [p, bootstrap, memRes] = await Promise.all([
+      // Bootstrap now includes the complete membership list. Profile and bootstrap
+      // remain independent, so startup only waits on these two parallel requests
+      // instead of making a third authenticated memberships round trip.
+      const [p, bootstrap] = await Promise.all([
         withTimeout(
           api.get("/admin/profile"),
           AUTH_TIMEOUT_MS,
@@ -112,11 +112,6 @@ export function UserProvider({ children }) {
           }),
           AUTH_TIMEOUT_MS,
           "ShiftCensus could not load your facility information."
-        ),
-        withTimeout(
-          api.get("/me/memberships"),
-          AUTH_TIMEOUT_MS,
-          "ShiftCensus could not load your organizations."
         ),
       ]);
 
@@ -149,7 +144,7 @@ export function UserProvider({ children }) {
         orgName: org?.name || null,
       });
 
-      const memberships = Array.isArray(memRes?.memberships) ? memRes.memberships : [];
+      const memberships = Array.isArray(bootstrap?.memberships) ? bootstrap.memberships : [];
       setOrgMemberships(memberships);
 
       if (!org?.id && memberships.length > 0) {
