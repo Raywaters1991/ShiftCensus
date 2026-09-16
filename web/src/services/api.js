@@ -246,6 +246,24 @@ function scheduleBundle(from, to, config = {}) {
 api.get = async function cachedGet(url, config = {}) {
   const { path, params } = queryParts(url);
 
+  // Admin historically loads privacy, lunch, and pay-period settings through
+  // three endpoints at the same time. /org-settings already contains all three,
+  // so route the two legacy reads through the same cached/in-flight request.
+  // This keeps the AdminPage API contract intact while reducing three network
+  // round trips to one and preserving org-scoped caching.
+  if (path === "/org-settings/lunch-break") {
+    const settings = await regularCachedGet("/org-settings", config);
+    return { lunch_break_minutes: Number(settings?.lunch_break_minutes ?? 30) };
+  }
+
+  if (path === "/org-settings/pay-period") {
+    const settings = await regularCachedGet("/org-settings", config);
+    return {
+      pay_period_length_days: Number(settings?.pay_period_length_days ?? 14),
+      pay_period_anchor_date: settings?.pay_period_anchor_date || null,
+    };
+  }
+
   if (path === "/shifts" && params.get("from") && params.get("to") && !params.get("date")) {
     const from = params.get("from");
     const to = params.get("to");
