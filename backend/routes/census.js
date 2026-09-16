@@ -32,9 +32,6 @@ router.get("/bed-board", async (req, res) => {
   try {
     const effectiveOrgId = getEffectiveOrgId(req);
     if (!effectiveOrgId) return res.status(400).json({ error: "Missing org_id context" });
-
-    // Census is independent of the room lookup, so start it immediately instead of
-    // waiting for rooms -> beds first. Beds still correctly waits for room ids.
     const censusPromise = supabaseAdmin.from("census").select(CENSUS_SELECT).eq("org_id", effectiveOrgId);
     const roomsRes = await supabaseAdmin.from("facility_rooms").select("id, org_id, room_label, unit, display_order").eq("org_id", effectiveOrgId).order("display_order", { ascending: true, nullsFirst: false }).order("room_label", { ascending: true });
     if (roomsRes.error) throw roomsRes.error;
@@ -72,7 +69,6 @@ router.get("/bed-board", async (req, res) => {
       toInsert.push({ org_id: effectiveOrgId, facility_bed_id: b.id, room: roomLabel, status: "empty", room_number: derivedRoomNumber, bed: bedLabel, admit_date: null, expected_discharge: null, org_code: null, payer_source: null, care_type: null, patient_label: null, private_pay_note: "", patient_gender: "Unknown", couple_override: false, couple_note: null });
     }
 
-    // Keep legacy claims ordered to preserve the existing conflict/claim semantics.
     for (const u of toClaimUpdates) {
       const up = await supabaseAdmin.from("census").update(u.patch).eq("id", u.id).eq("org_id", effectiveOrgId).select(CENSUS_SELECT).single();
       if (up.error) throw up.error;
@@ -111,10 +107,25 @@ router.put("/:id", async (req, res) => {
     const patch = { ...(req.body || {}) };
     delete patch.org_id; delete patch.org_code; delete patch.facility_bed_id; delete patch.room;
     if (patch.status !== undefined) patch.status = normStatus(patch.status);
+    if (patch.patient_gender !== undefined) patch.patient_gender = normGender(patch.patient_gender);
     const nextStatus = patch.status !== undefined ? patch.status : current.status;
     const nextIsActive = isActiveStatus(nextStatus);
     const nextGender = patch.patient_gender !== undefined ? normGender(patch.patient_gender) : normGender(current.patient_gender);
     const nextCoupleOverride = patch.couple_override !== undefined ? !!patch.couple_override : !!current.couple_override;
+
+    // Admission is the empty -> occupied transition. Enforce the same required
+    // fields on the server that the Admit Resident modal requires so a stale or
+    // alternate client cannot create a half-admitted bed.
+    const isAdmission = normStatus(current.status) === "empty" && normStatus(nextStatus) === "occupied";
+    if (isAdmission) {
+      const missing = [];
+      if (!safeStr(patch.payer_source).trim()) missing.push("payer_source");
+      if (!safeStr(patch.care_type).trim()) missing.push("care_type");
+      if (!safeStr(patch.admit_date).trim()) missing.push("admit_date");
+      if (nextGender === "Unknown") missing.push("patient_gender");
+      if (missing.length) return res.status(400).json({ error: "ADMISSION_FIELDS_REQUIRED", fields: missing });
+    }
+
     if (nextIsActive) {
       const roomNumber=safeStr(current.room_number).trim(); const roomText=normRoomLabel(current.room);
       let othersQuery=supabaseAdmin.from("census").select("id,room,room_number,bed,status,patient_gender,couple_override").eq("org_id",effectiveOrgId);
