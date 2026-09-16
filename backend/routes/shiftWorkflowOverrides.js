@@ -12,20 +12,23 @@ async function approvedTimeOff(orgCode,staffId,date){const{data,error}=await sup
 function compatible(shiftRole,staffRole){return isNurseRole(shiftRole)?isNurseRole(staffRole):String(shiftRole||"").toLowerCase()===String(staffRole||"").toLowerCase()}
 
 router.get("/open-shifts",async(req,res)=>{try{
+  const started=Date.now();
   const orgCode=req.orgCode||req.org_code,from=String(req.query.from||new Date().toISOString().slice(0,10)),to=String(req.query.to||"");
   if(!validDate(from)||(to&&!validDate(to)))return res.status(400).json({error:"Invalid date range"});
-  const staff=await currentStaff(req);
-  let q=supabaseAdmin.from("shifts").select("id,staff_id,role,shift_date,shift_type,start_local,end_local,start_time,end_time,department_id,open_reason,bonus_enabled,bonus_type,bonus_amount,bonus_note,original_staff_id").eq("org_code",orgCode).is("staff_id",null).gte("shift_date",from);
-  if(to)q=q.lte("shift_date",to);
-  const{data:open,error}=await q;if(error)throw error;
+  let openQ=supabaseAdmin.from("shifts").select("id,staff_id,role,shift_date,shift_type,start_local,end_local,start_time,end_time,department_id,open_reason,bonus_enabled,bonus_type,bonus_amount,bonus_note,original_staff_id").eq("org_code",orgCode).is("staff_id",null).gte("shift_date",from);
+  if(to)openQ=openQ.lte("shift_date",to);
   let offerQ=supabaseAdmin.from("shift_requests").select("id,shift_id,staff_id,department_id,created_at").eq("org_code",orgCode).eq("request_type","offer").eq("status","pending").gte("start_date",from);
   if(to)offerQ=offerQ.lte("start_date",to);
-  const{data:offers,error:oe}=await offerQ;if(oe)throw oe;
+  const[staffResult,openResult,offerResult]=await Promise.all([currentStaff(req),openQ,offerQ]);
+  const staff=staffResult;
+  const{data:open,error}=openResult;if(error)throw error;
+  const{data:offers,error:oe}=offerResult;if(oe)throw oe;
   let offered=[];
   if(offers?.length){const ids=[...new Set(offers.map(x=>x.shift_id).filter(Boolean))];const{data:s,error:se}=await supabaseAdmin.from("shifts").select("id,staff_id,role,shift_date,shift_type,start_local,end_local,start_time,end_time,department_id,bonus_enabled,bonus_type,bonus_amount,bonus_note").eq("org_code",orgCode).in("id",ids);if(se)throw se;const byId=Object.fromEntries((s||[]).map(x=>[String(x.id),x]));offered=offers.map(o=>{const shift=byId[String(o.shift_id)];return shift?{...shift,offered:true,offer_request_id:o.id,offered_by_staff_id:o.staff_id,open_reason:"offered"}:null}).filter(Boolean)}
   let rows=[...(open||[]),...offered];
   if(staff?.role)rows=rows.filter(x=>compatible(x.role,staff.role)&&String(x.staff_id||"")!==String(staff.id));
   rows.sort((a,b)=>String(a.shift_date).localeCompare(String(b.shift_date))||String(a.start_time||"").localeCompare(String(b.start_time||"")));
+  res.set("Server-Timing",`open-shifts;dur=${Date.now()-started}`);
   res.json(rows.map(x=>({...x,role:isNurseRole(x.role)?"Nurse":x.role})));
 }catch(e){console.error("OPEN SHIFTS V2 ERROR",e);res.status(500).json({error:"Server error"})}});
 
