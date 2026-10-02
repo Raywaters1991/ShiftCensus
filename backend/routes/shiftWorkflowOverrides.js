@@ -10,28 +10,49 @@ const isNurseRole=v=>["RN","LPN","NURSE"].includes(String(v||"").trim().toUpperC
 async function currentStaff(req){const{data}=await supabaseAdmin.from("staff").select("id,name,role,user_id,department_id").eq("org_code",req.orgCode||req.org_code).eq("user_id",req.userId).maybeSingle();return data||null}
 async function approvedTimeOff(orgCode,staffId,date){const{data,error}=await supabaseAdmin.from("shift_requests").select("id").eq("org_code",orgCode).eq("staff_id",staffId).eq("request_type","time_off").eq("status","approved").lte("start_date",date).gte("end_date",date).limit(1);if(error)throw error;return!!data?.length}
 function compatible(shiftRole,staffRole){return isNurseRole(shiftRole)?isNurseRole(staffRole):String(shiftRole||"").toLowerCase()===String(staffRole||"").toLowerCase()}
+const roleGroup=v=>isNurseRole(v)?"Nurse":String(v||"").trim().toUpperCase()==="CNA"?"CNA":String(v||"");
+const addDays=(date,n)=>{const d=new Date(`${date}T00:00:00Z`);d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10)};
+async function coverageGapRows(req,from,to,allShifts){
+  if(!req.orgId||!to)return[];
+  const orgCode=req.orgCode||req.org_code;
+  const[{data:reqs,error:re},{data:settings,error:se}]=await Promise.all([
+    supabaseAdmin.from("schedule_coverage_requirements").select("role_group,shift_type,required_count").eq("org_id",req.orgId).gt("required_count",0),
+    supabaseAdmin.from("shift_settings").select("role,shift_type,start_local,end_local").eq("org_code",orgCode)
+  ]);
+  if(re)throw re;if(se)throw se;
+  const settingMap=new Map();
+  for(const x of settings||[]){const g=roleGroup(x.role),k=`${g}|${x.shift_type}`;if(!settingMap.has(k))settingMap.set(k,{start_local:String(x.start_local||"").slice(0,5),end_local:String(x.end_local||"").slice(0,5)});}
+  const count=new Map();
+  for(const s of allShifts||[]){const k=`${s.shift_date}|${roleGroup(s.role)}|${s.shift_type}`;count.set(k,(count.get(k)||0)+1);}
+  const rows=[];
+  for(let date=from;date<=to;date=addDays(date,1))for(const r of reqs||[]){
+    const key=`${date}|${r.role_group}|${r.shift_type}`,missing=Math.max(0,Number(r.required_count||0)-(count.get(key)||0)),times=settingMap.get(`${r.role_group}|${r.shift_type}`);
+    if(!times)continue;
+    for(let i=0;i<missing;i++)rows.push({id:`coverage-gap:${date}:${r.role_group}:${r.shift_type}:${i+1}`,virtual:true,coverage_gap:true,staff_id:null,role:r.role_group,shift_date:date,shift_type:r.shift_type,start_local:times.start_local,end_local:times.end_local,department_id:req.orgMembership?.department_id||null,open_reason:"minimum_coverage",bonus_enabled:false,positions_missing:missing});
+  }
+  return rows;
+}
 
 router.get("/open-shifts",async(req,res)=>{try{
   const started=Date.now();
   const orgCode=req.orgCode||req.org_code,from=String(req.query.from||new Date().toISOString().slice(0,10)),to=String(req.query.to||"");
   if(!validDate(from)||(to&&!validDate(to)))return res.status(400).json({error:"Invalid date range"});
-  let openQ=supabaseAdmin.from("shifts").select("id,staff_id,role,shift_date,shift_type,start_local,end_local,start_time,end_time,department_id,open_reason,bonus_enabled,original_staff_id").eq("org_code",orgCode).is("staff_id",null).gte("shift_date",from);
-  if(to)openQ=openQ.lte("shift_date",to);
+  let allQ=supabaseAdmin.from("shifts").select("id,staff_id,role,shift_date,shift_type,start_local,end_local,start_time,end_time,department_id,open_reason,bonus_enabled,original_staff_id").eq("org_code",orgCode).gte("shift_date",from);
+  if(to)allQ=allQ.lte("shift_date",to);
   let offerQ=supabaseAdmin.from("shift_requests").select("id,shift_id,staff_id,department_id,created_at").eq("org_code",orgCode).eq("request_type","offer").eq("status","pending").gte("start_date",from);
   if(to)offerQ=offerQ.lte("start_date",to);
-  const[staffResult,openResult,offerResult]=await Promise.all([currentStaff(req),openQ,offerQ]);
-  const staff=staffResult;
-  const{data:open,error}=openResult;if(error)throw error;
-  const{data:offers,error:oe}=offerResult;if(oe)throw oe;
+  const[staffResult,allResult,offerResult]=await Promise.all([currentStaff(req),allQ,offerQ]);
+  const staff=staffResult,{data:all,error}=allResult;if(error)throw error;
+  const open=(all||[]).filter(x=>x.staff_id==null),{data:offers,error:oe}=offerResult;if(oe)throw oe;
   let offered=[];
-  if(offers?.length){const ids=[...new Set(offers.map(x=>x.shift_id).filter(Boolean))];const{data:s,error:se}=await supabaseAdmin.from("shifts").select("id,staff_id,role,shift_date,shift_type,start_local,end_local,start_time,end_time,department_id,bonus_enabled").eq("org_code",orgCode).in("id",ids);if(se)throw se;const byId=Object.fromEntries((s||[]).map(x=>[String(x.id),x]));offered=offers.map(o=>{const shift=byId[String(o.shift_id)];return shift?{...shift,offered:true,offer_request_id:o.id,offered_by_staff_id:o.staff_id,open_reason:"offered"}:null}).filter(Boolean)}
-  let rows=[...(open||[]),...offered];
+  if(offers?.length){const byId=Object.fromEntries((all||[]).map(x=>[String(x.id),x]));offered=offers.map(o=>{const shift=byId[String(o.shift_id)];return shift?{...shift,offered:true,offer_request_id:o.id,offered_by_staff_id:o.staff_id,open_reason:"offered"}:null}).filter(Boolean)}
+  const gaps=to?await coverageGapRows(req,from,to,all||[]):[];
+  let rows=[...open,...offered,...gaps];
   if(staff?.role)rows=rows.filter(x=>compatible(x.role,staff.role)&&String(x.staff_id||"")!==String(staff.id));
-  rows.sort((a,b)=>String(a.shift_date).localeCompare(String(b.shift_date))||String(a.start_time||"").localeCompare(String(b.start_time||"")));
+  rows.sort((a,b)=>String(a.shift_date).localeCompare(String(b.shift_date))||String(a.start_local||"").localeCompare(String(b.start_local||"")));
   res.set("Server-Timing",`open-shifts;dur=${Date.now()-started}`);
   res.json(rows.map(x=>({...x,role:isNurseRole(x.role)?"Nurse":x.role})));
 }catch(e){console.error("OPEN SHIFTS V2 ERROR",e);res.status(500).json({error:"Server error"})}});
-
 router.post("/offer",async(req,res)=>{try{
   const orgCode=req.orgCode||req.org_code,{shift_id,note}=req.body||{};const staff=await currentStaff(req);if(!staff)return res.status(400).json({error:"Your login is not linked to a staff record"});
   const{data:shift,error:se}=await supabaseAdmin.from("shifts").select("id,staff_id,role,shift_date,shift_type,start_local,end_local,department_id,bonus_enabled").eq("id",shift_id).eq("org_code",orgCode).maybeSingle();if(se)throw se;if(!shift||String(shift.staff_id)!==String(staff.id))return res.status(403).json({error:"That shift is not assigned to you"});
