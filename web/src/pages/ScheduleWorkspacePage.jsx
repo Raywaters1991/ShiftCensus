@@ -40,6 +40,24 @@ ${open} open/available shift${open===1?"":"s"} will be included in the employee 
     finally{setBusy(false)}
   }
 
+  async function applyTemplates(){
+    if(publication.status==="published")return;
+    if(!window.confirm(`Apply all recurring templates to ${monthLabel}? Existing shifts will be kept.`))return;
+    setBusy(true);setMessage("");
+    try{const r=await api.post("/templates/apply-all",{from,to});setMessage(`Templates applied: ${r?.created||0} shifts created${r?.time_off_skipped?`, ${r.time_off_skipped} skipped for approved PTO`:""}.`);await loadOpen()}
+    catch(e){alert(e?.message||"Unable to apply templates.")}
+    finally{setBusy(false)}
+  }
+
+  async function copyPrevious(){
+    if(publication.status==="published")return;
+    if(!window.confirm(`Copy the previous month into ${monthLabel}? Existing shifts will be kept.`))return;
+    setBusy(true);setMessage("");
+    try{const r=await api.post("/schedule-workflow/copy-previous-month",{month});setMessage(`Copied ${r?.created||0} shifts from ${r?.source_month||"the previous month"}${r?.time_off_skipped?`; ${r.time_off_skipped} skipped for approved PTO`:""}.`);await loadOpen()}
+    catch(e){alert(e?.message||"Unable to copy previous month.")}
+    finally{setBusy(false)}
+  }
+
   async function setIncentive(shift,enabled){setBusy(true);try{await api.patch(`/schedule-workflow/shifts/${shift.id}/bonus`,{enabled});await loadOpen()}catch(e){alert(e?.message||"Unable to update incentive")}finally{setBusy(false)}}
 
   const incentiveCount=openShifts.filter(x=>x.bonus_enabled).length;
