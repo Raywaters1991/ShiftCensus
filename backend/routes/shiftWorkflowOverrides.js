@@ -15,7 +15,7 @@ router.get("/open-shifts",async(req,res)=>{try{
   const started=Date.now();
   const orgCode=req.orgCode||req.org_code,from=String(req.query.from||new Date().toISOString().slice(0,10)),to=String(req.query.to||"");
   if(!validDate(from)||(to&&!validDate(to)))return res.status(400).json({error:"Invalid date range"});
-  let openQ=supabaseAdmin.from("shifts").select("id,staff_id,role,shift_date,shift_type,start_local,end_local,start_time,end_time,department_id,open_reason,bonus_enabled,bonus_type,bonus_amount,bonus_note,original_staff_id").eq("org_code",orgCode).is("staff_id",null).gte("shift_date",from);
+  let openQ=supabaseAdmin.from("shifts").select("id,staff_id,role,shift_date,shift_type,start_local,end_local,start_time,end_time,department_id,open_reason,bonus_enabled,original_staff_id").eq("org_code",orgCode).is("staff_id",null).gte("shift_date",from);
   if(to)openQ=openQ.lte("shift_date",to);
   let offerQ=supabaseAdmin.from("shift_requests").select("id,shift_id,staff_id,department_id,created_at").eq("org_code",orgCode).eq("request_type","offer").eq("status","pending").gte("start_date",from);
   if(to)offerQ=offerQ.lte("start_date",to);
@@ -24,7 +24,7 @@ router.get("/open-shifts",async(req,res)=>{try{
   const{data:open,error}=openResult;if(error)throw error;
   const{data:offers,error:oe}=offerResult;if(oe)throw oe;
   let offered=[];
-  if(offers?.length){const ids=[...new Set(offers.map(x=>x.shift_id).filter(Boolean))];const{data:s,error:se}=await supabaseAdmin.from("shifts").select("id,staff_id,role,shift_date,shift_type,start_local,end_local,start_time,end_time,department_id,bonus_enabled,bonus_type,bonus_amount,bonus_note").eq("org_code",orgCode).in("id",ids);if(se)throw se;const byId=Object.fromEntries((s||[]).map(x=>[String(x.id),x]));offered=offers.map(o=>{const shift=byId[String(o.shift_id)];return shift?{...shift,offered:true,offer_request_id:o.id,offered_by_staff_id:o.staff_id,open_reason:"offered"}:null}).filter(Boolean)}
+  if(offers?.length){const ids=[...new Set(offers.map(x=>x.shift_id).filter(Boolean))];const{data:s,error:se}=await supabaseAdmin.from("shifts").select("id,staff_id,role,shift_date,shift_type,start_local,end_local,start_time,end_time,department_id,bonus_enabled").eq("org_code",orgCode).in("id",ids);if(se)throw se;const byId=Object.fromEntries((s||[]).map(x=>[String(x.id),x]));offered=offers.map(o=>{const shift=byId[String(o.shift_id)];return shift?{...shift,offered:true,offer_request_id:o.id,offered_by_staff_id:o.staff_id,open_reason:"offered"}:null}).filter(Boolean)}
   let rows=[...(open||[]),...offered];
   if(staff?.role)rows=rows.filter(x=>compatible(x.role,staff.role)&&String(x.staff_id||"")!==String(staff.id));
   rows.sort((a,b)=>String(a.shift_date).localeCompare(String(b.shift_date))||String(a.start_time||"").localeCompare(String(b.start_time||"")));
@@ -34,10 +34,10 @@ router.get("/open-shifts",async(req,res)=>{try{
 
 router.post("/offer",async(req,res)=>{try{
   const orgCode=req.orgCode||req.org_code,{shift_id,note}=req.body||{};const staff=await currentStaff(req);if(!staff)return res.status(400).json({error:"Your login is not linked to a staff record"});
-  const{data:shift,error:se}=await supabaseAdmin.from("shifts").select("id,staff_id,role,shift_date,shift_type,start_local,end_local,department_id,bonus_enabled,bonus_type,bonus_amount,bonus_note").eq("id",shift_id).eq("org_code",orgCode).maybeSingle();if(se)throw se;if(!shift||String(shift.staff_id)!==String(staff.id))return res.status(403).json({error:"That shift is not assigned to you"});
+  const{data:shift,error:se}=await supabaseAdmin.from("shifts").select("id,staff_id,role,shift_date,shift_type,start_local,end_local,department_id,bonus_enabled").eq("id",shift_id).eq("org_code",orgCode).maybeSingle();if(se)throw se;if(!shift||String(shift.staff_id)!==String(staff.id))return res.status(403).json({error:"That shift is not assigned to you"});
   const{data:existing}=await supabaseAdmin.from("shift_requests").select("id").eq("org_code",orgCode).eq("request_type","offer").eq("status","pending").eq("shift_id",shift.id).eq("staff_id",staff.id).maybeSingle();if(existing)return res.status(409).json({error:"This shift is already offered"});
   const{data:r,error}=await supabaseAdmin.from("shift_requests").insert({org_code:orgCode,user_id:req.userId,staff_id:staff.id,department_id:staff.department_id,request_type:"offer",shift_id:shift.id,start_date:shift.shift_date,end_date:shift.shift_date,reason:note||null,status:"pending"}).select().single();if(error)throw error;
-  const extra=shift.bonus_enabled?(shift.bonus_note?` Bonus: ${shift.bonus_note}.`:shift.bonus_type==="hourly"?` Bonus: +$${Number(shift.bonus_amount||0).toFixed(2)}/hr.`:` Bonus: +$${Number(shift.bonus_amount||0).toFixed(2)}.`):"";
+  const extra=shift.bonus_enabled?" Incentive available.":"";
   const notifications=await notifyEligibleForShift({orgCode,shift,type:"offered_shift",title:"Shift available",message:`${shift.shift_date} ${shift.shift_type} is available from another employee.${extra}`,excludeUserIds:[req.userId],metadata:{offer_request_id:r.id,open_reason:"offered"}});
   res.json({...r,notified:notifications.length});
 }catch(e){console.error("OFFER WORKFLOW ERROR",e);res.status(500).json({error:e?.message||"Unable to offer shift"})}});
