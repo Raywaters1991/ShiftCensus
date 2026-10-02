@@ -18,7 +18,8 @@ export default function ScheduleWorkspacePage(){
   const[to,setTo]=useState(()=>ymd(addDays(monday,6)));
   const[openShifts,setOpenShifts]=useState([]);
   const[busy,setBusy]=useState(false);
-  const[message,setMessage]=useState("");\n  const[publication,setPublication]=useState({draft_count:0,published_count:0,has_drafts:false});
+  const[message,setMessage]=useState("");
+  const[publication,setPublication]=useState({draft_count:0,published_count:0,has_drafts:false});
   
 
   async function loadOpen(){if(!canWrite||!from||!to)return;try{const bundle=await api.getScheduleView(from,to);const rows=Array.isArray(bundle?.shifts)?bundle.shifts:[];setOpenShifts(rows.filter(x=>x.staff_id==null));setPublication(bundle?.publication||{draft_count:0,published_count:0,has_drafts:false})}catch{setOpenShifts([])}}
@@ -27,7 +28,9 @@ export default function ScheduleWorkspacePage(){
   async function publish(){
     if(!from||!to||from>to)return alert("Choose a valid publish range.");
     const open=openShifts.length;
-    if(!window.confirm(`Publish ${fmtDate(from)} through ${fmtDate(to)}?${open?`\n\n${open} open/available shift${open===1?"":"s"} will be included in the employee notification.`:""}`))return;
+    if(!window.confirm(`Publish ${fmtDate(from)} through ${fmtDate(to)}?${open?`
+
+${open} open/available shift${open===1?"":"s"} will be included in the employee notification.`:""}`))return;
     setBusy(true);setMessage("");
     try{const r=await api.post("/schedule-workflow/publish",{from,to});setMessage(`Published. ${r?.notified||0} employee${r?.notified===1?"":"s"} notified${r?.open_shift_count?` · ${r.open_shift_count} open shift${r.open_shift_count===1?"":"s"}`:""}.`);await loadOpen()}
     catch(e){alert(e?.message||"Unable to publish schedule")}
