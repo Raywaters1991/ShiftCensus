@@ -36,11 +36,11 @@ async function coverageGapRows(req,from,to,allShifts){
 
 router.get("/open-shifts",async(req,res)=>{try{
   const started=Date.now();
-  const orgCode=req.orgCode||req.org_code,from=String(req.query.from||new Date().toISOString().slice(0,10)),to=String(req.query.to||"");
+  const orgCode=req.orgCode||req.org_code,from=String(req.query.from||new Date().toISOString().slice(0,10)),to=String(req.query.to||""),employeeView=String(req.query.view||"").toLowerCase()==="employee";
   if(!validDate(from)||(to&&!validDate(to)))return res.status(400).json({error:"Invalid date range"});
   let allQ=supabaseAdmin.from("shifts").select("id,staff_id,role,shift_date,shift_type,start_local,end_local,start_time,end_time,department_id,open_reason,bonus_enabled,original_staff_id").eq("org_code",orgCode).gte("shift_date",from);
   if(to)allQ=allQ.lte("shift_date",to);
-  if(!canManage(req))allQ=allQ.eq("is_published",true);
+  if(employeeView||!canManage(req))allQ=allQ.eq("is_published",true);
   let offerQ=supabaseAdmin.from("shift_requests").select("id,shift_id,staff_id,department_id,created_at").eq("org_code",orgCode).eq("request_type","offer").eq("status","pending").gte("start_date",from);
   if(to)offerQ=offerQ.lte("start_date",to);
   const[staffResult,allResult,offerResult]=await Promise.all([currentStaff(req),allQ,offerQ]);
@@ -48,7 +48,7 @@ router.get("/open-shifts",async(req,res)=>{try{
   const open=(all||[]).filter(x=>x.staff_id==null),{data:offers,error:oe}=offerResult;if(oe)throw oe;
   let offered=[];
   if(offers?.length){const byId=Object.fromEntries((all||[]).map(x=>[String(x.id),x]));offered=offers.map(o=>{const shift=byId[String(o.shift_id)];return shift?{...shift,offered:true,offer_request_id:o.id,offered_by_staff_id:o.staff_id,open_reason:"offered"}:null}).filter(Boolean)}
-  const manager=canManage(req);
+  const manager=canManage(req)&&!employeeView;
   const gaps=manager&&to?await coverageGapRows(req,from,to,all||[]):[];
   const grouped=new Map();
   for(const x of [...open,...gaps]){
