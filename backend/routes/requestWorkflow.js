@@ -16,6 +16,7 @@ router.post("/time-off",async(req,res)=>{try{
   let start=start_date,end=end_date;
   if(shift_id){const{data:s,error:se}=await supabaseAdmin.from("shifts").select("id,shift_date,staff_id").eq("id",shift_id).eq("org_code",orgCode).maybeSingle();if(se)throw se;if(!s)return res.status(404).json({error:"Shift not found"});if(String(s.staff_id)!==String(staff.id))return res.status(403).json({error:"That shift is not assigned to you"});start=s.shift_date;end=s.shift_date}
   if(!validDate(start)||!validDate(end)||end<start)return res.status(400).json({error:"Enter a valid start and end date"});
+  const{data:overlap,error:overlapError}=await supabaseAdmin.from("shift_requests").select("id,start_date,end_date,status").eq("org_code",orgCode).eq("staff_id",staff.id).eq("request_type","time_off").in("status",["pending","approved"]).lte("start_date",end).gte("end_date",start).limit(1);if(overlapError)throw overlapError;if(overlap?.length)return res.status(409).json({error:"You already have a pending or approved time-off request that overlaps these dates"});
   const{data,error}=await supabaseAdmin.from("shift_requests").insert({org_code:orgCode,user_id:req.userId,staff_id:staff.id,department_id:staff.department_id,request_type:"time_off",shift_id:shift_id||null,start_date:start,end_date:end,reason:reason||null,status:"pending"}).select().single();
   if(error?.code==="23505")return res.status(409).json({error:"You already have a pending time-off request for these dates"});
   if(error)throw error;
