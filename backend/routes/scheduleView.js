@@ -33,7 +33,7 @@ router.get("/", async (req, res) => {
       return res.status(400).json({ error: "Valid from/to dates are required" });
     }
 
-    const [shiftResult, staffResult, leaveResult, coverageResult] = await Promise.all([
+    const [shiftResult, staffResult, leaveResult, coverageResult, publicationResult] = await Promise.all([
       supabaseAdmin
         .from("shifts")
         .select("id,staff_id,role,shift_date,shift_type,start_local,end_local,start_time,end_time,timezone,department_id,is_published,published_at,open_reason,original_staff_id,bonus_enabled,bonus_type,bonus_amount,bonus_note,called_off_at")
@@ -59,12 +59,21 @@ router.get("/", async (req, res) => {
         .from("schedule_coverage_requirements")
         .select("role_group,shift_type,required_count")
         .eq("org_id", orgId),
+      supabaseAdmin
+        .from("schedule_publications")
+        .select("id,period_start,period_end,published_at,published_by,scheduled_count,open_shift_count")
+        .eq("org_code", orgCode)
+        .lte("period_start", to)
+        .gte("period_end", from)
+        .order("published_at", { ascending: false })
+        .limit(1),
     ]);
 
     if (shiftResult.error) throw shiftResult.error;
     if (staffResult.error) throw staffResult.error;
     if (leaveResult.error) throw leaveResult.error;
     if (coverageResult.error) throw coverageResult.error;
+    if (publicationResult.error) throw publicationResult.error;
 
     const coverageMap = new Map(
       (coverageResult.data || []).map((row) => [`${row.role_group}|${row.shift_type}`, row])
@@ -80,7 +89,7 @@ router.get("/", async (req, res) => {
       staff: staffResult.data || [],
       pto: leaveResult.data || [],
       requirements,
-      publication: { draft_count: (shiftResult.data || []).filter(x => !x.is_published).length, published_count: (shiftResult.data || []).filter(x => x.is_published).length, has_drafts: (shiftResult.data || []).some(x => !x.is_published) },
+      publication: publicationResult.data?.[0] ? { status: "published", ...publicationResult.data[0] } : { status: "draft", published_at: null },
       meta: { server_ms: Date.now() - started },
     });
   } catch (err) {
