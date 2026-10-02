@@ -7,7 +7,8 @@ const{notifyEligibleForShift,createNotifications}=require("../services/notificat
 router.use(requireAuth);router.use(requireOrg);
 const validDate=v=>typeof v==="string"&&/^\d{4}-\d{2}-\d{2}$/.test(v);
 const isNurseRole=v=>["RN","LPN","NURSE"].includes(String(v||"").trim().toUpperCase());
-function canManage(req){return String(req.role||"").toLowerCase()==="superadmin"||!!req.orgMembership?.can_schedule_write||!!req.orgMembership?.is_admin}\nasync function currentStaff(req){const{data}=await supabaseAdmin.from("staff").select("id,name,role,user_id,department_id").eq("org_code",req.orgCode||req.org_code).eq("user_id",req.userId).maybeSingle();return data||null}
+function canManage(req){return String(req.role||"").toLowerCase()==="superadmin"||!!req.orgMembership?.can_schedule_write||!!req.orgMembership?.is_admin}
+async function currentStaff(req){const{data}=await supabaseAdmin.from("staff").select("id,name,role,user_id,department_id").eq("org_code",req.orgCode||req.org_code).eq("user_id",req.userId).maybeSingle();return data||null}
 async function approvedTimeOff(orgCode,staffId,date){const{data,error}=await supabaseAdmin.from("shift_requests").select("id").eq("org_code",orgCode).eq("staff_id",staffId).eq("request_type","time_off").eq("status","approved").lte("start_date",date).gte("end_date",date).limit(1);if(error)throw error;return!!data?.length}
 function compatible(shiftRole,staffRole){return isNurseRole(shiftRole)?isNurseRole(staffRole):String(shiftRole||"").toLowerCase()===String(staffRole||"").toLowerCase()}
 const roleGroup=v=>isNurseRole(v)?"Nurse":String(v||"").trim().toUpperCase()==="CNA"?"CNA":String(v||"");
@@ -38,7 +39,8 @@ router.get("/open-shifts",async(req,res)=>{try{
   const orgCode=req.orgCode||req.org_code,from=String(req.query.from||new Date().toISOString().slice(0,10)),to=String(req.query.to||"");
   if(!validDate(from)||(to&&!validDate(to)))return res.status(400).json({error:"Invalid date range"});
   let allQ=supabaseAdmin.from("shifts").select("id,staff_id,role,shift_date,shift_type,start_local,end_local,start_time,end_time,department_id,open_reason,bonus_enabled,original_staff_id").eq("org_code",orgCode).gte("shift_date",from);
-  if(to)allQ=allQ.lte("shift_date",to);\n  if(!canManage(req))allQ=allQ.eq("is_published",true);
+  if(to)allQ=allQ.lte("shift_date",to);
+  if(!canManage(req))allQ=allQ.eq("is_published",true);
   let offerQ=supabaseAdmin.from("shift_requests").select("id,shift_id,staff_id,department_id,created_at").eq("org_code",orgCode).eq("request_type","offer").eq("status","pending").gte("start_date",from);
   if(to)offerQ=offerQ.lte("start_date",to);
   const[staffResult,allResult,offerResult]=await Promise.all([currentStaff(req),allQ,offerQ]);
