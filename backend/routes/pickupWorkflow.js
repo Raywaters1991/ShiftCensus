@@ -101,6 +101,17 @@ router.post("/pickup", async (req, res) => {
     if (await hasApprovedTimeOff(orgCode, staff.id, shift.shift_date)) {
       return res.status(409).json({ error: "You have approved time off on this date" });
     }
+    const { data: conflicts, error: conflictError } = await supabaseAdmin
+      .from("shifts")
+      .select("id,start_time,end_time")
+      .eq("org_code", orgCode)
+      .eq("staff_id", staff.id)
+      .neq("id", shift.id)
+      .lt("start_time", shift.end_time)
+      .gt("end_time", shift.start_time)
+      .limit(1);
+    if (conflictError) throw conflictError;
+    if (conflicts?.length) return res.status(409).json({ error: "You are already scheduled for an overlapping shift" });
 
     const { data, error } = await supabaseAdmin
       .from("shift_requests")
