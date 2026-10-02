@@ -80,6 +80,8 @@ router.post("/pickup", async (req, res) => {
       if(times.length!==1)return res.status(409).json({error:`${group} ${shiftType} has multiple configured shift times; management must create this opening manually`});
       const [startLocal,endLocal]=times[0].split("|");
       const start=new Date(`${date}T${startLocal}:00Z`),end=new Date(`${date}T${endLocal}:00Z`);if(end<=start)end.setUTCDate(end.getUTCDate()+1);
+      if(await hasApprovedTimeOff(orgCode,staff.id,date))return res.status(409).json({error:"You have approved time off on this date"});
+      const{data:preConflicts,error:pce}=await supabaseAdmin.from("shifts").select("id").eq("org_code",orgCode).eq("staff_id",staff.id).lt("start_time",end.toISOString()).gt("end_time",start.toISOString()).limit(1);if(pce)throw pce;if(preConflicts?.length)return res.status(409).json({error:"You are already scheduled for an overlapping shift"});
       const {data:created,error:ce}=await supabaseAdmin.from("shifts").insert({staff_id:null,role:group,unit:null,assignment_number:null,shift_date:date,shift_type:shiftType,start_local:startLocal,end_local:endLocal,start_time:start.toISOString(),end_time:end.toISOString(),org_code:orgCode,department_id:staff.department_id,open_reason:"minimum_coverage"}).select("id").single();
       if(ce)throw ce;materializedShiftId=created.id;
     }
