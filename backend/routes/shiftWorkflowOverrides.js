@@ -48,7 +48,8 @@ router.get("/open-shifts",async(req,res)=>{try{
   const open=(all||[]).filter(x=>x.staff_id==null),{data:offers,error:oe}=offerResult;if(oe)throw oe;
   let offered=[];
   if(offers?.length){const byId=Object.fromEntries((all||[]).map(x=>[String(x.id),x]));offered=offers.map(o=>{const shift=byId[String(o.shift_id)];return shift?{...shift,offered:true,offer_request_id:o.id,offered_by_staff_id:o.staff_id,open_reason:"offered"}:null}).filter(Boolean)}
-  const gaps=to?await coverageGapRows(req,from,to,all||[]):[];
+  const manager=canManage(req);
+  const gaps=manager&&to?await coverageGapRows(req,from,to,all||[]):[];
   const grouped=new Map();
   for(const x of [...open,...gaps]){
     const key=`${x.shift_date}|${roleGroup(x.role)}|${x.shift_type}`;
@@ -58,7 +59,7 @@ router.get("/open-shifts",async(req,res)=>{try{
     if(x.coverage_gap){g.coverage_gap=true;g.positions_missing+=Number(x.positions_missing||0);}
     else{g.real_shift_ids.push(x.id);g.virtual=false;if(x.bonus_enabled)g.bonus_enabled=true;}
   }
-  let rows=[...grouped.values(),...offered];
+  let rows=manager?[...grouped.values(),...offered]:[...open,...offered];
   if(staff?.role)rows=rows.filter(x=>compatible(x.role,staff.role)&&String(x.staff_id||"")!==String(staff.id));
   rows.sort((a,b)=>String(a.shift_date).localeCompare(String(b.shift_date))||String(a.start_local||"").localeCompare(String(b.start_local||"")));
   res.set("Server-Timing",`open-shifts;dur=${Date.now()-started}`);
