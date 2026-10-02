@@ -28,7 +28,7 @@ async function coverageGapRows(req,from,to,allShifts){
   for(let date=from;date<=to;date=addDays(date,1))for(const r of reqs||[]){
     const key=`${date}|${r.role_group}|${r.shift_type}`,missing=Math.max(0,Number(r.required_count||0)-(count.get(key)||0)),times=settingMap.get(`${r.role_group}|${r.shift_type}`);
     if(!times)continue;
-    for(let i=0;i<missing;i++)rows.push({id:`coverage-gap:${date}:${r.role_group}:${r.shift_type}:${i+1}`,virtual:true,coverage_gap:true,staff_id:null,role:r.role_group,shift_date:date,shift_type:r.shift_type,start_local:times.start_local,end_local:times.end_local,department_id:req.orgMembership?.department_id||null,open_reason:"minimum_coverage",bonus_enabled:false,positions_missing:missing});
+    if(missing>0)rows.push({id:`coverage-gap:${date}:${r.role_group}:${r.shift_type}`,virtual:true,coverage_gap:true,staff_id:null,role:r.role_group,shift_date:date,shift_type:r.shift_type,start_local:times.start_local,end_local:times.end_local,department_id:req.orgMembership?.department_id||null,open_reason:"minimum_coverage",bonus_enabled:false,positions_missing:missing});
   }
   return rows;
 }
