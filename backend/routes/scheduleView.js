@@ -63,8 +63,8 @@ router.get("/", async (req, res) => {
         .from("schedule_publications")
         .select("id,period_start,period_end,published_at,published_by,scheduled_count,open_shift_count")
         .eq("org_code", orgCode)
-        .lte("period_start", to)
-        .gte("period_end", from)
+        .eq("period_start", from)
+        .eq("period_end", to)
         .order("published_at", { ascending: false })
         .limit(1),
     ]);
