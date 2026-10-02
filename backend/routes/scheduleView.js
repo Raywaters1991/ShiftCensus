@@ -80,6 +80,7 @@ router.get("/", async (req, res) => {
       staff: staffResult.data || [],
       pto: leaveResult.data || [],
       requirements,
+      publication: { draft_count: (shiftResult.data || []).filter(x => !x.is_published).length, published_count: (shiftResult.data || []).filter(x => x.is_published).length, has_drafts: (shiftResult.data || []).some(x => !x.is_published) },
       meta: { server_ms: Date.now() - started },
     });
   } catch (err) {
