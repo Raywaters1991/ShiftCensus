@@ -47,7 +47,16 @@ router.get("/open-shifts",async(req,res)=>{try{
   let offered=[];
   if(offers?.length){const byId=Object.fromEntries((all||[]).map(x=>[String(x.id),x]));offered=offers.map(o=>{const shift=byId[String(o.shift_id)];return shift?{...shift,offered:true,offer_request_id:o.id,offered_by_staff_id:o.staff_id,open_reason:"offered"}:null}).filter(Boolean)}
   const gaps=to?await coverageGapRows(req,from,to,all||[]):[];
-  let rows=[...open,...offered,...gaps];
+  const grouped=new Map();
+  for(const x of [...open,...gaps]){
+    const key=`${x.shift_date}|${roleGroup(x.role)}|${x.shift_type}`;
+    let g=grouped.get(key);
+    if(!g){g={...x,id:`coverage:${x.shift_date}:${roleGroup(x.role)}:${x.shift_type}`,combined_coverage:true,role:roleGroup(x.role),real_shift_ids:[],positions_missing:0,positions_open:0,coverage_gap:false,virtual:true,open_reason:"coverage"};grouped.set(key,g);}
+    g.positions_open+=x.coverage_gap?Number(x.positions_missing||0):1;
+    if(x.coverage_gap){g.coverage_gap=true;g.positions_missing+=Number(x.positions_missing||0);}
+    else{g.real_shift_ids.push(x.id);g.virtual=false;if(x.bonus_enabled)g.bonus_enabled=true;}
+  }
+  let rows=[...grouped.values(),...offered];
   if(staff?.role)rows=rows.filter(x=>compatible(x.role,staff.role)&&String(x.staff_id||"")!==String(staff.id));
   rows.sort((a,b)=>String(a.shift_date).localeCompare(String(b.shift_date))||String(a.start_local||"").localeCompare(String(b.start_local||"")));
   res.set("Server-Timing",`open-shifts;dur=${Date.now()-started}`);
