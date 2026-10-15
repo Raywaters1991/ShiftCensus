@@ -17,17 +17,14 @@ ReactDOM.createRoot(document.getElementById("root")).render(
 );
 
 if ("serviceWorker" in navigator) {
-  let refreshing = false;
-  navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (refreshing) return;
-    refreshing = true;
-    window.location.reload();
-  });
-
+  // Register the worker, but never force-reload the running app when a newly
+  // deployed worker takes control. On iOS Safari, controllerchange can happen
+  // as the page resumes, which made simply returning to ShiftCensus look like
+  // a cold restart. The new worker will naturally be used on the next real
+  // navigation/relaunch instead.
   window.addEventListener("load", async () => {
     try {
-      const reg = await navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" });
-      await reg.update();
+      await navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" });
     } catch (err) {
       console.warn("ShiftCensus service worker registration failed", err);
     }
