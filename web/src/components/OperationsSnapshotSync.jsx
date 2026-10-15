@@ -3,8 +3,6 @@ import api from "../services/api";
 import { saveOfflineOperationsSnapshot } from "../services/offlineCache.js";
 import { useUser } from "../contexts/UserContext.jsx";
 
-// The offline copy is insurance, not live UI data. Refreshing it every minute made
-// the browser and API do unnecessary work while users were actively using the app.
 const SNAPSHOT_REFRESH_MS = 5 * 60_000;
 const MIN_SYNC_GAP_MS = 60_000;
 const WORKFLOW_REFRESH_MS = 15_000;
@@ -18,9 +16,10 @@ const requestSignature = (rows) =>
 export default function OperationsSnapshotSync() {
   const { user, orgId, orgCode, orgName, permissions, isSuperadmin } = useUser();
 
-  // Keep the request -> manager decision -> employee schedule loop fresh while the
-  // app is open. We intentionally reload only workflow-sensitive screens and only
-  // after the server state actually changes, so normal navigation is unaffected.
+  // Poll workflow state quietly. Never reload the document: a reload destroys the
+  // current screen/scroll position and makes returning to the app feel like a cold
+  // launch. Screens that care about changes can listen for this lightweight event
+  // and refresh their own data in place.
   useEffect(() => {
     if (!user || (!orgId && !orgCode)) return;
 
@@ -28,11 +27,11 @@ export default function OperationsSnapshotSync() {
     let checking = false;
     let employeeSignature = null;
     let managerPendingCount = null;
-
     const canReview = !!isSuperadmin || !!permissions?.can_schedule_write;
-    const workflowPath = () => window.location.pathname;
-    const employeeScreen = () => ["/requests", "/my-schedule", "/open-shifts"].includes(workflowPath());
-    const managerScreen = () => workflowPath() === "/request-review";
+
+    const announce = (detail) => {
+      window.dispatchEvent(new CustomEvent("shiftcensus:workflow-changed", { detail }));
+    };
 
     async function checkWorkflow() {
       if (cancelled || checking || document.visibilityState === "hidden") return;
@@ -44,23 +43,19 @@ export default function OperationsSnapshotSync() {
         if (cancelled) return;
 
         const nextEmployeeSignature = requestSignature(mine);
-        if (employeeSignature !== null && nextEmployeeSignature !== employeeSignature && employeeScreen()) {
-          window.location.reload();
-          return;
+        if (employeeSignature !== null && nextEmployeeSignature !== employeeSignature) {
+          announce({ employeeRequestsChanged: true });
         }
         employeeSignature = nextEmployeeSignature;
 
         if (canReview) {
           const nextPendingCount = Number(review?.pending_count || 0);
-          if (managerPendingCount !== null && nextPendingCount !== managerPendingCount && managerScreen()) {
-            window.location.reload();
-            return;
+          if (managerPendingCount !== null && nextPendingCount !== managerPendingCount) {
+            announce({ managerRequestsChanged: true, pendingCount: nextPendingCount });
           }
           managerPendingCount = nextPendingCount;
         }
       } catch (e) {
-        // Workflow polling is best-effort. Existing page data remains usable and
-        // normal API actions still surface their own errors.
         console.warn("Workflow state not refreshed", e);
       } finally {
         checking = false;
@@ -70,20 +65,17 @@ export default function OperationsSnapshotSync() {
     const onVisible = () => {
       if (document.visibilityState === "visible") checkWorkflow();
     };
-    const onFocus = () => checkWorkflow();
     const onOnline = () => checkWorkflow();
 
     checkWorkflow();
     const timer = window.setInterval(checkWorkflow, WORKFLOW_REFRESH_MS);
     document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", onFocus);
     window.addEventListener("online", onOnline);
 
     return () => {
       cancelled = true;
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", onFocus);
       window.removeEventListener("online", onOnline);
     };
   }, [user, orgId, orgCode, permissions, isSuperadmin]);
@@ -116,7 +108,6 @@ export default function OperationsSnapshotSync() {
           assignments: Array.isArray(data?.assignments) ? data.assignments : [],
         });
       } catch (e) {
-        // Preserve the previous Last Known Good snapshot on any failure.
         console.warn("Operations snapshot not updated", e);
       } finally {
         syncing = false;
@@ -126,7 +117,6 @@ export default function OperationsSnapshotSync() {
     const onVisible = () => {
       if (document.visibilityState === "visible") sync();
     };
-    // A restored connection is worth an immediate fresh snapshot.
     const onOnline = () => sync({ force: true });
 
     sync({ force: true });
